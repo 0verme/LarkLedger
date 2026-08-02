@@ -1,47 +1,43 @@
 import json
-import logging
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from lark_ledger.config import Settings, get_settings
-from lark_ledger.db import get_session
-from lark_ledger.models import ProcessedEvent
-from lark_ledger.services.feishu import MessageProcessor, decrypt_event, verify_signature
+from lark_ledger.config import EventMode, Settings, get_settings
+from lark_ledger.services.events import EventService
+from lark_ledger.services.feishu import decrypt_event, verify_signature
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def get_processor(request: Request) -> MessageProcessor:
-    return cast(MessageProcessor, request.app.state.processor)
-
-
-async def run_processor(processor: MessageProcessor, event: dict[str, Any]) -> None:
-    try:
-        await processor.process(event)
-    except Exception:
-        logger.exception("failed to process Feishu message")
+def get_event_service(request: Request) -> EventService:
+    return cast(EventService, request.app.state.event_service)
 
 
 @router.get("/healthz")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health(request: Request) -> dict[str, str]:
+    settings = get_settings()
+    receiver = getattr(request.app.state, "long_connection", None)
+    connection_status = receiver.status if receiver is not None else "disabled"
+    return {
+        "status": "ok",
+        "event_mode": settings.event_mode.value,
+        "long_connection": connection_status,
+    }
 
 
 @router.post("/webhooks/feishu")
 async def feishu_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
-    processor: Annotated[MessageProcessor, Depends(get_processor)],
+    event_service: Annotated[EventService, Depends(get_event_service)],
     x_lark_request_timestamp: Annotated[str, Header()] = "",
     x_lark_request_nonce: Annotated[str, Header()] = "",
     x_lark_signature: Annotated[str, Header()] = "",
 ) -> dict[str, Any]:
+    if settings.event_mode is not EventMode.WEBHOOK:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="webhook mode disabled")
     raw_body = await request.body()
     if settings.lark_encrypt_key and not verify_signature(
         raw_body,
@@ -72,11 +68,8 @@ async def feishu_webhook(
     event_id = str(header.get("event_id", ""))
     if not event_id:
         raise HTTPException(status_code=400, detail="missing event_id")
-    session.add(ProcessedEvent(event_id=event_id))
-    try:
-        await session.commit()
-    except IntegrityError:
-        await session.rollback()
-        return {"code": 0}
-    background_tasks.add_task(run_processor, processor, payload["event"])
+    event = payload.get("event")
+    if not isinstance(event, dict):
+        raise HTTPException(status_code=400, detail="missing event")
+    background_tasks.add_task(event_service.handle_safely, event_id, event)
     return {"code": 0}

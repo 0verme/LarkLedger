@@ -25,6 +25,7 @@ dependencies = [
   "cryptography>=44,<46",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
+  "lark-oapi>=1.7.1,<2",
   "pydantic-settings>=2.7,<3",
   "python-multipart>=0.0.20,<1",
   "sqlalchemy[asyncio]>=2.0.36,<3",

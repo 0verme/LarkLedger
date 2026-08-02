@@ -1,8 +1,14 @@
+from enum import StrEnum
 from functools import lru_cache
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class EventMode(StrEnum):
+    WEBHOOK = "webhook"
+    WEBSOCKET = "websocket"
 
 
 class Settings(BaseSettings):
@@ -15,6 +21,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://lark_ledger:change-me@db:5432/lark_ledger"
     timezone: str = "Asia/Shanghai"
     currency: str = "CNY"
+    event_mode: EventMode = EventMode.WEBHOOK
 
     lark_app_id: str = ""
     lark_app_secret: str = ""
@@ -27,6 +34,11 @@ class Settings(BaseSettings):
     ai_model: str = "gpt-4.1-mini"
     transcription_model: str = "gpt-4o-mini-transcribe"
     ai_timeout_seconds: float = Field(default=45, gt=0, le=180)
+
+    @field_validator("event_mode", mode="before")
+    @classmethod
+    def normalize_event_mode(cls, value: object) -> object:
+        return value.strip().lower() if isinstance(value, str) else value
 
     @field_validator("timezone")
     @classmethod

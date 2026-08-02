@@ -1,5 +1,39 @@
 # LarkLedger（飞账）
 
+## 飞书事件接入模式
+
+LarkLedger 支持两种互斥的事件入口，两者共用同一个 `event_id` 幂等服务、
+`MessageProcessor` 和记账/AI/回复流程：
+
+- `LARK_LEDGER_EVENT_MODE=websocket`：使用飞书官方 Python SDK `lark-oapi` 建立长连接，
+  适合本地开发、家庭服务器和飞牛 Docker，不需要公网域名、FRP、Verification Token
+  或 Encrypt Key。
+- `LARK_LEDGER_EVENT_MODE=webhook`：保留 `POST /webhooks/feishu` 开发者服务器回调，
+  适合有公网 HTTPS 地址的部署。默认值为 `webhook`，继续支持验签、解密和 URL verification。
+
+本地长连接启动：
+
+```bash
+pip install -e ".[dev]"
+alembic upgrade head
+# 在本地 .env 中设置 LARK_LEDGER_EVENT_MODE=websocket，并配置 App ID / App Secret
+uvicorn lark_ledger.main:app --reload
+curl http://127.0.0.1:8000/healthz
+```
+
+健康检查只返回当前事件模式与长连接状态，不会返回任何凭据。使用 Uvicorn `--reload`
+时只有实际的 worker 生命周期会启动连接；进程退出或 Docker 收到停止信号时会关闭连接。
+
+飞书后台配置长连接：进入「事件与回调」，选择「使用长连接接收事件」，点击「验证」；
+看到长连接已经建立后保存配置，再添加事件 `im.message.receive_v1`（接收消息 v2.0），
+确认机器人所需权限并发布应用版本。长连接模式不要填写请求地址。
+
+Docker / 飞牛部署继续使用同一镜像和 Compose：将宿主机 `.env` 的事件模式设为
+`websocket` 后运行 `docker compose up -d --build`。容器只需出站访问飞书、DeepSeek，
+不需要暴露公网回调地址（端口 `8000` 可仅用于局域网健康检查）。切回公网 Webhook 时，
+把模式改为 `webhook`，在飞书后台选择「将事件发送至开发者服务器」，配置
+`https://你的域名/webhooks/feishu`、Verification Token，并按需配置 Encrypt Key。
+
 > 自托管的飞书 / Lark AI 记账机器人：用文字、语音、小票照片或支付截图完成记账、查询、修改、撤销和消费汇总。
 
 [![CI](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml)
