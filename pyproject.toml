@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "lark-ledger"
+version = "0.1.0"
+description = "Self-hosted AI bookkeeping bot for Feishu/Lark with text, voice and receipt recognition."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "LarkLedger contributors" }]
+keywords = ["feishu", "lark", "bookkeeping", "expense-tracker", "self-hosted"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+  "alembic>=1.14,<2",
+  "asyncpg>=0.30,<1",
+  "cryptography>=44,<46",
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "pydantic-settings>=2.7,<3",
+  "python-multipart>=0.0.20,<1",
+  "sqlalchemy[asyncio]>=2.0.36,<3",
+  "tzdata>=2025.2",
+  "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "aiosqlite>=0.20,<1",
+  "mypy>=1.14,<2",
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.25,<1",
+  "pytest-cov>=6,<7",
+  "respx>=0.22,<1",
+  "ruff>=0.9,<1",
+]
+
+[project.urls]
+Homepage = "https://github.com/0verme/lark-ledger"
+Repository = "https://github.com/0verme/lark-ledger"
+Issues = "https://github.com/0verme/lark-ledger/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lark_ledger"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["lark_ledger"]
+
+[tool.mypy]
+python_version = "3.11"
+plugins = ["pydantic.mypy"]
+strict = true
+packages = ["lark_ledger"]
