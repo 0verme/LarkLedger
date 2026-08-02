@@ -93,6 +93,7 @@ uvicorn lark_ledger.main:app --reload
 ## 配置项
 
 所有环境变量均以 `LARK_LEDGER_` 开头。完整示例见 [`.env.example`](.env.example)。
+生产部署与凭据安全检查见 [`docs/environment.md`](docs/environment.md)。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
