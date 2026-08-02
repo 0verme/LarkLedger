@@ -14,7 +14,9 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    direction = sa.Enum("EXPENSE", "INCOME", name="entry_direction")
+    direction = postgresql.ENUM(
+        "EXPENSE", "INCOME", name="entry_direction", create_type=False
+    )
     direction.create(op.get_bind(), checkfirst=True)
     op.create_table(
         "ledger_entries",

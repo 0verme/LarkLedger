@@ -1,6 +1,7 @@
 import base64
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -64,18 +65,29 @@ class AIInterpreter:
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "ledger_command",
-                    "strict": True,
-                    "schema": ParsedCommand.model_json_schema(),
-                },
-            },
+            "response_format": self._response_format(),
         }
         response = await self._request("/chat/completions", json=payload)
         content = response["choices"][0]["message"]["content"]
         return ParsedCommand.model_validate_json(content)
+
+    def _response_format(self) -> dict[str, Any]:
+        base_url = (
+            str(self._client.base_url)
+            if self._client is not None
+            else self.settings.ai_base_url
+        )
+        hostname = urlparse(base_url).hostname or ""
+        if hostname == "api.deepseek.com" or hostname.endswith(".deepseek.com"):
+            return {"type": "json_object"}
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ledger_command",
+                "strict": True,
+                "schema": ParsedCommand.model_json_schema(),
+            },
+        }
 
     async def transcribe(self, audio: bytes, filename: str = "voice.opus") -> str:
         if not self.settings.ai_api_key:
