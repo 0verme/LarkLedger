@@ -15,6 +15,7 @@ from lark_ledger.schemas import (
     Action,
     BudgetCandidate,
     CategoryTotal,
+    EntryCandidate,
     ExecutionResult,
     ParsedCommand,
     ReportData,
@@ -66,10 +67,22 @@ class LedgerService:
         *,
         source_type: str = "text",
         source_message_id: str | None = None,
+        source_item_index: int = 0,
     ) -> ExecutionResult:
         if command.action is Action.CREATE:
             return await self._create(
-                user_open_id, command, source_type=source_type, source_message_id=source_message_id
+                user_open_id,
+                command,
+                source_type=source_type,
+                source_message_id=source_message_id,
+                source_item_index=source_item_index,
+            )
+        if command.action is Action.CREATE_ENTRIES:
+            return await self._create_entries(
+                user_open_id,
+                command,
+                source_type=source_type,
+                source_message_id=source_message_id,
             )
         if command.action is Action.UPDATE_LAST:
             return await self._update_last(user_open_id, command)
@@ -104,7 +117,30 @@ class LedgerService:
         *,
         source_type: str,
         source_message_id: str | None,
+        source_item_index: int,
     ) -> ExecutionResult:
+        entry, converted, budget_alert = await self._stage_entry(
+            user_open_id,
+            command,
+            source_type=source_type,
+            source_message_id=source_message_id,
+            source_item_index=source_item_index,
+        )
+        await self.session.commit()
+        return ExecutionResult(
+            message=self._created_message(entry, converted),
+            budget_alert=budget_alert,
+        )
+
+    async def _stage_entry(
+        self,
+        user_open_id: str,
+        command: ParsedCommand,
+        *,
+        source_type: str,
+        source_message_id: str | None,
+        source_item_index: int,
+    ) -> tuple[LedgerEntry, _ConvertedAmount, str | None]:
         assert command.amount is not None
         assert command.direction is not None
         assert command.category is not None
@@ -120,20 +156,136 @@ class LedgerService:
             occurred_at=command.occurred_at,
             source_type=source_type,
             source_message_id=source_message_id,
+            source_item_index=source_item_index if source_message_id is not None else None,
         )
         self.session.add(entry)
         budget_alert = await self._check_budget(entry)
-        await self.session.commit()
+        await self.session.flush()
+        return entry, converted, budget_alert
+
+    def _created_message(self, entry: LedgerEntry, converted: _ConvertedAmount) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f"（{entry.note}）" if entry.note else ""
         conversion = self._conversion_note(converted)
-        return ExecutionResult(
-            message=(
-                f"已记录{sign} {self._format_money(entry.amount)}{conversion}"
-                f" · {entry.category}{note}"
-            ),
-            budget_alert=budget_alert,
+        return (
+            f"已记录{sign} {self._format_money(entry.amount)}{conversion}"
+            f" · {entry.category}{note}"
         )
+
+    async def _create_entries(
+        self,
+        user_open_id: str,
+        command: ParsedCommand,
+        *,
+        source_type: str,
+        source_message_id: str | None,
+    ) -> ExecutionResult:
+        assert command.entries is not None
+        successes: list[str] = []
+        failures: list[str] = []
+        alerts: list[str] = []
+        income_total = Decimal("0")
+        expense_total = Decimal("0")
+
+        for index, candidate in enumerate(command.entries):
+            item, error = self._validated_entry_candidate(candidate)
+            label = f"第 {index + 1} 笔"
+            if item is None:
+                failures.append(f"❌ {label}：{error}")
+                continue
+            try:
+                async with self.session.begin_nested():
+                    entry, converted, budget_alert = await self._stage_entry(
+                        user_open_id,
+                        item,
+                        source_type=source_type,
+                        source_message_id=source_message_id,
+                        source_item_index=index,
+                    )
+            except ExchangeRateUnavailableError:
+                failures.append(f"❌ {label}：暂时无法获取汇率")
+            except ValueError:
+                failures.append(f"❌ {label}：换算后的金额超出支持范围")
+            except Exception:
+                logger.exception("failed to persist batch ledger item %s", index + 1)
+                failures.append(f"❌ {label}：保存失败，请稍后重试")
+            else:
+                if entry.direction is Direction.INCOME:
+                    income_total += entry.amount
+                else:
+                    expense_total += entry.amount
+                successes.append(self._batch_entry_line(index, entry, converted))
+                if budget_alert and budget_alert not in alerts:
+                    alerts.append(budget_alert)
+
+        await self.session.commit()
+        lines = [
+            f"批量图片记账完成：成功 {len(successes)} 笔，失败 {len(failures)} 笔",
+            f"收入合计 {self._format_money(income_total)} · "
+            f"支出合计 {self._format_money(expense_total)}",
+            *successes,
+            *failures,
+        ]
+        if command.batch_truncated:
+            lines.append("⚠️ 图片中的流水超过 20 笔，本次仅处理前 20 笔。")
+        return ExecutionResult(
+            message="\n".join(lines),
+            budget_alert="\n\n".join(alerts) or None,
+        )
+
+    def _batch_entry_line(
+        self, index: int, entry: LedgerEntry, converted: _ConvertedAmount
+    ) -> str:
+        sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
+        occurred = self._local_datetime(entry.occurred_at).strftime("%m-%d %H:%M")
+        note = entry.note.strip()
+        if len(note) > 30:
+            note = note[:29] + "…"
+        suffix = f" · {note}" if note else ""
+        return (
+            f"✅ 第 {index + 1} 笔：{sign} {self._format_money(entry.amount)}"
+            f"{self._conversion_note(converted)} · {entry.category} · {occurred}{suffix}"
+        )
+
+    @staticmethod
+    def _validated_entry_candidate(
+        candidate: EntryCandidate,
+    ) -> tuple[ParsedCommand | None, str | None]:
+        category = (candidate.category or "").strip()
+        if not category:
+            return None, "缺少分类"
+        if len(category) > 64:
+            return None, "分类名称过长"
+        if candidate.amount is None or (
+            isinstance(candidate.amount, str) and not candidate.amount.strip()
+        ):
+            return None, "缺少金额"
+        if candidate.direction is None or not str(candidate.direction).strip():
+            return None, "缺少收支方向"
+        if candidate.occurred_at is None or (
+            isinstance(candidate.occurred_at, str) and not candidate.occurred_at.strip()
+        ):
+            return None, "缺少发生时间"
+        currency = (candidate.currency or "").strip().upper() or None
+        if currency is not None and currency not in SUPPORTED_INPUT_CURRENCIES:
+            return None, f"不支持币种 {currency[:12]}"
+        try:
+            direction = Direction(str(candidate.direction).lower())
+        except ValueError:
+            return None, "收支方向无效"
+        try:
+            item = ParsedCommand(
+                action=Action.CREATE,
+                amount=candidate.amount,
+                currency=currency,
+                direction=direction,
+                category=category,
+                note=(candidate.note or "").strip() or None,
+                occurred_at=candidate.occurred_at,
+            )
+        except ValidationError:
+            return None, "字段格式无效或超出支持范围"
+        return item, None
 
     async def _update_last(
         self, user_open_id: str, command: ParsedCommand

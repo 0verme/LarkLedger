@@ -188,7 +188,9 @@ async def test_processor_replies_with_specific_exchange_rate_error() -> None:
             },
         }
     )
-    assert feishu.texts == ["暂时无法获取汇率，请稍后重试。"]
+    assert len(feishu.texts) == 1
+    assert feishu.texts[0].startswith("暂时无法获取汇率，请稍后重试。")
+    assert "错误编号：" in feishu.texts[0]
     await rate_client.aclose()
     await engine.dispose()
 

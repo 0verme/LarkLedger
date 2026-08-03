@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -167,6 +168,7 @@ class MessageProcessor:
             return
         message_type = str(message.get("message_type", ""))
         command: ParsedCommand | None = None
+        stage = "message_decode"
         try:
             content = json.loads(message.get("content", "{}"))
             now = datetime.now(ZoneInfo(self.settings.timezone))
@@ -179,6 +181,7 @@ class MessageProcessor:
                 if not self.interpreter.vision_configured:
                     await self.feishu.reply_text(message_id, "图片识别功能尚未配置。")
                     return
+                stage = "image_download"
                 image = await self.feishu.download_resource(
                     message_id, str(content["image_key"]), "image"
                 )
@@ -190,7 +193,9 @@ class MessageProcessor:
                 file_key = str(content.get("file_key", ""))
                 if not file_key:
                     raise ValueError("消息中没有 file_key")
+                stage = "audio_download"
                 audio = await self.feishu.download_resource(message_id, file_key, "file")
+                stage = "transcription"
                 text = await self.interpreter.transcribe(
                     audio, filename=str(content.get("file_name", "voice.opus"))
                 )
@@ -200,7 +205,9 @@ class MessageProcessor:
                     message_id, "暂时只支持文字、语音、小票照片和支付截图。"
                 )
                 return
+            stage = "vision_interpretation" if image is not None else "interpretation"
             command = await self.interpreter.interpret(text, now=now, image=image)
+            stage = "persistence"
             async with self.session_factory() as session:
                 result = await LedgerService(
                     session,
@@ -211,27 +218,74 @@ class MessageProcessor:
                     user_open_id,
                     command,
                     source_type=source_type,
-                    source_message_id=message_id if command.action.value == "create" else None,
+                    source_message_id=(
+                        message_id
+                        if command.action in {Action.CREATE, Action.CREATE_ENTRIES}
+                        else None
+                    ),
                 )
             if command.action is Action.REPORT:
+                stage = "report_reply"
                 await self._reply_report(message_id, result)
             else:
                 message_text = result.message
                 if result.budget_alert:
                     message_text = f"{message_text}\n\n{result.budget_alert}"
+                stage = "reply"
                 await self.feishu.reply_text(message_id, message_text)
         except CommandInterpretationError:
+            error_id = self._log_processing_error(stage, message_id, message_type)
+            if message_type == "image":
+                text = "没有完整识别图片中的交易，请裁剪无关内容或换一张更清晰的截图。"
+            else:
+                text = (
+                    "没有完全识别这条指令。批量设置预算请写成："
+                    "交通预算500，人情往来预算1000（一次最多10项）。"
+                )
             await self.feishu.reply_text(
                 message_id,
-                "没有完全识别这条指令。批量设置预算请写成："
-                "交通预算500，人情往来预算1000（一次最多10项）。",
+                f"{text}（错误编号：{error_id}）",
             )
         except ExchangeRateUnavailableError:
-            await self.feishu.reply_text(message_id, "暂时无法获取汇率，请稍后重试。")
+            error_id = self._log_processing_error(stage, message_id, message_type)
+            await self.feishu.reply_text(
+                message_id,
+                f"暂时无法获取汇率，请稍后重试。（错误编号：{error_id}）",
+            )
         except Exception:
-            if command is None or command.action is not Action.REPORT:
-                await self.feishu.reply_text(message_id, "处理失败了，请稍后重试或换一种说法。")
+            error_id = self._log_processing_error(stage, message_id, message_type)
+            if stage != "reply":
+                await self.feishu.reply_text(
+                    message_id,
+                    f"{self._stage_error_message(stage)}（错误编号：{error_id}）",
+                )
             raise
+
+    @staticmethod
+    def _log_processing_error(stage: str, message_id: str, message_type: str) -> str:
+        error_id = uuid.uuid4().hex[:8].upper()
+        logger.exception(
+            "message processing failed error_id=%s stage=%s message_id=%s message_type=%s",
+            error_id,
+            stage,
+            message_id,
+            message_type,
+        )
+        return error_id
+
+    @staticmethod
+    def _stage_error_message(stage: str) -> str:
+        messages = {
+            "message_decode": "消息内容格式无效，请重新发送。",
+            "image_download": "图片下载失败，请确认机器人具有读取图片资源的权限后重试。",
+            "audio_download": "音频下载失败，请确认机器人具有读取文件资源的权限后重试。",
+            "transcription": "语音转写失败，请稍后重试或改用文字。",
+            "vision_interpretation": "图片识别服务调用失败，请稍后重试。",
+            "interpretation": "指令识别服务调用失败，请稍后重试。",
+            "persistence": "账目保存失败，本次未确认入账，请联系管理员检查数据库日志。",
+            "report_reply": "报告生成或发送失败，请稍后重试。",
+        }
+        return messages.get(stage, "处理失败，请稍后重试。")
 
     async def _reply_report(self, message_id: str, result: ExecutionResult) -> None:
         if result.report is None:

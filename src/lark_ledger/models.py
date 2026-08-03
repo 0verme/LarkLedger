@@ -34,6 +34,9 @@ class LedgerEntry(Base):
     __table_args__ = (
         Index("ix_entries_user_occurred", "user_open_id", "occurred_at"),
         Index("ix_entries_user_category", "user_open_id", "category"),
+        UniqueConstraint(
+            "source_message_id", "source_item_index", name="uq_entries_source_item"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -47,7 +50,8 @@ class LedgerEntry(Base):
     note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     source_type: Mapped[str] = mapped_column(String(16), nullable=False, default="text")
-    source_message_id: Mapped[str | None] = mapped_column(String(128), unique=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(128))
+    source_item_index: Mapped[int | None] = mapped_column(SmallInteger)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
