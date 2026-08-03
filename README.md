@@ -50,9 +50,11 @@ LARK_LEDGER_DATABASE_URL=postgresql+asyncpg://用户名:密码@数据库主机:5
 LARK_LEDGER_LARK_APP_ID=cli_xxxxxxxxxxxxx
 LARK_LEDGER_LARK_APP_SECRET=replace-me
 LARK_LEDGER_AI_API_KEY=replace-me
+LARK_LEDGER_VISION_API_KEY=replace-with-dashscope-key
+LARK_LEDGER_TRANSCRIPTION_API_KEY=replace-with-dashscope-key
 ```
 
-长连接模式不需要 `LARK_LEDGER_LARK_VERIFICATION_TOKEN` 或 `LARK_LEDGER_LARK_ENCRYPT_KEY`。AI 服务需要兼容 Chat Completions、JSON Schema structured output 和音频转写接口；模型还需支持图片输入才能使用图片记账。
+长连接模式不需要 `LARK_LEDGER_LARK_VERIFICATION_TOKEN` 或 `LARK_LEDGER_LARK_ENCRYPT_KEY`。文字、图片和语音使用独立的 API 配置：文字模型负责解析消息和生成建议，视觉模型负责图片记账，ASR 模型先把语音转为文字。图片或语音 Key 未配置时，仅禁用对应功能，不影响文字记账。
 
 ### 3. 配置飞书应用
 

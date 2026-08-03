@@ -8,7 +8,7 @@ LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_`
 
 1. 一个开启机器人能力并订阅 `im.message.receive_v1` 的飞书 / Lark 企业自建应用。
 2. 一个应用可访问的 PostgreSQL 数据库、独立数据库用户和高强度密码。
-3. 一个兼容 OpenAI Chat Completions、JSON Schema structured output 和音频转写接口的 AI 服务。图片记账还要求解析模型支持图片输入。
+3. 一个用于文字解析和消费建议的 AI 服务。图片和语音功能分别使用独立服务配置；推荐文字使用 DeepSeek、图片与语音使用阿里云百炼。
 
 当前 `compose.yaml` 只启动应用容器，不创建 PostgreSQL。`LARK_LEDGER_DATABASE_URL` 中的数据库主机必须能从容器内部访问；不要把容器内的 `localhost` 当作宿主机。
 
@@ -27,14 +27,43 @@ LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_`
 | `LARK_LEDGER_LARK_BASE_URL` | `https://open.feishu.cn` | 始终 | 开放平台 API 根地址；Lark 国际版按平台文档调整 |
 | `LARK_LEDGER_LARK_VERIFICATION_TOKEN` | 空 | Webhook 应配置 | 校验回调来源；长连接不使用 |
 | `LARK_LEDGER_LARK_ENCRYPT_KEY` | 空 | Webhook 推荐 | Webhook 签名校验和加密事件解密；长连接不使用 |
-| `LARK_LEDGER_AI_API_KEY` | 空 | 始终 | AI 服务 API Key |
-| `LARK_LEDGER_AI_BASE_URL` | `https://api.openai.com/v1` | 始终 | OpenAI 兼容 API 根地址 |
-| `LARK_LEDGER_AI_MODEL` | `gpt-4.1-mini` | 始终 | 消息解析和消费建议模型；图片记账要求支持视觉输入 |
-| `LARK_LEDGER_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | 语音记账 | 音频转写模型 |
+| `LARK_LEDGER_AI_API_KEY` | 空 | 始终 | 文字解析和消费建议服务的 API Key |
+| `LARK_LEDGER_AI_BASE_URL` | `https://api.openai.com/v1` | 始终 | 文字服务的 OpenAI 兼容 API 根地址 |
+| `LARK_LEDGER_AI_MODEL` | `gpt-4.1-mini` | 始终 | 文字消息解析和消费建议模型 |
+| `LARK_LEDGER_VISION_API_KEY` | 空 | 图片记账 | 图片理解服务 API Key；未配置时明确提示图片功能不可用 |
+| `LARK_LEDGER_VISION_BASE_URL` | 百炼北京兼容地址 | 图片记账 | 图片服务的 OpenAI 兼容 API 根地址 |
+| `LARK_LEDGER_VISION_MODEL` | `qwen3.7-plus` | 图片记账 | 支持图片输入和 JSON Object 输出的视觉模型 |
+| `LARK_LEDGER_TRANSCRIPTION_API_KEY` | 空 | 语音记账 | 千问 ASR 服务 API Key；可以与图片服务使用同一个百炼 Key |
+| `LARK_LEDGER_TRANSCRIPTION_BASE_URL` | 百炼北京兼容地址 | 语音记账 | 千问 ASR 的 OpenAI 兼容 API 根地址 |
+| `LARK_LEDGER_TRANSCRIPTION_MODEL` | `qwen3-asr-flash` | 语音记账 | 通过 Chat Completions `input_audio` 调用的转写模型 |
+| `LARK_LEDGER_TRANSCRIPTION_LANGUAGE` | `zh` | 语音记账 | ASR 语言代码；留空时自动识别 |
+| `LARK_LEDGER_TRANSCRIPTION_ENABLE_ITN` | `true` | 语音记账 | 将口语数字、日期等归一化为书面形式 |
 | `LARK_LEDGER_AI_TIMEOUT_SECONDS` | `45` | 始终 | 单次 AI HTTP 请求超时，必须大于 0 且不超过 180 秒 |
 | `LARK_LEDGER_REPORT_FONT_PATH` | 空 | 可选 | 中文报告字体文件；Docker 镜像已包含 Noto CJK |
 
 示例值只是占位符。生产部署前必须替换 `replace-me`、`change-me` 和所有示例账号密码。
+
+### 多模型配置
+
+推荐让不同能力使用独立模型，避免把图片或语音发送给不支持对应输入格式的文字模型：
+
+```dotenv
+LARK_LEDGER_AI_API_KEY=replace-with-deepseek-key
+LARK_LEDGER_AI_BASE_URL=https://api.deepseek.com
+LARK_LEDGER_AI_MODEL=deepseek-v4-flash
+
+LARK_LEDGER_VISION_API_KEY=replace-with-dashscope-key
+LARK_LEDGER_VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LARK_LEDGER_VISION_MODEL=qwen3.7-plus
+
+LARK_LEDGER_TRANSCRIPTION_API_KEY=replace-with-dashscope-key
+LARK_LEDGER_TRANSCRIPTION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+LARK_LEDGER_TRANSCRIPTION_MODEL=qwen3-asr-flash
+LARK_LEDGER_TRANSCRIPTION_LANGUAGE=zh
+LARK_LEDGER_TRANSCRIPTION_ENABLE_ITN=true
+```
+
+视觉模型接收 JPEG、PNG 或 WebP，并使用图片真实格式构造 Base64 Data URL。语音模型接收飞书下载的 OPUS/OGG 等音频，通过千问 ASR 的 Chat Completions 接口转写。图片或语音 Key 为空时，对应功能会返回未配置提示，不会回退到文字模型。
 
 ## 长连接模式（推荐）
 
@@ -134,5 +163,6 @@ uvicorn lark_ledger.main:app --reload
 - [ ] 文本消息可以记账，重复投递同一 `event_id` 不会生成第二条记录。
 - [ ] `午饭1300日元` 能换算成默认币种保存；汇率服务不可用且没有缓存时不会写入账目。
 - [ ] 图片、语音和报告功能使用的 AI 模型及飞书资源权限均已验证。
+- [ ] 图片和语音专项 API Key 已分别配置；如复用同一个百炼 Key，两项均已显式填写。
 - [ ] PostgreSQL 无法从公网访问，Webhook（如启用）只通过 HTTPS 暴露。
 - [ ] 已建立数据库备份、恢复和凭据轮换流程。

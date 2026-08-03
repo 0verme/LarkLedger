@@ -11,6 +11,35 @@ def test_default_locale_settings() -> None:
     assert settings.event_mode is EventMode.WEBHOOK
     assert settings.exchange_rate_api_url == "https://api.frankfurter.dev"
     assert settings.exchange_rate_cache_ttl_seconds == 3600
+    assert settings.vision_model == "qwen3.7-plus"
+    assert settings.transcription_model == "qwen3-asr-flash"
+    assert settings.transcription_language == "zh"
+    assert settings.transcription_enable_itn is True
+
+
+def test_media_api_settings_are_independent() -> None:
+    settings = Settings(
+        _env_file=None,
+        ai_api_key="text-key",
+        vision_api_key="vision-key",
+        vision_base_url="https://vision.example/v1",
+        vision_model="vision-model",
+        transcription_api_key="asr-key",
+        transcription_base_url="https://asr.example/v1",
+        transcription_model="asr-model",
+        transcription_language="yue",
+        transcription_enable_itn=False,
+    )
+
+    assert settings.ai_api_key == "text-key"
+    assert settings.vision_api_key == "vision-key"
+    assert settings.vision_base_url == "https://vision.example/v1"
+    assert settings.vision_model == "vision-model"
+    assert settings.transcription_api_key == "asr-key"
+    assert settings.transcription_base_url == "https://asr.example/v1"
+    assert settings.transcription_model == "asr-model"
+    assert settings.transcription_language == "yue"
+    assert settings.transcription_enable_itn is False
 
 
 @pytest.mark.parametrize(

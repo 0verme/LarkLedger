@@ -32,7 +32,14 @@ class Settings(BaseSettings):
     ai_api_key: str = ""
     ai_base_url: str = "https://api.openai.com/v1"
     ai_model: str = "gpt-4.1-mini"
-    transcription_model: str = "gpt-4o-mini-transcribe"
+    vision_api_key: str = ""
+    vision_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    vision_model: str = "qwen3.7-plus"
+    transcription_api_key: str = ""
+    transcription_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    transcription_model: str = "qwen3-asr-flash"
+    transcription_language: str = "zh"
+    transcription_enable_itn: bool = True
     ai_timeout_seconds: float = Field(default=45, gt=0, le=180)
     exchange_rate_api_url: str = "https://api.frankfurter.dev"
     exchange_rate_cache_ttl_seconds: int = Field(default=3600, ge=60, le=86400)

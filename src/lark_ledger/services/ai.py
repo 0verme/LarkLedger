@@ -1,6 +1,7 @@
 import base64
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -36,9 +37,26 @@ set_budget，且必须与 amount 同时出现；summary 和 report 始终使用�
 
 
 class AIInterpreter:
-    def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        client: httpx.AsyncClient | None = None,
+        *,
+        vision_client: httpx.AsyncClient | None = None,
+        transcription_client: httpx.AsyncClient | None = None,
+    ) -> None:
         self.settings = settings
         self._client = client
+        self._vision_client = vision_client
+        self._transcription_client = transcription_client
+
+    @property
+    def vision_configured(self) -> bool:
+        return bool(self.settings.vision_api_key.strip())
+
+    @property
+    def transcription_configured(self) -> bool:
+        return bool(self.settings.transcription_api_key.strip())
 
     async def interpret(
         self,
@@ -46,24 +64,33 @@ class AIInterpreter:
         *,
         now: datetime,
         image: bytes | None = None,
-        image_media_type: str = "image/jpeg",
     ) -> ParsedCommand:
-        if not self.settings.ai_api_key:
+        if image is None and not self.settings.ai_api_key:
             raise RuntimeError("尚未配置 LARK_LEDGER_AI_API_KEY")
+        if image is not None and not self.vision_configured:
+            raise RuntimeError("尚未配置 LARK_LEDGER_VISION_API_KEY")
 
         user_content: str | list[dict[str, Any]] = text
         if image is not None:
+            media_type = self._detect_image_media_type(image)
             encoded = base64.b64encode(image).decode("ascii")
             user_content = [
                 {"type": "text", "text": text or "识别图片中的收支并记账"},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:{image_media_type};base64,{encoded}"},
+                    "image_url": {"url": f"data:{media_type};base64,{encoded}"},
                 },
             ]
 
+        api_key = self.settings.vision_api_key if image is not None else self.settings.ai_api_key
+        base_url = (
+            self.settings.vision_base_url if image is not None else self.settings.ai_base_url
+        )
+        model = self.settings.vision_model if image is not None else self.settings.ai_model
+        request_client = self._vision_client if image is not None else self._client
+
         payload = {
-            "model": self.settings.ai_model,
+            "model": model,
             "messages": [
                 {
                     "role": "system",
@@ -76,9 +103,21 @@ class AIInterpreter:
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0,
-            "response_format": self._response_format(ParsedCommand, "ledger_command"),
+            "response_format": self._response_format(
+                ParsedCommand,
+                "ledger_command",
+                base_url=str(request_client.base_url) if request_client is not None else base_url,
+            ),
         }
-        response = await self._request("/chat/completions", json=payload)
+        if image is not None and self._is_dashscope_url(base_url):
+            payload["enable_thinking"] = False
+        response = await self._request(
+            "/chat/completions",
+            api_key=api_key,
+            base_url=base_url,
+            client=request_client,
+            json=payload,
+        )
         content = response["choices"][0]["message"]["content"]
         return ParsedCommand.model_validate_json(content)
 
@@ -111,22 +150,35 @@ class AIInterpreter:
                 },
             ],
             "temperature": 0.2,
-            "response_format": self._response_format(AdviceResult, "consumption_advice"),
+            "response_format": self._response_format(
+                AdviceResult,
+                "consumption_advice",
+                base_url=(
+                    str(self._client.base_url)
+                    if self._client is not None
+                    else self.settings.ai_base_url
+                ),
+            ),
         }
-        response = await self._request("/chat/completions", json=payload)
+        response = await self._request(
+            "/chat/completions",
+            api_key=self.settings.ai_api_key,
+            base_url=self.settings.ai_base_url,
+            client=self._client,
+            json=payload,
+        )
         content = response["choices"][0]["message"]["content"]
         return AdviceResult.model_validate_json(content)
 
     def _response_format(
-        self, model: type[BaseModel], name: str
+        self, model: type[BaseModel], name: str, *, base_url: str
     ) -> dict[str, Any]:
-        base_url = (
-            str(self._client.base_url)
-            if self._client is not None
-            else self.settings.ai_base_url
-        )
         hostname = urlparse(base_url).hostname or ""
-        if hostname == "api.deepseek.com" or hostname.endswith(".deepseek.com"):
+        if (
+            hostname == "api.deepseek.com"
+            or hostname.endswith(".deepseek.com")
+            or self._is_dashscope_url(base_url)
+        ):
             return {"type": "json_object"}
         return {
             "type": "json_schema",
@@ -138,25 +190,99 @@ class AIInterpreter:
         }
 
     async def transcribe(self, audio: bytes, filename: str = "voice.opus") -> str:
-        if not self.settings.ai_api_key:
-            raise RuntimeError("尚未配置 LARK_LEDGER_AI_API_KEY")
+        if not self.transcription_configured:
+            raise RuntimeError("尚未配置 LARK_LEDGER_TRANSCRIPTION_API_KEY")
+        if not audio:
+            raise ValueError("语音内容不能为空")
+        media_type = self._audio_media_type(filename)
+        encoded = base64.b64encode(audio).decode("ascii")
+        asr_options: dict[str, Any] = {
+            "enable_itn": self.settings.transcription_enable_itn,
+        }
+        if self.settings.transcription_language.strip():
+            asr_options["language"] = self.settings.transcription_language.strip()
         response = await self._request(
-            "/audio/transcriptions",
-            data={"model": self.settings.transcription_model},
-            files={"file": (filename, audio, "application/octet-stream")},
+            "/chat/completions",
+            api_key=self.settings.transcription_api_key,
+            base_url=self.settings.transcription_base_url,
+            client=self._transcription_client,
+            json={
+                "model": self.settings.transcription_model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": f"data:{media_type};base64,{encoded}",
+                                },
+                            }
+                        ],
+                    }
+                ],
+                "stream": False,
+                "asr_options": asr_options,
+            },
         )
-        text = response.get("text")
+        try:
+            text = response["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ValueError("语音转写接口返回格式无效") from exc
         if not isinstance(text, str) or not text.strip():
             raise ValueError("语音转写没有返回文本")
         return text.strip()
 
-    async def _request(self, path: str, **kwargs: Any) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {self.settings.ai_api_key}"}
-        if self._client is not None:
-            response = await self._client.post(path, headers=headers, **kwargs)
+    @staticmethod
+    def _detect_image_media_type(image: bytes) -> str:
+        if not image:
+            raise ValueError("图片内容不能为空")
+        if image.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if image.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if len(image) >= 12 and image.startswith(b"RIFF") and image[8:12] == b"WEBP":
+            return "image/webp"
+        raise ValueError("图片格式不受支持，请使用 JPEG、PNG 或 WebP")
+
+    @staticmethod
+    def _audio_media_type(filename: str) -> str:
+        suffix = Path(filename).suffix.lower()
+        media_types = {
+            ".opus": "audio/ogg",
+            ".ogg": "audio/ogg",
+            ".wav": "audio/wav",
+            ".mp3": "audio/mpeg",
+            ".m4a": "audio/mp4",
+            ".flac": "audio/flac",
+            ".aac": "audio/aac",
+            ".amr": "audio/amr",
+        }
+        try:
+            return media_types[suffix]
+        except KeyError as exc:
+            raise ValueError(f"不支持的语音文件格式：{suffix or '未知'}") from exc
+
+    @staticmethod
+    def _is_dashscope_url(base_url: str) -> bool:
+        hostname = urlparse(base_url).hostname or ""
+        return hostname == "dashscope.aliyuncs.com" or hostname.endswith(".maas.aliyuncs.com")
+
+    async def _request(
+        self,
+        path: str,
+        *,
+        api_key: str,
+        base_url: str,
+        client: httpx.AsyncClient | None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {api_key}"}
+        if client is not None:
+            response = await client.post(path, headers=headers, **kwargs)
         else:
             async with httpx.AsyncClient(
-                base_url=self.settings.ai_base_url.rstrip("/"),
+                base_url=base_url.rstrip("/"),
                 timeout=self.settings.ai_timeout_seconds,
             ) as client:
                 response = await client.post(path, headers=headers, **kwargs)

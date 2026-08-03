@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from lark_ledger.config import Settings
 from lark_ledger.models import Base, Direction
 from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.services.ai import AIInterpreter
 from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.feishu import FeishuClient, MessageProcessor
 from lark_ledger.services.ledger import LedgerService
@@ -112,6 +113,48 @@ class RecordingFeishu:
 
     async def reply_text(self, message_id: str, text: str) -> None:
         self.texts.append(text)
+
+
+@pytest.mark.parametrize(
+    ("message_type", "content", "expected"),
+    [
+        ("image", {"image_key": "img_1"}, "图片识别功能尚未配置。"),
+        ("audio", {"file_key": "file_1"}, "语音识别功能尚未配置。"),
+    ],
+)
+async def test_processor_replies_when_media_api_is_not_configured(
+    message_type: str,
+    content: dict[str, str],
+    expected: str,
+) -> None:
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    feishu = RecordingFeishu(upload_fails=False)
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        AIInterpreter(Settings(_env_file=None)),
+    )
+
+    await processor.process(
+        {
+            "sender": {"sender_id": {"open_id": "ou_user"}},
+            "message": {
+                "message_id": "om_media",
+                "message_type": message_type,
+                "content": json.dumps(content),
+            },
+        }
+    )
+    await engine.dispose()
+
+    assert feishu.texts == [expected]
+    assert feishu.cards == []
 
 
 async def test_processor_replies_with_specific_exchange_rate_error() -> None:

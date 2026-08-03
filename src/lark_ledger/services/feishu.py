@@ -176,11 +176,17 @@ class MessageProcessor:
             if message_type == "text":
                 text = str(content.get("text", "")).strip()
             elif message_type == "image":
+                if not self.interpreter.vision_configured:
+                    await self.feishu.reply_text(message_id, "图片识别功能尚未配置。")
+                    return
                 image = await self.feishu.download_resource(
                     message_id, str(content["image_key"]), "image"
                 )
                 text = "识别这张小票或支付截图并记账"
             elif message_type in {"audio", "file"}:
+                if not self.interpreter.transcription_configured:
+                    await self.feishu.reply_text(message_id, "语音识别功能尚未配置。")
+                    return
                 file_key = str(content.get("file_key", ""))
                 if not file_key:
                     raise ValueError("消息中没有 file_key")
