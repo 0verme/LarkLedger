@@ -67,6 +67,17 @@ class ReportInterpreter:
         raise RuntimeError("AI unavailable")
 
 
+class BudgetInterpreter:
+    async def interpret(self, text: str, **kwargs: Any) -> ParsedCommand:
+        return ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("80"),
+            direction=Direction.EXPENSE,
+            category="餐饮",
+            occurred_at=datetime.now(UTC),
+        )
+
+
 class StubRenderer:
     def render(self, report: object, advice: object) -> bytes:
         return b"\x89PNG\r\n\x1a\nreport"
@@ -137,3 +148,47 @@ async def test_processor_sends_one_report_card_with_fallback(upload_fails: bool)
     elements = feishu.cards[0]["body"]["elements"]  # type: ignore[index]
     has_image = any(element["tag"] == "img" for element in elements)  # type: ignore[union-attr]
     assert has_image is (not upload_fails)
+
+
+async def test_processor_combines_entry_confirmation_and_budget_alert() -> None:
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as session:
+        await LedgerService(session).execute(
+            "ou_user",
+            ParsedCommand(
+                action=Action.SET_BUDGET,
+                amount=Decimal("100"),
+                category="餐饮",
+            ),
+        )
+
+    feishu = RecordingFeishu(upload_fails=False)
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        BudgetInterpreter(),  # type: ignore[arg-type]
+        StubRenderer(),  # type: ignore[arg-type]
+    )
+    await processor.process(
+        {
+            "sender": {"sender_id": {"open_id": "ou_user"}},
+            "message": {
+                "message_id": "om_budget",
+                "message_type": "text",
+                "content": json.dumps({"text": "午饭80"}),
+            },
+        }
+    )
+    await engine.dispose()
+
+    assert len(feishu.texts) == 1
+    assert "已记录支出 ¥80.00 · 餐饮" in feishu.texts[0]
+    assert "餐饮本月预算快用完了" in feishu.texts[0]

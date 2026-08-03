@@ -204,7 +204,10 @@ class MessageProcessor:
             if command.action is Action.REPORT:
                 await self._reply_report(message_id, result)
             else:
-                await self.feishu.reply_text(message_id, result.message)
+                message_text = result.message
+                if result.budget_alert:
+                    message_text = f"{message_text}\n\n{result.budget_alert}"
+                await self.feishu.reply_text(message_id, message_text)
         except Exception:
             if command is None or command.action is not Action.REPORT:
                 await self.feishu.reply_text(message_id, "处理失败了，请稍后重试或换一种说法。")

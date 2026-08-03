@@ -51,6 +51,10 @@ async def test_interpreter_uses_strict_schema() -> None:
     assert isinstance(response_format, dict)
     assert response_format["json_schema"]["strict"] is True  # type: ignore[index]
     assert "report" in json.dumps(response_format)
+    assert "set_budget" in json.dumps(response_format)
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    assert "查看月预算" in messages[0]["content"]
 
 
 async def test_transcription() -> None:

@@ -44,3 +44,14 @@ def test_report_command_requires_valid_range() -> None:
         range_end=datetime(2026, 9, 1, tzinfo=UTC),
     )
     assert command.action is Action.REPORT
+
+
+def test_budget_commands_require_expected_fields() -> None:
+    command = ParsedCommand(action=Action.SET_BUDGET, category="餐饮", amount=Decimal("1500"))
+    assert command.amount == Decimal("1500")
+    assert ParsedCommand(action=Action.LIST_BUDGETS, category="餐饮").category == "餐饮"
+
+    with pytest.raises(ValidationError):
+        ParsedCommand(action=Action.SET_BUDGET, category="餐饮")
+    with pytest.raises(ValidationError):
+        ParsedCommand(action=Action.DELETE_BUDGET)

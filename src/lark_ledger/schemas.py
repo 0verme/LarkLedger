@@ -14,6 +14,9 @@ class Action(StrEnum):
     UNDO_LAST = "undo_last"
     SUMMARY = "summary"
     REPORT = "report"
+    SET_BUDGET = "set_budget"
+    LIST_BUDGETS = "list_budgets"
+    DELETE_BUDGET = "delete_budget"
     HELP = "help"
 
 
@@ -51,6 +54,12 @@ class ParsedCommand(BaseModel):
             for value in (self.amount, self.direction, self.category, self.note, self.occurred_at)
         ):
             raise ValueError("update_last requires at least one changed field")
+        if self.action is Action.SET_BUDGET:
+            missing = [name for name in ("amount", "category") if getattr(self, name) is None]
+            if missing:
+                raise ValueError(f"set_budget is missing: {', '.join(missing)}")
+        if self.action is Action.DELETE_BUDGET and self.category is None:
+            raise ValueError("delete_budget requires category")
         return self
 
 
@@ -91,3 +100,4 @@ class AdviceResult(BaseModel):
 class ExecutionResult(BaseModel):
     message: str
     report: ReportData | None = None
+    budget_alert: str | None = None

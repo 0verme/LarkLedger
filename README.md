@@ -34,7 +34,7 @@ Docker / 飞牛部署继续使用同一镜像和 Compose：将宿主机 `.env` �
 把模式改为 `webhook`，在飞书后台选择「将事件发送至开发者服务器」，配置
 `https://你的域名/webhooks/feishu`、Verification Token，并按需配置 Encrypt Key。
 
-> 自托管的飞书 / Lark AI 记账机器人：用文字、语音、小票照片或支付截图完成记账、查询、修改、撤销、消费汇总和图表报告。
+> 自托管的飞书 / Lark AI 记账机器人：用文字、语音、小票照片或支付截图完成记账、查询、修改、撤销、月度分类预算、消费汇总和图表报告。
 
 [![CI](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -51,6 +51,7 @@ LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把
 - 图片记账：识别小票照片和支付截图
 - 修改与撤销：`上一笔改成8块`、`撤销刚才那笔`
 - 分类汇总：`这个月餐饮花了多少`
+- 分类预算：`每月餐饮预算1500`，达到 80% 和 100% 时分别提醒一次
 - 消费报告：`生成这个月的消费图表`，返回含分类、趋势、收支和建议的卡片
 - 多用户隔离：所有查询和修改均以飞书用户 `open_id` 为边界
 - 事件幂等：按飞书 `event_id` 去重，新增记录也保留来源消息 ID
@@ -66,7 +67,7 @@ LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把
                          固定业务动作 → SQLAlchemy → PostgreSQL
 ```
 
-AI 输出只能是 `create`、`update_last`、`undo_last`、`summary`、`report`、`help` 之一。结构中没有 SQL、表名或任意查询条件字段；数据库层只执行项目代码预先定义的参数化查询。消费建议只接收分类、趋势和收支总额等聚合数据，不接收逐笔备注或用户标识。
+AI 输出只能是预先定义的记账、修改、撤销、汇总、报告、预算管理或帮助动作。结构中没有 SQL、表名或任意查询条件字段；数据库层只执行项目代码预先定义的参数化查询。消费建议只接收分类、趋势和收支总额等聚合数据，不接收逐笔备注或用户标识。
 
 ## 快速开始
 

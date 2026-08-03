@@ -21,6 +21,9 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 - summary：询问花费多少、收入多少或分类汇总，给出左闭右开的 range_start、range_end，
   可用 category 筛选。
 - report：要求生成报告、图表或消费分析，给出左闭右开的 range_start、range_end。
+- set_budget：设置或修改长期生效的品类月预算，必须给出 amount 和 category。
+- list_budgets：查看月预算；查看指定品类时填写 category，否则留空。
+- delete_budget：取消指定品类的月预算，必须给出 category。
 - help：无法确认意图或缺少关键金额时使用。
 
 分类使用简短中文，例如：餐饮、交通、购物、居住、娱乐、医疗、教育、工资、奖金、其他。
