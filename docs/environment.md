@@ -6,7 +6,7 @@ LarkLedger 从环境变量读取运行配置。仓库只保留 `.env.example`，
 
 启动应用前，请完成以下准备：
 
-1. 在飞书开放平台创建企业自建应用，开启机器人能力，并配置消息接收、发送和资源读取权限。
+1. 在飞书开放平台创建企业自建应用，开启机器人能力，并配置消息接收、发送以及“获取与上传图片或文件资源”权限。
 2. 订阅 `im.message.receive_v1`，使用 Webhook 模式将事件发送到 `/webhooks/feishu`。
 3. 创建仅供 LarkLedger 使用的 PostgreSQL 用户和数据库，并使用唯一的高强度密码。
 4. 准备兼容 OpenAI Chat Completions、JSON Schema structured output 和音频转写接口的模型服务凭据。

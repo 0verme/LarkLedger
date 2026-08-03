@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     ai_model: str = "gpt-4.1-mini"
     transcription_model: str = "gpt-4o-mini-transcribe"
     ai_timeout_seconds: float = Field(default=45, gt=0, le=180)
+    report_font_path: str | None = None
 
     @field_validator("event_mode", mode="before")
     @classmethod

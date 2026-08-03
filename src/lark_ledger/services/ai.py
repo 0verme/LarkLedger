@@ -1,12 +1,14 @@
 import base64
+import json
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from pydantic import BaseModel
 
 from lark_ledger.config import Settings
-from lark_ledger.schemas import ParsedCommand
+from lark_ledger.schemas import AdviceResult, ParsedCommand, ReportData
 
 SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入，不保存数据、不生成或执行 SQL。
 当前时间：{now}；时区：{timezone}；默认币种：{currency}。
@@ -16,7 +18,9 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 - create：新增收支，必须给出 amount、direction、category、occurred_at。
 - update_last：修改该用户最近一笔，仅填写要改变的字段。
 - undo_last：撤销最近一笔。
-- summary：消费/收入汇总，给出左闭右开的 range_start、range_end，可用 category 筛选。
+- summary：询问花费多少、收入多少或分类汇总，给出左闭右开的 range_start、range_end，
+  可用 category 筛选。
+- report：要求生成报告、图表或消费分析，给出左闭右开的 range_start、range_end。
 - help：无法确认意图或缺少关键金额时使用。
 
 分类使用简短中文，例如：餐饮、交通、购物、居住、娱乐、医疗、教育、工资、奖金、其他。
@@ -65,13 +69,50 @@ class AIInterpreter:
                 {"role": "user", "content": user_content},
             ],
             "temperature": 0,
-            "response_format": self._response_format(),
+            "response_format": self._response_format(ParsedCommand, "ledger_command"),
         }
         response = await self._request("/chat/completions", json=payload)
         content = response["choices"][0]["message"]["content"]
         return ParsedCommand.model_validate_json(content)
 
-    def _response_format(self) -> dict[str, Any]:
+    async def generate_advice(self, report: ReportData) -> AdviceResult:
+        payload_data = {
+            "range_start": report.range_start.isoformat(),
+            "range_end": report.range_end.isoformat(),
+            "currency": report.currency,
+            "income_total": str(report.income_total),
+            "expense_total": str(report.expense_total),
+            "balance": str(report.balance),
+            "entry_count": report.entry_count,
+            "categories": [item.model_dump(mode="json") for item in report.categories],
+            "trend": [item.model_dump(mode="json") for item in report.trend],
+            "trend_granularity": report.trend_granularity,
+        }
+        payload = {
+            "model": self.settings.ai_model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是克制、实用的消费分析助手。仅根据提供的聚合数据，给出 2 到 3 条"
+                        "简短中文建议；不要臆测用户身份、职业或未提供的消费明细。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(payload_data, ensure_ascii=False),
+                },
+            ],
+            "temperature": 0.2,
+            "response_format": self._response_format(AdviceResult, "consumption_advice"),
+        }
+        response = await self._request("/chat/completions", json=payload)
+        content = response["choices"][0]["message"]["content"]
+        return AdviceResult.model_validate_json(content)
+
+    def _response_format(
+        self, model: type[BaseModel], name: str
+    ) -> dict[str, Any]:
         base_url = (
             str(self._client.base_url)
             if self._client is not None
@@ -83,9 +124,9 @@ class AIInterpreter:
         return {
             "type": "json_schema",
             "json_schema": {
-                "name": "ledger_command",
+                "name": name,
                 "strict": True,
-                "schema": ParsedCommand.model_json_schema(),
+                "schema": model.model_json_schema(),
             },
         }
 

@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -12,6 +13,7 @@ class Action(StrEnum):
     UPDATE_LAST = "update_last"
     UNDO_LAST = "undo_last"
     SUMMARY = "summary"
+    REPORT = "report"
     HELP = "help"
 
 
@@ -39,11 +41,11 @@ class ParsedCommand(BaseModel):
             ]
             if missing:
                 raise ValueError(f"create is missing: {', '.join(missing)}")
-        if self.action is Action.SUMMARY:
+        if self.action in {Action.SUMMARY, Action.REPORT}:
             if self.range_start is None or self.range_end is None:
-                raise ValueError("summary requires range_start and range_end")
+                raise ValueError(f"{self.action} requires range_start and range_end")
             if self.range_start >= self.range_end:
-                raise ValueError("summary range must be increasing")
+                raise ValueError(f"{self.action} range must be increasing")
         if self.action is Action.UPDATE_LAST and all(
             value is None
             for value in (self.amount, self.direction, self.category, self.note, self.occurred_at)
@@ -57,5 +59,35 @@ class SummaryItem(BaseModel):
     amount: Decimal
 
 
+class CategoryTotal(BaseModel):
+    category: str
+    amount: Decimal
+
+
+class TrendPoint(BaseModel):
+    period: date
+    amount: Decimal
+
+
+class ReportData(BaseModel):
+    range_start: datetime
+    range_end: datetime
+    currency: str
+    income_total: Decimal
+    expense_total: Decimal
+    balance: Decimal
+    entry_count: int = Field(ge=0)
+    categories: list[CategoryTotal]
+    trend: list[TrendPoint]
+    trend_granularity: Literal["day", "month"]
+
+
+class AdviceResult(BaseModel):
+    items: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(
+        min_length=2, max_length=3
+    )
+
+
 class ExecutionResult(BaseModel):
     message: str
+    report: ReportData | None = None

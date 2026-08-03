@@ -3,6 +3,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -13,8 +14,12 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
+from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.ai import AIInterpreter
 from lark_ledger.services.ledger import LedgerService
+from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
+
+logger = logging.getLogger(__name__)
 
 
 class FeishuClient:
@@ -60,16 +65,48 @@ class FeishuClient:
             return self._token
 
     async def reply_text(self, message_id: str, text: str) -> None:
+        await self._reply_message(message_id, "text", {"text": text})
+
+    async def reply_card(self, message_id: str, card: dict[str, Any]) -> None:
+        await self._reply_message(message_id, "interactive", card)
+
+    async def _reply_message(
+        self, message_id: str, message_type: str, content: dict[str, Any]
+    ) -> None:
         token = await self.tenant_token()
         response = await self._request(
             "POST",
             f"/open-apis/im/v1/messages/{message_id}/reply",
             headers={"Authorization": f"Bearer {token}"},
-            json={"msg_type": "text", "content": json.dumps({"text": text}, ensure_ascii=False)},
+            json={
+                "msg_type": message_type,
+                "content": json.dumps(content, ensure_ascii=False),
+            },
         )
         payload = response.json()
         if payload.get("code") != 0:
             raise RuntimeError(f"回复飞书消息失败：{payload.get('msg', 'unknown')}")
+
+    async def upload_image(self, png: bytes) -> str:
+        if not png:
+            raise ValueError("报告图片不能为空")
+        if not png.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise ValueError("报告图片必须是 PNG 格式")
+        if len(png) > 10 * 1024 * 1024:
+            raise ValueError("报告图片不能超过 10 MB")
+        token = await self.tenant_token()
+        response = await self._request(
+            "POST",
+            "/open-apis/im/v1/images",
+            headers={"Authorization": f"Bearer {token}"},
+            data={"image_type": "message"},
+            files={"image": ("consumption-report.png", png, "image/png")},
+        )
+        payload = response.json()
+        image_key = payload.get("data", {}).get("image_key")
+        if payload.get("code") != 0 or not isinstance(image_key, str) or not image_key:
+            raise RuntimeError(f"上传飞书图片失败：{payload.get('msg', 'unknown')}")
+        return image_key
 
     async def download_resource(self, message_id: str, file_key: str, kind: str) -> bytes:
         token = await self.tenant_token()
@@ -110,11 +147,13 @@ class MessageProcessor:
         session_factory: async_sessionmaker[AsyncSession],
         feishu: FeishuClient,
         interpreter: AIInterpreter,
+        renderer: ReportRenderer | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.feishu = feishu
         self.interpreter = interpreter
+        self.renderer = renderer or ReportRenderer(settings.report_font_path)
 
     async def process(self, event: dict[str, Any]) -> None:
         message = event["message"]
@@ -124,6 +163,7 @@ class MessageProcessor:
         if not user_open_id:
             return
         message_type = str(message.get("message_type", ""))
+        command: ParsedCommand | None = None
         try:
             content = json.loads(message.get("content", "{}"))
             now = datetime.now(ZoneInfo(self.settings.timezone))
@@ -153,13 +193,49 @@ class MessageProcessor:
                 return
             command = await self.interpreter.interpret(text, now=now, image=image)
             async with self.session_factory() as session:
-                result = await LedgerService(session, self.settings.currency).execute(
+                result = await LedgerService(
+                    session, self.settings.currency, self.settings.timezone
+                ).execute(
                     user_open_id,
                     command,
                     source_type=source_type,
                     source_message_id=message_id if command.action.value == "create" else None,
                 )
-            await self.feishu.reply_text(message_id, result.message)
+            if command.action is Action.REPORT:
+                await self._reply_report(message_id, result)
+            else:
+                await self.feishu.reply_text(message_id, result.message)
         except Exception:
-            await self.feishu.reply_text(message_id, "处理失败了，请稍后重试或换一种说法。")
+            if command is None or command.action is not Action.REPORT:
+                await self.feishu.reply_text(message_id, "处理失败了，请稍后重试或换一种说法。")
             raise
+
+    async def _reply_report(self, message_id: str, result: ExecutionResult) -> None:
+        if result.report is None:
+            await self.feishu.reply_card(
+                message_id,
+                build_report_card(None, result.message),
+            )
+            return
+
+        report = result.report
+        try:
+            advice = await self.interpreter.generate_advice(report)
+        except Exception:
+            logger.exception("AI advice generation failed; using deterministic fallback")
+            advice = fallback_advice(report)
+
+        image_key: str | None = None
+        try:
+            png = self.renderer.render(report, advice)
+            image_key = await self.feishu.upload_image(png)
+        except Exception:
+            logger.exception("report rendering or upload failed; sending text-only card")
+
+        card = build_report_card(
+            report,
+            result.message,
+            advice=advice,
+            image_key=image_key,
+        )
+        await self.feishu.reply_card(message_id, card)

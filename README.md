@@ -34,7 +34,7 @@ Docker / 飞牛部署继续使用同一镜像和 Compose：将宿主机 `.env` �
 把模式改为 `webhook`，在飞书后台选择「将事件发送至开发者服务器」，配置
 `https://你的域名/webhooks/feishu`、Verification Token，并按需配置 Encrypt Key。
 
-> 自托管的飞书 / Lark AI 记账机器人：用文字、语音、小票照片或支付截图完成记账、查询、修改、撤销和消费汇总。
+> 自托管的飞书 / Lark AI 记账机器人：用文字、语音、小票照片或支付截图完成记账、查询、修改、撤销、消费汇总和图表报告。
 
 [![CI](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
@@ -51,6 +51,7 @@ LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把
 - 图片记账：识别小票照片和支付截图
 - 修改与撤销：`上一笔改成8块`、`撤销刚才那笔`
 - 分类汇总：`这个月餐饮花了多少`
+- 消费报告：`生成这个月的消费图表`，返回含分类、趋势、收支和建议的卡片
 - 多用户隔离：所有查询和修改均以飞书用户 `open_id` 为边界
 - 事件幂等：按飞书 `event_id` 去重，新增记录也保留来源消息 ID
 - 自托管：FastAPI + PostgreSQL + Docker Compose
@@ -65,7 +66,7 @@ LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把
                          固定业务动作 → SQLAlchemy → PostgreSQL
 ```
 
-AI 输出只能是 `create`、`update_last`、`undo_last`、`summary`、`help` 之一。结构中没有 SQL、表名或任意查询条件字段；数据库层只执行项目代码预先定义的参数化查询。
+AI 输出只能是 `create`、`update_last`、`undo_last`、`summary`、`report`、`help` 之一。结构中没有 SQL、表名或任意查询条件字段；数据库层只执行项目代码预先定义的参数化查询。消费建议只接收分类、趋势和收支总额等聚合数据，不接收逐笔备注或用户标识。
 
 ## 快速开始
 
@@ -99,7 +100,7 @@ curl http://localhost:8000/healthz
 ### 3. 配置飞书应用
 
 1. 在[飞书开放平台](https://open.feishu.cn/app)创建企业自建应用并开启机器人能力。
-2. 在「权限管理」添加接收消息、发送消息及获取消息资源所需权限。
+2. 在「权限管理」添加接收消息、发送消息及“获取与上传图片或文件资源”权限。
 3. 在「事件与回调」选择将事件发送至开发者服务器。
 4. 请求地址填写 `https://你的域名/webhooks/feishu`。
 5. 订阅 `im.message.receive_v1`（接收消息 v2.0），然后发布应用版本。
@@ -141,6 +142,7 @@ uvicorn lark_ledger.main:app --reload
 | `AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 API 根地址 |
 | `AI_MODEL` | `gpt-4.1-mini` | 支持视觉与 JSON Schema 的解析模型 |
 | `TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | 语音转写模型 |
+| `REPORT_FONT_PATH` | 空 | 可选的中文报告字体文件；Docker 已内置 Noto CJK |
 
 ## 项目结构
 
@@ -154,7 +156,8 @@ src/lark_ledger/
 └── services/
     ├── ai.py              # 文字、视觉、语音的 AI 适配
     ├── feishu.py          # Token、资源、回复、验签和事件处理
-    └── ledger.py          # 固定的记账业务逻辑
+    ├── ledger.py          # 固定的记账业务逻辑
+    └── report.py          # 消费报告图片与飞书卡片渲染
 ```
 
 ## 当前限制与路线图

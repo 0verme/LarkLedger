@@ -50,6 +50,7 @@ async def test_interpreter_uses_strict_schema() -> None:
     response_format = captured["response_format"]
     assert isinstance(response_format, dict)
     assert response_format["json_schema"]["strict"] is True  # type: ignore[index]
+    assert "report" in json.dumps(response_format)
 
 
 async def test_transcription() -> None:
