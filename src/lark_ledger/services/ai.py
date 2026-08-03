@@ -26,6 +26,9 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 
 动作：
 - create：新增收支，必须给出 amount、direction、category、occurred_at。
+- batch：文字消息包含多笔收支，或同时包含收支和预算设置时使用。把每笔收支按原文顺序放入
+  entries，最多 20 笔；把预算放入 budgets，最多 10 项。超出上限时分别设置 batch_truncated
+  或 budgets_truncated。batch 不得包含修改、撤销、查询或报告动作，这些动作需要用户单独发送。
 - create_entries：仅用于图片中存在多笔独立支付流水时，把每笔交易按图片顺序放入 entries，
   最多返回前 20 笔；图片中还有更多交易时将 batch_truncated 设为 true。逐项保留图片明确显示的
   amount、currency、direction、category、note、occurred_at，缺失字段留空，不要臆造。
@@ -40,6 +43,10 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 - list_budgets：查看月预算；查看指定品类时填写 category，否则留空。
 - delete_budget：取消指定品类的月预算，必须给出 category。
 - help：无法确认意图或缺少关键金额时使用。
+
+复杂文字规则：以用户最后的修正为准，不要同时保留被纠正的旧金额；优惠或满减只记录实际
+支付金额；垫付支出、朋友还款、AA 收款和公司报销按真实资金流水分别记录，不要相互抵消。
+“三个人每人转给我 106.5”必须展开为三笔独立收入。单条文字只有一笔收支时仍使用 create。
 
 图片规则：单笔支付详情或小票仍使用 create。只有支付宝、微信支付、银行账单等包含多笔独立交易
 的流水列表才使用 create_entries。小票中的多个商品属于同一笔消费，不得拆成多笔。不要把月度
@@ -141,10 +148,12 @@ class AIInterpreter:
             client=request_client,
             json=payload,
         )
-        content = response["choices"][0]["message"]["content"]
         try:
+            content = response["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise TypeError("AI command response content is empty or not text")
             return ParsedCommand.model_validate_json(content)
-        except ValidationError as exc:
+        except (KeyError, IndexError, TypeError, ValidationError) as exc:
             logger.exception("AI command response failed schema validation")
             raise CommandInterpretationError("AI command response is invalid") from exc
 

@@ -40,6 +40,7 @@ class _ConvertedAmount:
 HELP_TEXT = (
     "我可以帮你记账、修改、撤销、汇总、设置预算和生成消费报告。试试：\n"
     "• 午饭32\n• 昨天打车38.5\n• 工资到账10000\n"
+    "• 早餐12，午饭32，打车45，餐饮预算1000\n"
     "• 上一笔改成8块\n• 这个月餐饮花了多少\n• 撤销刚才那笔"
     "\n• 交通预算500，人情往来预算1000\n• 查看预算\n• 生成这个月的消费图表"
 )
@@ -76,6 +77,13 @@ class LedgerService:
                 source_type=source_type,
                 source_message_id=source_message_id,
                 source_item_index=source_item_index,
+            )
+        if command.action is Action.BATCH:
+            return await self._execute_batch(
+                user_open_id,
+                command,
+                source_type=source_type,
+                source_message_id=source_message_id,
             )
         if command.action is Action.CREATE_ENTRIES:
             return await self._create_entries(
@@ -233,6 +241,105 @@ class LedgerService:
             budget_alert="\n\n".join(alerts) or None,
         )
 
+    async def _execute_batch(
+        self,
+        user_open_id: str,
+        command: ParsedCommand,
+        *,
+        source_type: str,
+        source_message_id: str | None,
+    ) -> ExecutionResult:
+        entry_successes: list[str] = []
+        entry_failures: list[str] = []
+        budget_successes: list[str] = []
+        budget_failures: list[str] = []
+        alerts: list[str] = []
+        income_total = Decimal("0")
+        expense_total = Decimal("0")
+
+        for index, entry_candidate in enumerate(command.entries or []):
+            item, error = self._validated_entry_candidate(entry_candidate)
+            label = f"第 {index + 1} 笔"
+            if item is None:
+                entry_failures.append(f"❌ {label}：{error}")
+                continue
+            try:
+                async with self.session.begin_nested():
+                    entry, converted, budget_alert = await self._stage_entry(
+                        user_open_id,
+                        item,
+                        source_type=source_type,
+                        source_message_id=source_message_id,
+                        source_item_index=index,
+                    )
+            except ExchangeRateUnavailableError:
+                entry_failures.append(f"❌ {label}：暂时无法获取汇率")
+            except ValueError:
+                entry_failures.append(f"❌ {label}：换算后的金额超出支持范围")
+            except Exception:
+                logger.exception("failed to persist text batch ledger item %s", index + 1)
+                entry_failures.append(f"❌ {label}：保存失败，请稍后重试")
+            else:
+                if entry.direction is Direction.INCOME:
+                    income_total += entry.amount
+                else:
+                    expense_total += entry.amount
+                entry_successes.append(self._batch_entry_line(index, entry, converted))
+                if budget_alert and budget_alert not in alerts:
+                    alerts.append(budget_alert)
+
+        budgets = command.budgets or []
+        last_indexes: dict[str, int] = {}
+        for index, budget_candidate in enumerate(budgets):
+            category = (budget_candidate.category or "").strip()
+            if category:
+                last_indexes[category] = index
+
+        for index, budget_candidate in enumerate(budgets):
+            category = (budget_candidate.category or "").strip()
+            if category and last_indexes[category] != index:
+                continue
+            item, error = self._validated_budget_candidate(budget_candidate)
+            label = category or f"第 {index + 1} 项"
+            if item is None:
+                budget_failures.append(f"❌ {label}：{error}")
+                continue
+            try:
+                async with self.session.begin_nested():
+                    converted, spent = await self._stage_budget(user_open_id, item)
+            except ExchangeRateUnavailableError:
+                budget_failures.append(f"❌ {label}：暂时无法获取汇率")
+            except ValueError:
+                budget_failures.append(f"❌ {label}：换算后的金额超出支持范围")
+            except Exception:
+                logger.exception("failed to persist text batch budget item %s", index + 1)
+                budget_failures.append(f"❌ {label}：保存失败，请稍后重试")
+            else:
+                budget_successes.append(
+                    "✅ " + self._budget_set_message(item, converted, spent).replace("\n", "；")
+                )
+
+        await self.session.commit()
+        lines = [
+            "复杂指令处理完成："
+            f"账目成功 {len(entry_successes)} 笔、失败 {len(entry_failures)} 笔；"
+            f"预算成功 {len(budget_successes)} 项、失败 {len(budget_failures)} 项",
+            f"收入合计 {self._format_money(income_total)} · "
+            f"支出合计 {self._format_money(expense_total)}",
+            *entry_successes,
+            *entry_failures,
+            *budget_successes,
+            *budget_failures,
+        ]
+        if command.batch_truncated:
+            lines.append("⚠️ 消息中的账目超过 20 笔，本次仅处理前 20 笔。")
+        if command.budgets_truncated:
+            lines.append("⚠️ 消息中的预算超过 10 项，本次仅处理前 10 项。")
+        return ExecutionResult(
+            message="\n".join(lines),
+            budget_alert="\n\n".join(alerts) or None,
+        )
+
     def _batch_entry_line(
         self, index: int, entry: LedgerEntry, converted: _ConvertedAmount
     ) -> str:
@@ -323,6 +430,13 @@ class LedgerService:
     async def _set_budget(
         self, user_open_id: str, command: ParsedCommand
     ) -> ExecutionResult:
+        converted, spent = await self._stage_budget(user_open_id, command)
+        await self.session.commit()
+        return ExecutionResult(message=self._budget_set_message(command, converted, spent))
+
+    async def _stage_budget(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> tuple[_ConvertedAmount, Decimal]:
         assert command.amount is not None
         assert command.category is not None
         converted = await self._convert_command_amount(command)
@@ -338,15 +452,21 @@ class LedgerService:
             budget.amount = converted.amount
         await self.session.flush()
         spent = await self._monthly_spend(user_open_id, command.category)
-        await self.session.commit()
+        return converted, spent
+
+    def _budget_set_message(
+        self,
+        command: ParsedCommand,
+        converted: _ConvertedAmount,
+        spent: Decimal,
+    ) -> str:
+        assert command.category is not None
         progress = self._budget_progress(spent, converted.amount)
         conversion = self._conversion_note(converted)
-        return ExecutionResult(
-            message=(
-                f"已设置每月{command.category}预算 "
-                f"{self._format_money(converted.amount)}{conversion}\n"
-                f"本月已用 ¥{spent:.2f} · {progress}"
-            )
+        return (
+            f"已设置每月{command.category}预算 "
+            f"{self._format_money(converted.amount)}{conversion}\n"
+            f"本月已用 ¥{spent:.2f} · {progress}"
         )
 
     async def _set_budgets(

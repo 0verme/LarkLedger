@@ -252,7 +252,7 @@ class MessageProcessor:
                     source_type=source_type,
                     source_message_id=(
                         message_id
-                        if command.action in {Action.CREATE, Action.CREATE_ENTRIES}
+                        if command.action in {Action.CREATE, Action.CREATE_ENTRIES, Action.BATCH}
                         else None
                     ),
                 )
@@ -271,8 +271,9 @@ class MessageProcessor:
                 text = "没有完整识别图片中的交易，请裁剪无关内容或换一张更清晰的截图。"
             else:
                 text = (
-                    "没有完全识别这条指令。批量设置预算请写成："
-                    "交通预算500，人情往来预算1000（一次最多10项）。"
+                    "没有完整识别这条指令，本次没有写入账本。请明确写出每笔的用途、金额和"
+                    "收支方向；一条消息最多包含20笔账目和10项预算，修改、撤销、查询或报告"
+                    "请单独发送。"
                 )
             await self.feishu.reply_text(
                 message_id,

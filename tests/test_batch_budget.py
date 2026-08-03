@@ -201,5 +201,6 @@ async def test_processor_returns_actionable_command_validation_error() -> None:
     await engine.dispose()
 
     assert len(feishu.texts) == 1
-    assert "批量设置预算请写成" in feishu.texts[0]
+    assert "本次没有写入账本" in feishu.texts[0]
+    assert "修改、撤销、查询或报告请单独发送" in feishu.texts[0]
     assert "处理失败了" not in feishu.texts[0]

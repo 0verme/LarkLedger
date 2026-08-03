@@ -11,6 +11,7 @@ from lark_ledger.models import Direction
 class Action(StrEnum):
     CREATE = "create"
     CREATE_ENTRIES = "create_entries"
+    BATCH = "batch"
     UPDATE_LAST = "update_last"
     UNDO_LAST = "undo_last"
     SUMMARY = "summary"
@@ -67,6 +68,7 @@ class ParsedCommand(BaseModel):
     budgets: list[BudgetCandidate] | None = Field(default=None, min_length=1, max_length=10)
     entries: list[EntryCandidate] | None = Field(default=None, min_length=1, max_length=20)
     batch_truncated: bool = False
+    budgets_truncated: bool = False
 
     @field_validator("currency")
     @classmethod
@@ -106,8 +108,31 @@ class ParsedCommand(BaseModel):
                 )
             ):
                 raise ValueError("create_entries only accepts entries and batch_truncated")
-        elif self.entries is not None or self.batch_truncated:
-            raise ValueError("entries and batch_truncated are only supported for create_entries")
+            if self.budgets_truncated:
+                raise ValueError("budgets_truncated is only supported for batch")
+        elif self.action is Action.BATCH:
+            if not self.entries and not self.budgets:
+                raise ValueError("batch requires entries or budgets")
+            if any(
+                value is not None
+                for value in (
+                    self.amount,
+                    self.currency,
+                    self.direction,
+                    self.category,
+                    self.note,
+                    self.occurred_at,
+                    self.range_start,
+                    self.range_end,
+                )
+            ):
+                raise ValueError("batch only accepts entries, budgets, and truncation flags")
+            if self.batch_truncated and not self.entries:
+                raise ValueError("batch_truncated requires entries")
+            if self.budgets_truncated and not self.budgets:
+                raise ValueError("budgets_truncated requires budgets")
+        elif self.entries is not None or self.batch_truncated or self.budgets_truncated:
+            raise ValueError("batch fields are only supported for create_entries or batch")
         if self.action in {Action.SUMMARY, Action.REPORT}:
             if self.range_start is None or self.range_end is None:
                 raise ValueError(f"{self.action} requires range_start and range_end")
@@ -132,7 +157,7 @@ class ParsedCommand(BaseModel):
                 raise ValueError("set_budgets requires at least one budget candidate")
             if any(value is not None for value in (self.amount, self.currency, self.category)):
                 raise ValueError("set_budgets only accepts the budgets field")
-        elif self.budgets is not None:
+        elif self.action is not Action.BATCH and self.budgets is not None:
             raise ValueError("budgets is only supported for set_budgets")
         if self.action is Action.DELETE_BUDGET and self.category is None:
             raise ValueError("delete_budget requires category")
