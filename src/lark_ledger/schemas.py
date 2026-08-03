@@ -15,6 +15,7 @@ class Action(StrEnum):
     SUMMARY = "summary"
     REPORT = "report"
     SET_BUDGET = "set_budget"
+    SET_BUDGETS = "set_budgets"
     LIST_BUDGETS = "list_budgets"
     DELETE_BUDGET = "delete_budget"
     HELP = "help"
@@ -23,6 +24,16 @@ class Action(StrEnum):
 SUPPORTED_INPUT_CURRENCIES = frozenset(
     {"CNY", "USD", "EUR", "JPY", "GBP", "HKD", "KRW", "AUD", "CAD", "SGD"}
 )
+
+
+class BudgetCandidate(BaseModel):
+    """Potential batch item; each item is validated strictly before persistence."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: str | None = None
+    amount: Decimal | str | None = None
+    currency: str | None = None
 
 
 class ParsedCommand(BaseModel):
@@ -39,6 +50,7 @@ class ParsedCommand(BaseModel):
     occurred_at: datetime | None = None
     range_start: datetime | None = None
     range_end: datetime | None = None
+    budgets: list[BudgetCandidate] | None = Field(default=None, min_length=1, max_length=10)
 
     @field_validator("currency")
     @classmethod
@@ -79,6 +91,13 @@ class ParsedCommand(BaseModel):
             missing = [name for name in ("amount", "category") if getattr(self, name) is None]
             if missing:
                 raise ValueError(f"set_budget is missing: {', '.join(missing)}")
+        if self.action is Action.SET_BUDGETS:
+            if not self.budgets:
+                raise ValueError("set_budgets requires at least one budget candidate")
+            if any(value is not None for value in (self.amount, self.currency, self.category)):
+                raise ValueError("set_budgets only accepts the budgets field")
+        elif self.budgets is not None:
+            raise ValueError("budgets is only supported for set_budgets")
         if self.action is Action.DELETE_BUDGET and self.category is None:
             raise ValueError("delete_budget requires category")
         return self

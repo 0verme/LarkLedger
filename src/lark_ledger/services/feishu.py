@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
 from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
-from lark_ledger.services.ai import AIInterpreter
+from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
@@ -220,6 +220,12 @@ class MessageProcessor:
                 if result.budget_alert:
                     message_text = f"{message_text}\n\n{result.budget_alert}"
                 await self.feishu.reply_text(message_id, message_text)
+        except CommandInterpretationError:
+            await self.feishu.reply_text(
+                message_id,
+                "没有完全识别这条指令。批量设置预算请写成："
+                "交通预算500，人情往来预算1000（一次最多10项）。",
+            )
         except ExchangeRateUnavailableError:
             await self.feishu.reply_text(message_id, "暂时无法获取汇率，请稍后重试。")
         except Exception:

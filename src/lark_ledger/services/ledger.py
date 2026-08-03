@@ -1,24 +1,29 @@
+import logging
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from pydantic import ValidationError
 from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.models import BudgetAlert, CategoryBudget, Direction, LedgerEntry
 from lark_ledger.schemas import (
+    SUPPORTED_INPUT_CURRENCIES,
     Action,
+    BudgetCandidate,
     CategoryTotal,
     ExecutionResult,
     ParsedCommand,
     ReportData,
     TrendPoint,
 )
-from lark_ledger.services.exchange import ExchangeRateService
+from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 
 MAX_MONEY = Decimal("999999999999.99")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -35,7 +40,7 @@ HELP_TEXT = (
     "我可以帮你记账、修改、撤销、汇总、设置预算和生成消费报告。试试：\n"
     "• 午饭32\n• 昨天打车38.5\n• 工资到账10000\n"
     "• 上一笔改成8块\n• 这个月餐饮花了多少\n• 撤销刚才那笔"
-    "\n• 每月餐饮预算1500\n• 查看预算\n• 生成这个月的消费图表"
+    "\n• 交通预算500，人情往来预算1000\n• 查看预算\n• 生成这个月的消费图表"
 )
 
 
@@ -76,6 +81,8 @@ class LedgerService:
             return await self._report(user_open_id, command)
         if command.action is Action.SET_BUDGET:
             return await self._set_budget(user_open_id, command)
+        if command.action is Action.SET_BUDGETS:
+            return await self._set_budgets(user_open_id, command)
         if command.action is Action.LIST_BUDGETS:
             return await self._list_budgets(user_open_id, command)
         if command.action is Action.DELETE_BUDGET:
@@ -189,6 +196,76 @@ class LedgerService:
                 f"本月已用 ¥{spent:.2f} · {progress}"
             )
         )
+
+    async def _set_budgets(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        assert command.budgets is not None
+        last_indexes: dict[str, int] = {}
+        for index, candidate in enumerate(command.budgets):
+            category = (candidate.category or "").strip()
+            if category:
+                last_indexes[category] = index
+
+        successes: list[str] = []
+        failures: list[str] = []
+        for index, candidate in enumerate(command.budgets):
+            category = (candidate.category or "").strip()
+            if category and last_indexes[category] != index:
+                continue
+            item_command, error = self._validated_budget_candidate(candidate)
+            label = category or f"第 {index + 1} 项"
+            if item_command is None:
+                failures.append(f"❌ {label}：{error}")
+                continue
+            try:
+                result = await self._set_budget(user_open_id, item_command)
+            except ExchangeRateUnavailableError:
+                await self.session.rollback()
+                failures.append(f"❌ {label}：暂时无法获取汇率")
+            except ValueError:
+                await self.session.rollback()
+                failures.append(f"❌ {label}：换算后的金额超出支持范围")
+            except Exception:
+                await self.session.rollback()
+                logger.exception("failed to persist batch budget item %s", index + 1)
+                failures.append(f"❌ {label}：保存失败，请稍后重试")
+            else:
+                successes.append("✅ " + result.message.replace("\n", "；"))
+
+        lines = [
+            f"批量预算处理完成：成功 {len(successes)} 项，失败 {len(failures)} 项",
+            *successes,
+            *failures,
+        ]
+        return ExecutionResult(message="\n".join(lines))
+
+    @staticmethod
+    def _validated_budget_candidate(
+        candidate: BudgetCandidate,
+    ) -> tuple[ParsedCommand | None, str | None]:
+        category = (candidate.category or "").strip()
+        if not category:
+            return None, "缺少分类"
+        if len(category) > 64:
+            return None, "分类名称过长"
+        if candidate.amount is None or (
+            isinstance(candidate.amount, str) and not candidate.amount.strip()
+        ):
+            return None, "缺少金额"
+        currency = (candidate.currency or "").strip().upper() or None
+        if currency is not None and currency not in SUPPORTED_INPUT_CURRENCIES:
+            return None, f"不支持币种 {currency[:12]}"
+        try:
+            item = ParsedCommand(
+                action=Action.SET_BUDGET,
+                amount=candidate.amount,
+                currency=currency,
+                category=category,
+            )
+        except ValidationError:
+            return None, "金额格式无效或不在支持范围内"
+        return item, None
 
     async def _convert_command_amount(self, command: ParsedCommand) -> _ConvertedAmount:
         assert command.amount is not None

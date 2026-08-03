@@ -1,15 +1,23 @@
 import base64
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from lark_ledger.config import Settings
 from lark_ledger.schemas import AdviceResult, ParsedCommand, ReportData
+
+logger = logging.getLogger(__name__)
+
+
+class CommandInterpretationError(ValueError):
+    """Raised when an AI response does not match the allowed command schema."""
+
 
 SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入，不保存数据、不生成或执行 SQL。
 当前时间：{now}；时区：{timezone}；默认币种：{currency}。
@@ -23,6 +31,8 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
   可用 category 筛选。
 - report：要求生成报告、图表或消费分析，给出左闭右开的 range_start、range_end。
 - set_budget：设置或修改长期生效的品类月预算，必须给出 amount 和 category。
+- set_budgets：一条消息设置多个品类月预算时使用，把每个品类、金额和可选币种放入
+  budgets；最多 10 项。示例“交通预算500，人情往来预算1000”必须解析成两个候选项。
 - list_budgets：查看月预算；查看指定品类时填写 category，否则留空。
 - delete_budget：取消指定品类的月预算，必须给出 category。
 - help：无法确认意图或缺少关键金额时使用。
@@ -32,7 +42,7 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 金额明确带有币种时填写 currency，使用三字母代码：人民币 CNY、美元 USD、欧元 EUR、
 日元 JPY、英镑 GBP、港币 HKD、韩元 KRW、澳元 AUD、加元 CAD、新加坡元 SGD。
 没有明确币种时 currency 留空并按默认币种处理。currency 只用于 create、update_last 和
-set_budget，且必须与 amount 同时出现；summary 和 report 始终使用默认币种。
+set_budget；批量预算的币种写在各自候选项中。summary 和 report 始终使用默认币种。
 """
 
 
@@ -119,7 +129,11 @@ class AIInterpreter:
             json=payload,
         )
         content = response["choices"][0]["message"]["content"]
-        return ParsedCommand.model_validate_json(content)
+        try:
+            return ParsedCommand.model_validate_json(content)
+        except ValidationError as exc:
+            logger.exception("AI command response failed schema validation")
+            raise CommandInterpretationError("AI command response is invalid") from exc
 
     async def generate_advice(self, report: ReportData) -> AdviceResult:
         payload_data = {
