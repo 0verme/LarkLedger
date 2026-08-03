@@ -1,4 +1,5 @@
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -15,6 +16,20 @@ from lark_ledger.schemas import (
     ReportData,
     TrendPoint,
 )
+from lark_ledger.services.exchange import ExchangeRateService
+
+MAX_MONEY = Decimal("999999999999.99")
+
+
+@dataclass(frozen=True)
+class _ConvertedAmount:
+    amount: Decimal
+    original_amount: Decimal
+    original_currency: str
+
+    @property
+    def was_converted(self) -> bool:
+        return self.original_currency != ""
 
 HELP_TEXT = (
     "我可以帮你记账、修改、撤销、汇总、设置预算和生成消费报告。试试：\n"
@@ -31,11 +46,13 @@ class LedgerService:
         currency: str = "CNY",
         timezone: str = "Asia/Shanghai",
         now: datetime | None = None,
+        exchange_rates: ExchangeRateService | None = None,
     ) -> None:
         self.session = session
         self.currency = currency
         self.timezone = ZoneInfo(timezone)
         self.now = now
+        self.exchange_rates = exchange_rates
 
     async def execute(
         self,
@@ -85,9 +102,10 @@ class LedgerService:
         assert command.direction is not None
         assert command.category is not None
         assert command.occurred_at is not None
+        converted = await self._convert_command_amount(command)
         entry = LedgerEntry(
             user_open_id=user_open_id,
-            amount=command.amount,
+            amount=converted.amount,
             currency=self.currency,
             direction=command.direction,
             category=command.category,
@@ -101,8 +119,12 @@ class LedgerService:
         await self.session.commit()
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f"（{entry.note}）" if entry.note else ""
+        conversion = self._conversion_note(converted)
         return ExecutionResult(
-            message=f"已记录{sign} ¥{entry.amount:.2f} · {entry.category}{note}",
+            message=(
+                f"已记录{sign} {self._format_money(entry.amount)}{conversion}"
+                f" · {entry.category}{note}"
+            ),
             budget_alert=budget_alert,
         )
 
@@ -112,14 +134,22 @@ class LedgerService:
         entry = (await self.session.execute(self._latest_query(user_open_id))).scalar_one_or_none()
         if entry is None:
             return ExecutionResult(message="还没有可以修改的记录。")
-        for field in ("amount", "direction", "category", "note", "occurred_at"):
+        converted = (
+            await self._convert_command_amount(command) if command.amount is not None else None
+        )
+        if converted is not None:
+            entry.amount = converted.amount
+        for field in ("direction", "category", "note", "occurred_at"):
             value = getattr(command, field)
             if value is not None:
                 setattr(entry, field, value)
         budget_alert = await self._check_budget(entry)
         await self.session.commit()
+        conversion = self._conversion_note(converted) if converted is not None else ""
         return ExecutionResult(
-            message=f"已修改上一笔：¥{entry.amount:.2f} · {entry.category}",
+            message=(
+                f"已修改上一笔：{self._format_money(entry.amount)}{conversion} · {entry.category}"
+            ),
             budget_alert=budget_alert,
         )
 
@@ -136,25 +166,61 @@ class LedgerService:
     ) -> ExecutionResult:
         assert command.amount is not None
         assert command.category is not None
+        converted = await self._convert_command_amount(command)
         budget = await self._budget_for_update(user_open_id, command.category)
         if budget is None:
             budget = CategoryBudget(
                 user_open_id=user_open_id,
                 category=command.category,
-                amount=command.amount,
+                amount=converted.amount,
             )
             self.session.add(budget)
         else:
-            budget.amount = command.amount
+            budget.amount = converted.amount
         await self.session.flush()
         spent = await self._monthly_spend(user_open_id, command.category)
         await self.session.commit()
-        progress = self._budget_progress(spent, command.amount)
+        progress = self._budget_progress(spent, converted.amount)
+        conversion = self._conversion_note(converted)
         return ExecutionResult(
             message=(
-                f"已设置每月{command.category}预算 ¥{command.amount:.2f}\n"
+                f"已设置每月{command.category}预算 "
+                f"{self._format_money(converted.amount)}{conversion}\n"
                 f"本月已用 ¥{spent:.2f} · {progress}"
             )
+        )
+
+    async def _convert_command_amount(self, command: ParsedCommand) -> _ConvertedAmount:
+        assert command.amount is not None
+        source = command.currency or self.currency
+        was_converted = source != self.currency
+        if was_converted:
+            if self.exchange_rates is None:
+                raise RuntimeError("exchange rate service is not configured")
+            amount = await self.exchange_rates.convert(command.amount, source, self.currency)
+        else:
+            amount = command.amount
+        if amount <= 0:
+            raise ValueError("converted amount must be at least 0.01")
+        if amount > MAX_MONEY:
+            raise ValueError("converted amount exceeds the ledger field limit")
+        return _ConvertedAmount(
+            amount=amount,
+            original_amount=command.amount,
+            original_currency=source if was_converted else "",
+        )
+
+    def _format_money(self, amount: Decimal) -> str:
+        if self.currency == "CNY":
+            return f"¥{amount:.2f}"
+        return f"{amount:.2f} {self.currency}"
+
+    @staticmethod
+    def _conversion_note(converted: _ConvertedAmount) -> str:
+        if not converted.was_converted:
+            return ""
+        return (
+            f"（由 {converted.original_amount:.2f} {converted.original_currency} 约算）"
         )
 
     async def _list_budgets(

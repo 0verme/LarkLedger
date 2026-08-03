@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lark_ledger.config import Settings
 from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.ai import AIInterpreter
+from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
 
@@ -148,12 +149,14 @@ class MessageProcessor:
         feishu: FeishuClient,
         interpreter: AIInterpreter,
         renderer: ReportRenderer | None = None,
+        exchange_rates: ExchangeRateService | None = None,
     ) -> None:
         self.settings = settings
         self.session_factory = session_factory
         self.feishu = feishu
         self.interpreter = interpreter
         self.renderer = renderer or ReportRenderer(settings.report_font_path)
+        self.exchange_rates = exchange_rates or ExchangeRateService(settings)
 
     async def process(self, event: dict[str, Any]) -> None:
         message = event["message"]
@@ -194,7 +197,10 @@ class MessageProcessor:
             command = await self.interpreter.interpret(text, now=now, image=image)
             async with self.session_factory() as session:
                 result = await LedgerService(
-                    session, self.settings.currency, self.settings.timezone
+                    session,
+                    self.settings.currency,
+                    self.settings.timezone,
+                    exchange_rates=self.exchange_rates,
                 ).execute(
                     user_open_id,
                     command,
@@ -208,6 +214,8 @@ class MessageProcessor:
                 if result.budget_alert:
                     message_text = f"{message_text}\n\n{result.budget_alert}"
                 await self.feishu.reply_text(message_id, message_text)
+        except ExchangeRateUnavailableError:
+            await self.feishu.reply_text(message_id, "暂时无法获取汇率，请稍后重试。")
         except Exception:
             if command is None or command.action is not Action.REPORT:
                 await self.feishu.reply_text(message_id, "处理失败了，请稍后重试或换一种说法。")

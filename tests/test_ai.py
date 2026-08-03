@@ -55,6 +55,7 @@ async def test_interpreter_uses_strict_schema() -> None:
     messages = captured["messages"]
     assert isinstance(messages, list)
     assert "查看月预算" in messages[0]["content"]
+    assert "日元 JPY" in messages[0]["content"]
 
 
 async def test_transcription() -> None:

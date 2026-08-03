@@ -1,11 +1,15 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+import httpx
+import pytest
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lark_ledger.models import Direction, LedgerEntry
+from lark_ledger.config import Settings
+from lark_ledger.models import CategoryBudget, Direction, LedgerEntry
 from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.ledger import LedgerService
 
 
@@ -34,6 +38,124 @@ async def test_create_update_and_undo(session: AsyncSession) -> None:
     assert "已撤销" in undone.message
     entry = (await session.execute(select(LedgerEntry))).scalar_one()
     assert entry.deleted_at is not None
+
+
+async def test_foreign_currency_create_update_and_budget_use_converted_amount(
+    session: AsyncSession,
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        rates = {"JPY": 0.04781, "USD": 7.2}
+        source = request.url.path.split("/")[-2]
+        return httpx.Response(
+            200,
+            json={
+                "date": "2026-08-03",
+                "base": source,
+                "quote": "CNY",
+                "rate": rates[source],
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://rates.example"
+    )
+    exchange_rates = ExchangeRateService(Settings(_env_file=None), client)
+    service = LedgerService(session, exchange_rates=exchange_rates)
+    created = await service.execute(
+        "ou_user",
+        ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("1300"),
+            currency="JPY",
+            direction=Direction.EXPENSE,
+            category="餐饮",
+            occurred_at=datetime(2026, 8, 2, 4, tzinfo=UTC),
+        ),
+    )
+    assert "¥62.15（由 1300.00 JPY 约算）" in created.message
+
+    updated = await service.execute(
+        "ou_user",
+        ParsedCommand(action=Action.UPDATE_LAST, amount=Decimal("10"), currency="USD"),
+    )
+    assert "¥72.00（由 10.00 USD 约算）" in updated.message
+
+    budget = await service.execute(
+        "ou_user",
+        ParsedCommand(
+            action=Action.SET_BUDGET,
+            amount=Decimal("20"),
+            currency="USD",
+            category="餐饮",
+        ),
+    )
+    assert "¥144.00（由 20.00 USD 约算）" in budget.message
+    entry = (await session.execute(select(LedgerEntry))).scalar_one()
+    stored_budget = (await session.execute(select(CategoryBudget))).scalar_one()
+    assert entry.amount == Decimal("72.00")
+    assert entry.currency == "CNY"
+    assert stored_budget.amount == Decimal("144.00")
+    await client.aclose()
+
+
+@pytest.mark.parametrize("rate", ["0.000001", "999999999999.99"])
+async def test_invalid_converted_amount_does_not_write(
+    session: AsyncSession, rate: str
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"date": "2026-08-03", "base": "JPY", "quote": "CNY", "rate": rate},
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://rates.example"
+    )
+    service = LedgerService(
+        session,
+        exchange_rates=ExchangeRateService(Settings(_env_file=None), client),
+    )
+    with pytest.raises(ValueError):
+        await service.execute(
+            "ou_user",
+            ParsedCommand(
+                action=Action.CREATE,
+                amount=Decimal("100"),
+                currency="JPY",
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                occurred_at=datetime(2026, 8, 2, 4, tzinfo=UTC),
+            ),
+        )
+    count = await session.scalar(select(func.count()).select_from(LedgerEntry))
+    assert count == 0
+    await client.aclose()
+
+
+async def test_unavailable_rate_does_not_write(session: AsyncSession) -> None:
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+        base_url="https://rates.example",
+    )
+    service = LedgerService(
+        session,
+        exchange_rates=ExchangeRateService(Settings(_env_file=None), client),
+    )
+    with pytest.raises(ExchangeRateUnavailableError):
+        await service.execute(
+            "ou_user",
+            ParsedCommand(
+                action=Action.CREATE,
+                amount=Decimal("1300"),
+                currency="JPY",
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                occurred_at=datetime(2026, 8, 2, 4, tzinfo=UTC),
+            ),
+        )
+    count = await session.scalar(select(func.count()).select_from(LedgerEntry))
+    assert count == 0
+    await client.aclose()
 
 
 async def test_summary_is_isolated_by_user(session: AsyncSession) -> None:

@@ -3,7 +3,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lark_ledger.models import Direction
 
@@ -20,6 +20,11 @@ class Action(StrEnum):
     HELP = "help"
 
 
+SUPPORTED_INPUT_CURRENCIES = frozenset(
+    {"CNY", "USD", "EUR", "JPY", "GBP", "HKD", "KRW", "AUD", "CAD", "SGD"}
+)
+
+
 class ParsedCommand(BaseModel):
     """Only data the AI may return; there is intentionally no SQL-shaped field."""
 
@@ -27,12 +32,23 @@ class ParsedCommand(BaseModel):
 
     action: Action
     amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
     direction: Direction | None = None
     category: str | None = Field(default=None, max_length=64)
     note: str | None = Field(default=None, max_length=500)
     occurred_at: datetime | None = None
     range_start: datetime | None = None
     range_end: datetime | None = None
+
+    @field_validator("currency")
+    @classmethod
+    def normalize_currency(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.upper()
+        if normalized not in SUPPORTED_INPUT_CURRENCIES:
+            raise ValueError(f"unsupported input currency: {normalized}")
+        return normalized
 
     @model_validator(mode="after")
     def validate_action_fields(self) -> "ParsedCommand":
@@ -54,6 +70,11 @@ class ParsedCommand(BaseModel):
             for value in (self.amount, self.direction, self.category, self.note, self.occurred_at)
         ):
             raise ValueError("update_last requires at least one changed field")
+        if self.currency is not None:
+            if self.amount is None:
+                raise ValueError("currency requires amount")
+            if self.action not in {Action.CREATE, Action.UPDATE_LAST, Action.SET_BUDGET}:
+                raise ValueError(f"currency is not supported for {self.action}")
         if self.action is Action.SET_BUDGET:
             missing = [name for name in ("amount", "category") if getattr(self, name) is None]
             if missing:

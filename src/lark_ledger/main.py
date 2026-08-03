@@ -9,6 +9,7 @@ from lark_ledger.config import EventMode, get_settings
 from lark_ledger.db import SessionFactory, engine
 from lark_ledger.services.ai import AIInterpreter
 from lark_ledger.services.events import EventService
+from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.feishu import FeishuClient, MessageProcessor
 from lark_ledger.services.websocket import LongConnectionReceiver
 
@@ -28,6 +29,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         SessionFactory,
         FeishuClient(settings),
         AIInterpreter(settings),
+        exchange_rates=ExchangeRateService(settings),
     )
     app.state.processor = processor
     app.state.event_service = EventService(SessionFactory, processor)

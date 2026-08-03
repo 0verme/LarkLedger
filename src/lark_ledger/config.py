@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     ai_model: str = "gpt-4.1-mini"
     transcription_model: str = "gpt-4o-mini-transcribe"
     ai_timeout_seconds: float = Field(default=45, gt=0, le=180)
+    exchange_rate_api_url: str = "https://api.frankfurter.dev"
+    exchange_rate_cache_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
     report_font_path: str | None = None
 
     @field_validator("event_mode", mode="before")

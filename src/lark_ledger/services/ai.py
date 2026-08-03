@@ -28,6 +28,10 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 
 分类使用简短中文，例如：餐饮、交通、购物、居住、娱乐、医疗、教育、工资、奖金、其他。
 金额始终为正数；收入/支出由 direction 表示。不要臆造不明确的金额。
+金额明确带有币种时填写 currency，使用三字母代码：人民币 CNY、美元 USD、欧元 EUR、
+日元 JPY、英镑 GBP、港币 HKD、韩元 KRW、澳元 AUD、加元 CAD、新加坡元 SGD。
+没有明确币种时 currency 留空并按默认币种处理。currency 只用于 create、update_last 和
+set_budget，且必须与 amount 同时出现；summary 和 report 始终使用默认币种。
 """
 
 

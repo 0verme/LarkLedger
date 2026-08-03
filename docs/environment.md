@@ -20,6 +20,8 @@ LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_`
 | `LARK_LEDGER_DATABASE_URL` | 示例 Compose 地址 | 始终 | SQLAlchemy async PostgreSQL URL，驱动应为 `asyncpg` |
 | `LARK_LEDGER_TIMEZONE` | `Asia/Shanghai` | 始终 | IANA 时区，用于解析“昨天”“这个月”和预算自然月 |
 | `LARK_LEDGER_CURRENCY` | `CNY` | 始终 | 三字母 ISO 4217 币种代码，启动时转为大写 |
+| `LARK_LEDGER_EXCHANGE_RATE_API_URL` | `https://api.frankfurter.dev` | 使用外币金额 | Frankfurter v2 或兼容服务的 API 根地址，无需填写密钥 |
+| `LARK_LEDGER_EXCHANGE_RATE_CACHE_TTL_SECONDS` | `3600` | 使用外币金额 | 最新汇率的进程内缓存秒数，允许范围 60～86400 |
 | `LARK_LEDGER_LARK_APP_ID` | 空 | 始终 | 飞书 / Lark 应用 App ID |
 | `LARK_LEDGER_LARK_APP_SECRET` | 空 | 始终 | 应用 App Secret |
 | `LARK_LEDGER_LARK_BASE_URL` | `https://open.feishu.cn` | 始终 | 开放平台 API 根地址；Lark 国际版按平台文档调整 |
@@ -130,6 +132,7 @@ uvicorn lark_ledger.main:app --reload
 - [ ] 长连接显示 `connected`，或 Webhook URL verification 与验签通过。
 - [ ] `GET /healthz` 返回 `status: ok`，且事件模式与预期一致。
 - [ ] 文本消息可以记账，重复投递同一 `event_id` 不会生成第二条记录。
+- [ ] `午饭1300日元` 能换算成默认币种保存；汇率服务不可用且没有缓存时不会写入账目。
 - [ ] 图片、语音和报告功能使用的 AI 模型及飞书资源权限均已验证。
 - [ ] PostgreSQL 无法从公网访问，Webhook（如启用）只通过 HTTPS 暴露。
 - [ ] 已建立数据库备份、恢复和凭据轮换流程。

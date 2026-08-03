@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from lark_ledger.config import Settings
 from lark_ledger.models import Base, Direction
 from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.feishu import FeishuClient, MessageProcessor
 from lark_ledger.services.ledger import LedgerService
 
@@ -78,6 +79,18 @@ class BudgetInterpreter:
         )
 
 
+class ForeignCurrencyInterpreter:
+    async def interpret(self, text: str, **kwargs: Any) -> ParsedCommand:
+        return ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("1300"),
+            currency="JPY",
+            direction=Direction.EXPENSE,
+            category="餐饮",
+            occurred_at=datetime.now(UTC),
+        )
+
+
 class StubRenderer:
     def render(self, report: object, advice: object) -> bytes:
         return b"\x89PNG\r\n\x1a\nreport"
@@ -99,6 +112,42 @@ class RecordingFeishu:
 
     async def reply_text(self, message_id: str, text: str) -> None:
         self.texts.append(text)
+
+
+async def test_processor_replies_with_specific_exchange_rate_error() -> None:
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    rate_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(503)),
+        base_url="https://rates.example",
+    )
+    feishu = RecordingFeishu(upload_fails=False)
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        ForeignCurrencyInterpreter(),  # type: ignore[arg-type]
+        exchange_rates=ExchangeRateService(Settings(_env_file=None), rate_client),
+    )
+    await processor.process(
+        {
+            "sender": {"sender_id": {"open_id": "ou_user"}},
+            "message": {
+                "message_id": "om_fx",
+                "message_type": "text",
+                "content": json.dumps({"text": "午饭1300日元"}),
+            },
+        }
+    )
+    assert feishu.texts == ["暂时无法获取汇率，请稍后重试。"]
+    await rate_client.aclose()
+    await engine.dispose()
 
 
 @pytest.mark.parametrize("upload_fails", [False, True])

@@ -55,3 +55,27 @@ def test_budget_commands_require_expected_fields() -> None:
         ParsedCommand(action=Action.SET_BUDGET, category="餐饮")
     with pytest.raises(ValidationError):
         ParsedCommand(action=Action.DELETE_BUDGET)
+
+
+def test_currency_is_normalized_for_amount_writes() -> None:
+    command = ParsedCommand(action=Action.UPDATE_LAST, amount=Decimal("1300"), currency="jpy")
+    assert command.currency == "JPY"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": Action.UPDATE_LAST, "amount": Decimal("10"), "currency": "CHF"},
+        {"action": Action.UPDATE_LAST, "currency": "JPY"},
+        {
+            "action": Action.SUMMARY,
+            "amount": Decimal("10"),
+            "currency": "JPY",
+            "range_start": datetime(2026, 8, 1, tzinfo=UTC),
+            "range_end": datetime(2026, 9, 1, tzinfo=UTC),
+        },
+    ],
+)
+def test_currency_rejects_unsupported_or_non_write_usage(payload: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        ParsedCommand.model_validate(payload)
