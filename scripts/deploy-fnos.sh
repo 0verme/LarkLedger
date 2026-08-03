@@ -7,6 +7,8 @@ readonly REPO_URL="${REPO_URL:-https://github.com/0verme/LarkLedger.git}"
 readonly BRANCH="${BRANCH:-main}"
 readonly LOCK_DIR="${APP_DIR}.deploy.lock"
 
+bootstrap_dir=""
+
 log() {
   printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"
 }
@@ -17,6 +19,9 @@ fail() {
 }
 
 cleanup() {
+  if [[ -n "$bootstrap_dir" ]] && [[ "$bootstrap_dir" == "${APP_DIR}.bootstrap."* ]]; then
+    rm -rf -- "$bootstrap_dir"
+  fi
   rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 
@@ -30,13 +35,33 @@ mkdir "$LOCK_DIR" 2>/dev/null || fail "已有部署任务正在运行；如果�
 trap cleanup EXIT
 
 if [[ ! -d "$APP_DIR/.git" ]]; then
-  if [[ -e "$APP_DIR" ]] && [[ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
-    fail "$APP_DIR 已存在且不是空目录，无法自动克隆"
+  bootstrap_script="$APP_DIR/scripts/deploy-fnos.sh"
+  only_bootstrap_script=false
+
+  if [[ -f "$bootstrap_script" ]] && \
+    [[ -z "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 ! -path "$APP_DIR/scripts" -print -quit)" ]] && \
+    [[ -z "$(find "$APP_DIR/scripts" -mindepth 1 -maxdepth 1 ! -path "$bootstrap_script" -print -quit)" ]]; then
+    only_bootstrap_script=true
   fi
 
-  log "首次部署，正在从 $REPO_URL 克隆 $BRANCH 分支"
-  mkdir -p "$(dirname "$APP_DIR")"
-  git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$APP_DIR"
+  if [[ "$only_bootstrap_script" == true ]]; then
+    bootstrap_dir="$(mktemp -d "${APP_DIR}.bootstrap.XXXXXX")"
+    log "检测到目录中只有部署脚本，正在初始化项目仓库"
+    git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$bootstrap_dir/repository"
+    mv "$APP_DIR" "$bootstrap_dir/installer"
+    if ! mv "$bootstrap_dir/repository" "$APP_DIR"; then
+      mv "$bootstrap_dir/installer" "$APP_DIR"
+      fail "无法将克隆的仓库移动到 $APP_DIR"
+    fi
+    rm -rf -- "$bootstrap_dir"
+    bootstrap_dir=""
+  elif [[ -e "$APP_DIR" ]] && [[ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
+    fail "$APP_DIR 已存在且包含其他文件，无法自动克隆"
+  else
+    log "首次部署，正在从 $REPO_URL 克隆 $BRANCH 分支"
+    mkdir -p "$(dirname "$APP_DIR")"
+    git clone --branch "$BRANCH" --single-branch "$REPO_URL" "$APP_DIR"
+  fi
 fi
 
 cd "$APP_DIR"
