@@ -11,7 +11,13 @@ import httpx
 from pydantic import BaseModel, ValidationError
 
 from lark_ledger.config import Settings
-from lark_ledger.schemas import AdviceResult, ParsedCommand, ReportData
+from lark_ledger.schemas import (
+    MAX_BATCH_BUDGETS,
+    MAX_BATCH_ENTRIES,
+    AdviceResult,
+    ParsedCommand,
+    ReportData,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +33,12 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 动作：
 - create：新增收支，必须给出 amount、direction、category、occurred_at。
 - batch：文字消息包含多笔收支，或同时包含收支和预算设置时使用。把每笔收支按原文顺序放入
-  entries，最多 20 笔；把预算放入 budgets，最多 10 项。超出上限时分别设置 batch_truncated
+  entries，最多 {max_batch_entries} 笔；把预算放入 budgets，最多 {max_batch_budgets} 项。
+  超出上限时分别设置 batch_truncated
   或 budgets_truncated。batch 不得包含修改、撤销、查询或报告动作，这些动作需要用户单独发送。
 - create_entries：仅用于图片中存在多笔独立支付流水时，把每笔交易按图片顺序放入 entries，
-  最多返回前 20 笔；图片中还有更多交易时将 batch_truncated 设为 true。逐项保留图片明确显示的
+  最多返回前 {max_batch_entries} 笔；图片中还有更多交易时将 batch_truncated 设为 true。
+  逐项保留图片明确显示的
   amount、currency、direction、category、note、occurred_at，缺失字段留空，不要臆造。
 - update_last：修改该用户最近一笔，仅填写要改变的字段。
 - undo_last：撤销最近一笔。
@@ -39,7 +47,7 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 - report：要求生成报告、图表或消费分析，给出左闭右开的 range_start、range_end。
 - set_budget：设置或修改长期生效的品类月预算，必须给出 amount 和 category。
 - set_budgets：一条消息设置多个品类月预算时使用，把每个品类、金额和可选币种放入
-  budgets；最多 10 项。示例“交通预算500，人情往来预算1000”必须解析成两个候选项。
+  budgets；最多 {max_batch_budgets} 项。示例“交通预算500，人情往来预算1000”必须解析成两个候选项。
 - list_budgets：查看月预算；查看指定品类时填写 category，否则留空。
 - delete_budget：取消指定品类的月预算，必须给出 category。
 - help：无法确认意图或缺少关键金额时使用。
@@ -60,7 +68,7 @@ JSON 示例：用户输入“2025-01-02 晚餐 100，交通预算 500”，输�
 支出/收入合计、余额、优惠金额或统计卡片当成独立账目。
 多张图片出现在同一条消息时，它们共同构成一次记账请求；结合用户正文理解图片，正文中明确的
 补充或纠正优先于图片中的模糊信息，但不得臆造未提供的交易。多张图片可能是连续页面或重叠截图，
-相同交易只记录一次；所有图片合计仍最多返回前 20 笔独立流水。
+相同交易只记录一次；所有图片合计仍最多返回前 {max_batch_entries} 笔独立流水。
 
 分类使用简短中文，例如：餐饮、交通、购物、居住、娱乐、医疗、教育、工资、奖金、其他。
 金额始终为正数；收入/支出由 direction 表示。不要臆造不明确的金额。
@@ -135,6 +143,8 @@ class AIInterpreter:
                         now=now.isoformat(),
                         timezone=self.settings.timezone,
                         currency=self.settings.currency,
+                        max_batch_entries=MAX_BATCH_ENTRIES,
+                        max_batch_budgets=MAX_BATCH_BUDGETS,
                     ),
                 },
                 {"role": "user", "content": user_content},
@@ -162,10 +172,31 @@ class AIInterpreter:
             content = response["choices"][0]["message"]["content"]
             if not isinstance(content, str) or not content.strip():
                 raise TypeError("AI command response content is empty or not text")
-            return ParsedCommand.model_validate_json(content)
-        except (KeyError, IndexError, TypeError, ValidationError) as exc:
+            payload_data = json.loads(content)
+            if not isinstance(payload_data, dict):
+                raise TypeError("AI command response is not a JSON object")
+            return ParsedCommand.model_validate_json(
+                json.dumps(self._normalize_command_payload(payload_data))
+            )
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValidationError) as exc:
             logger.exception("AI command response failed schema validation")
             raise CommandInterpretationError("AI command response is invalid") from exc
+
+    @staticmethod
+    def _normalize_command_payload(payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = payload.copy()
+        limits = (
+            ("entries", MAX_BATCH_ENTRIES, "batch_truncated"),
+            ("budgets", MAX_BATCH_BUDGETS, "budgets_truncated"),
+        )
+        for field, limit, truncated_field in limits:
+            items = normalized.get(field)
+            if items == []:
+                normalized.pop(field)
+            elif isinstance(items, list) and len(items) > limit:
+                normalized[field] = items[:limit]
+                normalized[truncated_field] = True
+        return normalized
 
     async def generate_advice(self, report: ReportData) -> AdviceResult:
         payload_data = {

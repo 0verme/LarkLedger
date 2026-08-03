@@ -26,6 +26,8 @@ class Action(StrEnum):
 SUPPORTED_INPUT_CURRENCIES = frozenset(
     {"CNY", "USD", "EUR", "JPY", "GBP", "HKD", "KRW", "AUD", "CAD", "SGD"}
 )
+MAX_BATCH_ENTRIES = 30
+MAX_BATCH_BUDGETS = 10
 
 
 class BudgetCandidate(BaseModel):
@@ -65,8 +67,12 @@ class ParsedCommand(BaseModel):
     occurred_at: datetime | None = None
     range_start: datetime | None = None
     range_end: datetime | None = None
-    budgets: list[BudgetCandidate] | None = Field(default=None, min_length=1, max_length=10)
-    entries: list[EntryCandidate] | None = Field(default=None, min_length=1, max_length=20)
+    budgets: list[BudgetCandidate] | None = Field(
+        default=None, min_length=1, max_length=MAX_BATCH_BUDGETS
+    )
+    entries: list[EntryCandidate] | None = Field(
+        default=None, min_length=1, max_length=MAX_BATCH_ENTRIES
+    )
     batch_truncated: bool = False
     budgets_truncated: bool = False
 
@@ -131,7 +137,11 @@ class ParsedCommand(BaseModel):
                 raise ValueError("batch_truncated requires entries")
             if self.budgets_truncated and not self.budgets:
                 raise ValueError("budgets_truncated requires budgets")
-        elif self.entries is not None or self.batch_truncated or self.budgets_truncated:
+        elif (
+            self.entries is not None
+            or self.batch_truncated
+            or (self.budgets_truncated and self.action is not Action.SET_BUDGETS)
+        ):
             raise ValueError("batch fields are only supported for create_entries or batch")
         if self.action in {Action.SUMMARY, Action.REPORT}:
             if self.range_start is None or self.range_end is None:

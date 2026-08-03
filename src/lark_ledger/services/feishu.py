@@ -15,7 +15,13 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
-from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
+from lark_ledger.schemas import (
+    MAX_BATCH_BUDGETS,
+    MAX_BATCH_ENTRIES,
+    Action,
+    ExecutionResult,
+    ParsedCommand,
+)
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.ledger import LedgerService
@@ -272,7 +278,8 @@ class MessageProcessor:
             else:
                 text = (
                     "没有完整识别这条指令，本次没有写入账本。请明确写出每笔的用途、金额和"
-                    "收支方向；一条消息最多包含20笔账目和10项预算，修改、撤销、查询或报告"
+                    f"收支方向；一条消息最多包含{MAX_BATCH_ENTRIES}笔账目和"
+                    f"{MAX_BATCH_BUDGETS}项预算，修改、撤销、查询或报告"
                     "请单独发送。"
                 )
             await self.feishu.reply_text(

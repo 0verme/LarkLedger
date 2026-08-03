@@ -12,7 +12,13 @@ from sqlalchemy.pool import StaticPool
 
 from lark_ledger.config import Settings
 from lark_ledger.models import Base, CategoryBudget, Direction, LedgerEntry
-from lark_ledger.schemas import Action, BudgetCandidate, EntryCandidate, ParsedCommand
+from lark_ledger.schemas import (
+    MAX_BATCH_ENTRIES,
+    Action,
+    BudgetCandidate,
+    EntryCandidate,
+    ParsedCommand,
+)
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.feishu import MessageProcessor
 from lark_ledger.services.ledger import LedgerService
@@ -120,6 +126,71 @@ async def test_interpreter_accepts_complex_text_batch_and_instructs_corrections(
     assert "修改、撤销、查询或报告动作" in prompt
 
 
+async def test_interpreter_accepts_entry_batch_with_empty_budgets() -> None:
+    payload = complex_payload()
+    entries = payload["entries"]
+    assert isinstance(entries, list)
+    entries[8]["amount"] = "5000"
+    entries.pop(9)
+    payload["budgets"] = []
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+                    ]
+                },
+            )
+        ),
+        base_url="https://ai.example/v1",
+    )
+    command = await AIInterpreter(
+        Settings(_env_file=None, ai_api_key="test-key"), client
+    ).interpret(COMPLEX_TEXT, now=NOW)
+    await client.aclose()
+
+    assert command.action is Action.BATCH
+    assert command.entries is not None
+    assert len(command.entries) == 19
+    assert command.budgets is None
+    assert command.batch_truncated is False
+
+
+async def test_interpreter_truncates_oversized_entry_batch() -> None:
+    payload = complex_payload()
+    entries = payload["entries"]
+    assert isinstance(entries, list)
+    entry = entries[0]
+    payload["entries"] = [entry for _ in range(MAX_BATCH_ENTRIES + 1)]
+    payload["budgets"] = []
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": json.dumps(payload, ensure_ascii=False)}}
+                    ]
+                },
+            )
+        ),
+        base_url="https://ai.example/v1",
+    )
+    command = await AIInterpreter(
+        Settings(_env_file=None, ai_api_key="test-key"), client
+    ).interpret(COMPLEX_TEXT, now=NOW)
+    await client.aclose()
+
+    assert command.entries is not None
+    assert len(command.entries) == MAX_BATCH_ENTRIES
+    assert command.batch_truncated is True
+    assert command.budgets is None
+
+
 class FixedExchangeRates:
     async def convert(self, amount: Decimal, source: str, target: str) -> Decimal:
         assert (source, target) == ("USD", "CNY")
@@ -225,7 +296,9 @@ def test_batch_schema_requires_supported_shapes_and_limits() -> None:
     with pytest.raises(ValidationError):
         ParsedCommand(
             action=Action.BATCH,
-            entries=[EntryCandidate(amount="1") for _ in range(21)],
+            entries=[
+                EntryCandidate(amount="1") for _ in range(MAX_BATCH_ENTRIES + 1)
+            ],
         )
     with pytest.raises(ValidationError):
         ParsedCommand(
@@ -259,7 +332,7 @@ async def test_batch_reports_entry_and_budget_truncation(session: Any) -> None:
         ),
     )
 
-    assert "账目超过 20 笔" in result.message
+    assert "账目超过 30 笔" in result.message
     assert "预算超过 10 项" in result.message
 
 

@@ -71,6 +71,41 @@ async def test_interpreter_parses_multiple_budgets_from_one_message() -> None:
     assert "必须解析成两个候选项" in messages[0]["content"]
 
 
+async def test_interpreter_truncates_oversized_budget_batch() -> None:
+    budgets = [
+        {"category": f"分类{index}", "amount": "100", "currency": None}
+        for index in range(11)
+    ]
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps(
+                        {
+                            "action": "set_budgets",
+                            "budgets": budgets,
+                            "budgets_truncated": False,
+                        },
+                        ensure_ascii=False,
+                    )
+                }
+            }
+        ]
+    }
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=response)),
+        base_url="https://ai.example/v1",
+    )
+    command = await AIInterpreter(
+        Settings(_env_file=None, ai_api_key="test-key"), client
+    ).interpret("设置11项预算", now=datetime(2026, 8, 3, tzinfo=UTC))
+    await client.aclose()
+
+    assert command.budgets is not None
+    assert len(command.budgets) == 10
+    assert command.budgets_truncated is True
+
+
 def test_batch_schema_limits_items_and_keeps_single_budget_compatible() -> None:
     single = ParsedCommand(action=Action.SET_BUDGET, category="交通", amount=Decimal("500"))
     assert single.action is Action.SET_BUDGET
@@ -112,6 +147,20 @@ async def test_batch_sets_multiple_budgets_and_isolates_users(session: Any) -> N
     ]
     other = await service.execute("ou_b", ParsedCommand(action=Action.LIST_BUDGETS))
     assert "没有设置任何月预算" in other.message
+
+
+async def test_batch_budget_reports_truncation(session: Any) -> None:
+    result = await LedgerService(session).execute(
+        "ou_user",
+        ParsedCommand(
+            action=Action.SET_BUDGETS,
+            budgets=[BudgetCandidate(category="交通", amount="500")],
+            budgets_truncated=True,
+        ),
+    )
+
+    assert "预算超过 10 项" in result.message
+    assert "本次仅处理前 10 项" in result.message
 
 
 async def test_batch_keeps_successes_when_other_items_fail(session: Any) -> None:

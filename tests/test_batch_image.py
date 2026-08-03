@@ -87,7 +87,7 @@ async def test_interpreter_parses_multiple_image_transactions() -> None:
     messages = captured["messages"]
     assert isinstance(messages, list)
     assert "多个商品属于同一笔消费，不得拆成多笔" in messages[0]["content"]
-    assert "最多返回前 20 笔" in messages[0]["content"]
+    assert "最多返回前 30 笔" in messages[0]["content"]
 
 
 def test_batch_schema_limits_items_and_preserves_single_create() -> None:
@@ -101,7 +101,7 @@ def test_batch_schema_limits_items_and_preserves_single_create() -> None:
     assert single.action is Action.CREATE
 
     with pytest.raises(ValidationError):
-        batch_command(*(EntryCandidate(amount="1") for _ in range(21)))
+        batch_command(*(EntryCandidate(amount="1") for _ in range(31)))
     with pytest.raises(ValidationError):
         ParsedCommand(action=Action.CREATE_ENTRIES)
     with pytest.raises(ValidationError):
@@ -146,7 +146,7 @@ async def test_batch_persists_valid_items_and_reports_failures(session: Any) -> 
     assert "成功 2 笔，失败 1 笔" in result.message
     assert "收入合计 ¥0.01 · 支出合计 ¥25.90" in result.message
     assert "第 2 笔：缺少金额" in result.message
-    assert "本次仅处理前 20 笔" in result.message
+    assert "本次仅处理前 30 笔" in result.message
     assert "…" in result.message
     rows = (
         (

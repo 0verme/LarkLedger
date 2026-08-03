@@ -11,6 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.models import BudgetAlert, CategoryBudget, Direction, LedgerEntry
 from lark_ledger.schemas import (
+    MAX_BATCH_BUDGETS,
+    MAX_BATCH_ENTRIES,
     SUPPORTED_INPUT_CURRENCIES,
     Action,
     BudgetCandidate,
@@ -235,7 +237,10 @@ class LedgerService:
             *failures,
         ]
         if command.batch_truncated:
-            lines.append("⚠️ 图片中的流水超过 20 笔，本次仅处理前 20 笔。")
+            lines.append(
+                f"⚠️ 图片中的流水超过 {MAX_BATCH_ENTRIES} 笔，"
+                f"本次仅处理前 {MAX_BATCH_ENTRIES} 笔。"
+            )
         return ExecutionResult(
             message="\n".join(lines),
             budget_alert="\n\n".join(alerts) or None,
@@ -332,9 +337,15 @@ class LedgerService:
             *budget_failures,
         ]
         if command.batch_truncated:
-            lines.append("⚠️ 消息中的账目超过 20 笔，本次仅处理前 20 笔。")
+            lines.append(
+                f"⚠️ 消息中的账目超过 {MAX_BATCH_ENTRIES} 笔，"
+                f"本次仅处理前 {MAX_BATCH_ENTRIES} 笔。"
+            )
         if command.budgets_truncated:
-            lines.append("⚠️ 消息中的预算超过 10 项，本次仅处理前 10 项。")
+            lines.append(
+                f"⚠️ 消息中的预算超过 {MAX_BATCH_BUDGETS} 项，"
+                f"本次仅处理前 {MAX_BATCH_BUDGETS} 项。"
+            )
         return ExecutionResult(
             message="\n".join(lines),
             budget_alert="\n\n".join(alerts) or None,
@@ -510,6 +521,11 @@ class LedgerService:
             *successes,
             *failures,
         ]
+        if command.budgets_truncated:
+            lines.append(
+                f"⚠️ 消息中的预算超过 {MAX_BATCH_BUDGETS} 项，"
+                f"本次仅处理前 {MAX_BATCH_BUDGETS} 项。"
+            )
         return ExecutionResult(message="\n".join(lines))
 
     @staticmethod
