@@ -1,176 +1,151 @@
 # LarkLedger（飞账）
 
-## 飞书事件接入模式
-
-LarkLedger 支持两种互斥的事件入口，两者共用同一个 `event_id` 幂等服务、
-`MessageProcessor` 和记账/AI/回复流程：
-
-- `LARK_LEDGER_EVENT_MODE=websocket`：使用飞书官方 Python SDK `lark-oapi` 建立长连接，
-  适合本地开发、家庭服务器和飞牛 Docker，不需要公网域名、FRP、Verification Token
-  或 Encrypt Key。
-- `LARK_LEDGER_EVENT_MODE=webhook`：保留 `POST /webhooks/feishu` 开发者服务器回调，
-  适合有公网 HTTPS 地址的部署。默认值为 `webhook`，继续支持验签、解密和 URL verification。
-
-本地长连接启动：
-
-```bash
-pip install -e ".[dev]"
-alembic upgrade head
-# 在本地 .env 中设置 LARK_LEDGER_EVENT_MODE=websocket，并配置 App ID / App Secret
-uvicorn lark_ledger.main:app --reload
-curl http://127.0.0.1:8000/healthz
-```
-
-健康检查只返回当前事件模式与长连接状态，不会返回任何凭据。使用 Uvicorn `--reload`
-时只有实际的 worker 生命周期会启动连接；进程退出或 Docker 收到停止信号时会关闭连接。
-
-飞书后台配置长连接：进入「事件与回调」，选择「使用长连接接收事件」，点击「验证」；
-看到长连接已经建立后保存配置，再添加事件 `im.message.receive_v1`（接收消息 v2.0），
-确认机器人所需权限并发布应用版本。长连接模式不要填写请求地址。
-
-Docker / 飞牛部署继续使用同一镜像和 Compose：将宿主机 `.env` 的事件模式设为
-`websocket` 后运行 `docker compose up -d --build`。容器只需出站访问飞书、DeepSeek，
-不需要暴露公网回调地址（端口 `8000` 可仅用于局域网健康检查）。切回公网 Webhook 时，
-把模式改为 `webhook`，在飞书后台选择「将事件发送至开发者服务器」，配置
-`https://你的域名/webhooks/feishu`、Verification Token，并按需配置 Encrypt Key。
-
-> 自托管的飞书 / Lark AI 记账机器人：用文字、语音、小票照片或支付截图完成记账、查询、修改、撤销、月度分类预算、消费汇总和图表报告。
+> 自托管的飞书 / Lark AI 记账机器人。通过文字、语音、小票照片或支付截图完成记账、查询、修改、撤销、分类月预算和消费报告。
 
 [![CI](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把自然语言、语音转写和图片内容转换成受严格校验的业务动作；它拿不到数据库连接，不能替代数据库，也不能生成或执行 SQL。
+LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把消息转换成经过严格校验的业务动作：它拿不到数据库连接，不能生成或执行 SQL，所有读写都由项目中预先定义的参数化查询完成。
 
-## 能做什么
+## 功能
 
-面向使用者的完整操作方法、示例、限制和常见问题见 [`飞账机器人 Help 使用手册`](docs/help.md)。
+- 文字、语音和图片记账：`昨天打车38.5`、`工资到账10000`
+- 修改或撤销最近一笔：`上一笔改成8块`、`撤销刚才那笔`
+- 按时间、收支方向和分类汇总：`这个月餐饮花了多少`
+- 分类月预算：达到 80% 和 100% 时分别提醒一次
+- 消费报告：展示分类占比、支出趋势、收支对比和消费建议
+- 多用户隔离：所有账目操作都以飞书用户 `open_id` 为边界
+- 事件幂等：按飞书 `event_id` 去重，避免重复投递造成重复记账
+- 自托管：FastAPI、PostgreSQL、Docker Compose
 
-- 文字记账：`糖水9块`、`昨天打车38.5`、`工资到账10000`
-- 语音记账：下载飞书语音后转写，再按同一套安全流程处理
-- 图片记账：识别小票照片和支付截图
-- 修改与撤销：`上一笔改成8块`、`撤销刚才那笔`
-- 分类汇总：`这个月餐饮花了多少`
-- 分类预算：`每月餐饮预算1500`，达到 80% 和 100% 时分别提醒一次
-- 消费报告：`生成这个月的消费图表`，返回含分类、趋势、收支和建议的卡片
-- 多用户隔离：所有查询和修改均以飞书用户 `open_id` 为边界
-- 事件幂等：按飞书 `event_id` 去重，新增记录也保留来源消息 ID
-- 自托管：FastAPI + PostgreSQL + Docker Compose
+完整使用示例与限制见[飞账用户手册](docs/help.md)。
 
-## 安全边界
+## 快速开始：长连接部署
+
+长连接无需公网域名、HTTPS 回调或内网穿透，适合个人服务器、NAS 和本地开发。当前 `compose.yaml` 只启动 LarkLedger 应用；开始前请准备一个应用容器可以访问的 PostgreSQL 数据库。
+
+### 1. 准备 PostgreSQL
+
+创建独立数据库和低权限用户，并记下 SQLAlchemy 异步连接地址：
 
 ```text
-飞书消息 → 验签/验 Token → 媒体下载 → AI 结构化解析
-                                         ↓
-                         Pydantic 严格校验（禁止额外字段）
-                                         ↓
-                         固定业务动作 → SQLAlchemy → PostgreSQL
+postgresql+asyncpg://用户名:密码@数据库主机:5432/数据库名
 ```
 
-AI 输出只能是预先定义的记账、修改、撤销、汇总、报告、预算管理或帮助动作。结构中没有 SQL、表名或任意查询条件字段；数据库层只执行项目代码预先定义的参数化查询。消费建议只接收分类、趋势和收支总额等聚合数据，不接收逐笔备注或用户标识。
+数据库在宿主机上时，容器内不能用 `localhost` 访问它。Windows 和 macOS 通常可使用 `host.docker.internal`；Linux 或远程数据库请填写容器可达的主机名或私网地址。
 
-## 快速开始
-
-### 1. 准备配置
-
-需要 Docker 及 Docker Compose。复制示例配置：
+### 2. 配置应用
 
 ```bash
 cp .env.example .env
 ```
 
-至少填写：
+Windows PowerShell 可使用 `Copy-Item .env.example .env`。至少修改以下配置：
 
-- `LARK_LEDGER_LARK_APP_ID`
-- `LARK_LEDGER_LARK_APP_SECRET`
-- `LARK_LEDGER_LARK_VERIFICATION_TOKEN`
-- `LARK_LEDGER_AI_API_KEY`
-- PostgreSQL 密码（同时修改 `.env` 的连接串与 `compose.yaml`）
+```dotenv
+LARK_LEDGER_EVENT_MODE=websocket
+LARK_LEDGER_DATABASE_URL=postgresql+asyncpg://用户名:密码@数据库主机:5432/数据库名
+LARK_LEDGER_LARK_APP_ID=cli_xxxxxxxxxxxxx
+LARK_LEDGER_LARK_APP_SECRET=replace-me
+LARK_LEDGER_AI_API_KEY=replace-me
+```
 
-默认时区为 `Asia/Shanghai`，默认币种为 `CNY`。AI 接口采用 OpenAI 兼容的 Chat Completions、JSON Schema structured output、音频转写接口；可通过 `AI_BASE_URL` 和模型名接入兼容服务。
+长连接模式不需要 `LARK_LEDGER_LARK_VERIFICATION_TOKEN` 或 `LARK_LEDGER_LARK_ENCRYPT_KEY`。AI 服务需要兼容 Chat Completions、JSON Schema structured output 和音频转写接口；模型还需支持图片输入才能使用图片记账。
 
-### 2. 启动
+### 3. 配置飞书应用
+
+1. 在[飞书开放平台](https://open.feishu.cn/app)创建企业自建应用并开启机器人能力。
+2. 添加接收消息、发送消息，以及获取和上传图片或文件资源所需的最小权限。
+3. 在「事件与回调」选择「使用长连接接收事件」，然后点击验证。
+4. 订阅 `im.message.receive_v1`（接收消息 v2.0）。
+5. 发布应用版本，并将机器人加入需要使用的会话。
+
+长连接模式不要填写请求地址。只有在应用已经运行并建立连接后，开放平台的连接验证才会成功。
+
+### 4. 启动并检查
 
 ```bash
 docker compose up -d --build
 curl http://localhost:8000/healthz
 ```
 
-应用启动时自动执行 Alembic 迁移。生产环境请将服务放在 HTTPS 反向代理之后，不要直接暴露 PostgreSQL。
+容器启动时会先执行 `alembic upgrade head`。长连接正常时，健康检查类似：
 
-### 3. 配置飞书应用
+```json
+{"status":"ok","event_mode":"websocket","long_connection":"connected"}
+```
 
-1. 在[飞书开放平台](https://open.feishu.cn/app)创建企业自建应用并开启机器人能力。
-2. 在「权限管理」添加接收消息、发送消息及“获取与上传图片或文件资源”权限。
-3. 在「事件与回调」选择将事件发送至开发者服务器。
-4. 请求地址填写 `https://你的域名/webhooks/feishu`。
-5. 订阅 `im.message.receive_v1`（接收消息 v2.0），然后发布应用版本。
-6. 推荐配置 Encrypt Key，并将其写入 `LARK_LEDGER_LARK_ENCRYPT_KEY`。配置后服务会校验 `X-Lark-Signature` 并解密事件。
+`connecting` 或 `reconnecting` 表示连接尚未就绪或正在重连。查看日志可使用 `docker compose logs -f app`。
 
-飞书事件回调需要快速响应。LarkLedger 在完成来源校验和 `event_id` 入库后立即确认回调，再在后台进行 AI 与消息回复；生产规模较大时建议把后台任务替换为持久队列。
+## 事件接入方式
+
+| 模式 | 适用场景 | 公网 HTTPS | 飞书回调凭据 | 配置值 |
+| --- | --- | --- | --- | --- |
+| 长连接（推荐） | 本地、NAS、家庭服务器 | 不需要 | 不需要 Verification Token / Encrypt Key | `websocket` |
+| Webhook | 已有公网入口、反向代理或平台化部署 | 需要 | Verification Token；推荐 Encrypt Key | `webhook` |
+
+切换到 Webhook 时，将 `LARK_LEDGER_EVENT_MODE` 设为 `webhook`，配置 Verification Token，并在飞书开放平台把事件发送到：
+
+```text
+https://你的域名/webhooks/feishu
+```
+
+推荐同时配置 Encrypt Key。服务会校验 `X-Lark-Signature`、解密加密事件并处理 URL verification。Webhook 模式下长连接不会启动；长连接模式下 Webhook 端点返回 404。
+
+两种入口共用同一套 `event_id` 幂等、消息解析、账本操作和回复流程。详细配置、生产部署与安全检查见[环境与部署指南](docs/environment.md)。
+
+## 安全边界
+
+```text
+飞书消息 → 来源校验 / 事件去重 → 媒体下载 → AI 结构化解析
+                                              ↓
+                              Pydantic 严格校验（禁止额外字段）
+                                              ↓
+                              固定业务动作 → SQLAlchemy → PostgreSQL
+```
+
+AI 只能返回预定义的记账、修改、撤销、汇总、报告、预算管理或帮助动作。消费建议只接收分类、趋势和收支总额等聚合数据，不接收逐笔备注或用户标识。更多设计细节见[架构说明](docs/architecture.md)。
 
 ## 本地开发
 
+需要 Python 3.11+ 和可访问的 PostgreSQL：
+
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
+# Linux / macOS
 source .venv/bin/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
+alembic upgrade head
+uvicorn lark_ledger.main:app --reload
+```
+
+提交前运行：
+
+```bash
 ruff check .
 mypy src
 pytest --cov
 ```
 
-运行本地服务：
+开发流程和设计原则见[贡献指南](CONTRIBUTING.md)。
 
-```bash
-alembic upgrade head
-uvicorn lark_ledger.main:app --reload
-```
+## 文档
 
-## 配置项
+- [用户手册](docs/help.md)：消息示例、预算和报告、使用限制、常见问题
+- [环境与部署指南](docs/environment.md)：完整配置、两种事件模式、生产安全检查
+- [架构说明](docs/architecture.md)：组件、数据流、信任边界和当前运行限制
+- [贡献指南](CONTRIBUTING.md)：开发环境、质量检查和提交要求
+- [安全策略](SECURITY.md)：漏洞报告和部署安全建议
 
-所有环境变量均以 `LARK_LEDGER_` 开头。完整示例见 [`.env.example`](.env.example)。
-生产部署与凭据安全检查见 [`docs/environment.md`](docs/environment.md)。
+## 当前限制
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `DATABASE_URL` | PostgreSQL Compose 地址 | SQLAlchemy async 数据库 URL |
-| `TIMEZONE` | `Asia/Shanghai` | 解析“昨天”“这个月”等相对时间 |
-| `CURRENCY` | `CNY` | 新增账目的默认币种 |
-| `LARK_BASE_URL` | `https://open.feishu.cn` | 国内飞书 API；Lark 国际版可改域名 |
-| `LARK_ENCRYPT_KEY` | 空 | 飞书事件加密与签名密钥，生产推荐配置 |
-| `AI_BASE_URL` | `https://api.openai.com/v1` | OpenAI 兼容 API 根地址 |
-| `AI_MODEL` | `gpt-4.1-mini` | 支持视觉与 JSON Schema 的解析模型 |
-| `TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | 语音转写模型 |
-| `REPORT_FONT_PATH` | 空 | 可选的中文报告字体文件；Docker 已内置 Noto CJK |
-
-## 项目结构
-
-```text
-src/lark_ledger/
-├── api.py                 # 健康检查与飞书 Webhook
-├── config.py              # 环境配置和校验
-├── db.py                  # 异步数据库会话
-├── models.py              # PostgreSQL 账本与幂等事件模型
-├── schemas.py             # AI 可输出的受限业务动作
-└── services/
-    ├── ai.py              # 文字、视觉、语音的 AI 适配
-    ├── feishu.py          # Token、资源、回复、验签和事件处理
-    ├── ledger.py          # 固定的记账业务逻辑
-    └── report.py          # 消费报告图片与飞书卡片渲染
-```
-
-## 当前限制与路线图
-
-这是 `0.1.0` 的可运行 MVP：
-
-- 一张图片按一笔账处理；多商品拆分将在后续版本加入。
-- 后台任务目前运行在 Web 进程内；高可用部署应接入 Redis / RabbitMQ 等持久队列。
-- 用户级时区、币种、自定义分类和数据导出尚未提供。
-- 当前为 Webhook 模式，未来可增加飞书官方 SDK 长连接模式。
-
-欢迎通过 Issue 和 Pull Request 参与。提交前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [SECURITY.md](SECURITY.md)。
+- 一条消息只新增一笔账；一张小票不会拆成多个商品或多笔记录。
+- 只能修改或撤销当前用户最近一笔未撤销记录，不能搜索任意历史记录。
+- 后台处理任务运行在 Web 进程内，不是持久队列；高可用或高吞吐部署需另行接入任务队列。
+- 暂不支持用户自定义分类、个人时区/币种、数据导出、共享账本和恢复已撤销记录。
 
 ## License
 

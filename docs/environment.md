@@ -1,57 +1,135 @@
-# 环境配置与部署安全
+# 环境配置与部署指南
 
-LarkLedger 从环境变量读取运行配置。仓库只保留 `.env.example`，不要提交填入真实凭据的 `.env` 文件。
+LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_` 开头。仓库只保留 [`.env.example`](../.env.example)；不要提交包含真实凭据的 `.env`。
 
-## 必要的外部配置
+## 外部依赖
 
-启动应用前，请完成以下准备：
+运行前需要准备：
 
-1. 在飞书开放平台创建企业自建应用，开启机器人能力，并配置消息接收、发送以及“获取与上传图片或文件资源”权限。
-2. 订阅 `im.message.receive_v1`，使用 Webhook 模式将事件发送到 `/webhooks/feishu`。
-3. 创建仅供 LarkLedger 使用的 PostgreSQL 用户和数据库，并使用唯一的高强度密码。
-4. 准备兼容 OpenAI Chat Completions、JSON Schema structured output 和音频转写接口的模型服务凭据。
+1. 一个开启机器人能力并订阅 `im.message.receive_v1` 的飞书 / Lark 企业自建应用。
+2. 一个应用可访问的 PostgreSQL 数据库、独立数据库用户和高强度密码。
+3. 一个兼容 OpenAI Chat Completions、JSON Schema structured output 和音频转写接口的 AI 服务。图片记账还要求解析模型支持图片输入。
 
-如果任何 App Secret、API Key 或数据库密码曾经出现在聊天记录、工单、源码或日志中，请先撤销并重新生成，再继续部署。
+当前 `compose.yaml` 只启动应用容器，不创建 PostgreSQL。`LARK_LEDGER_DATABASE_URL` 中的数据库主机必须能从容器内部访问；不要把容器内的 `localhost` 当作宿主机。
 
-## 本地开发
+## 完整配置项
 
-复制示例配置并在本地填写：
+| 环境变量 | 默认值 | 必需条件 | 说明 |
+| --- | --- | --- | --- |
+| `LARK_LEDGER_EVENT_MODE` | `webhook` | 始终 | `websocket` 或 `webhook`，不区分大小写 |
+| `LARK_LEDGER_DATABASE_URL` | 示例 Compose 地址 | 始终 | SQLAlchemy async PostgreSQL URL，驱动应为 `asyncpg` |
+| `LARK_LEDGER_TIMEZONE` | `Asia/Shanghai` | 始终 | IANA 时区，用于解析“昨天”“这个月”和预算自然月 |
+| `LARK_LEDGER_CURRENCY` | `CNY` | 始终 | 三字母 ISO 4217 币种代码，启动时转为大写 |
+| `LARK_LEDGER_LARK_APP_ID` | 空 | 始终 | 飞书 / Lark 应用 App ID |
+| `LARK_LEDGER_LARK_APP_SECRET` | 空 | 始终 | 应用 App Secret |
+| `LARK_LEDGER_LARK_BASE_URL` | `https://open.feishu.cn` | 始终 | 开放平台 API 根地址；Lark 国际版按平台文档调整 |
+| `LARK_LEDGER_LARK_VERIFICATION_TOKEN` | 空 | Webhook 应配置 | 校验回调来源；长连接不使用 |
+| `LARK_LEDGER_LARK_ENCRYPT_KEY` | 空 | Webhook 推荐 | Webhook 签名校验和加密事件解密；长连接不使用 |
+| `LARK_LEDGER_AI_API_KEY` | 空 | 始终 | AI 服务 API Key |
+| `LARK_LEDGER_AI_BASE_URL` | `https://api.openai.com/v1` | 始终 | OpenAI 兼容 API 根地址 |
+| `LARK_LEDGER_AI_MODEL` | `gpt-4.1-mini` | 始终 | 消息解析和消费建议模型；图片记账要求支持视觉输入 |
+| `LARK_LEDGER_TRANSCRIPTION_MODEL` | `gpt-4o-mini-transcribe` | 语音记账 | 音频转写模型 |
+| `LARK_LEDGER_AI_TIMEOUT_SECONDS` | `45` | 始终 | 单次 AI HTTP 请求超时，必须大于 0 且不超过 180 秒 |
+| `LARK_LEDGER_REPORT_FONT_PATH` | 空 | 可选 | 中文报告字体文件；Docker 镜像已包含 Noto CJK |
+
+示例值只是占位符。生产部署前必须替换 `replace-me`、`change-me` 和所有示例账号密码。
+
+## 长连接模式（推荐）
+
+长连接仅需出站访问飞书和 AI 服务，不需要公网回调地址：
+
+```dotenv
+LARK_LEDGER_EVENT_MODE=websocket
+LARK_LEDGER_LARK_APP_ID=cli_xxxxxxxxxxxxx
+LARK_LEDGER_LARK_APP_SECRET=replace-me
+```
+
+在飞书开放平台的「事件与回调」中选择「使用长连接接收事件」，验证连接后订阅 `im.message.receive_v1` 并发布版本。不要填写请求地址，也不需要 Verification Token 或 Encrypt Key。
+
+应用启动时会建立连接，断线后自动重连；退出时会关闭连接。`GET /healthz` 的 `long_connection` 可能为：
+
+- `connected`：连接可用
+- `connecting`：正在建立连接
+- `reconnecting`：断线重连中
+- `error`：连接线程异常停止
+- `stopped` 或 `stopping`：应用正在停止
+
+使用 Uvicorn `--reload` 时，由实际 worker 的生命周期管理连接。不要同时运行多个长期连接实例，除非已经确认事件分发和处理能力符合部署预期。
+
+## Webhook 模式
+
+Webhook 适合已有公网 HTTPS、反向代理或平台化入口的部署：
+
+```dotenv
+LARK_LEDGER_EVENT_MODE=webhook
+LARK_LEDGER_LARK_VERIFICATION_TOKEN=replace-me-for-webhook
+LARK_LEDGER_LARK_ENCRYPT_KEY=replace-with-encrypt-key
+```
+
+在开放平台选择将事件发送至开发者服务器，并配置：
+
+```text
+https://你的域名/webhooks/feishu
+```
+
+服务支持 URL verification、Verification Token 校验、`X-Lark-Signature` 验签和加密事件解密。配置 Encrypt Key 后，飞书后台与 `.env` 中的值必须一致。
+
+Webhook 在验证来源和请求格式后立即返回，把实际消息处理加入 FastAPI 后台任务。该任务与 Web 进程同生共死，不具备持久队列的重试和故障恢复能力。
+
+## Docker Compose 部署
+
+复制并填写配置：
 
 ```bash
 cp .env.example .env
+docker compose up -d --build
+docker compose logs -f app
 ```
 
-所有应用变量均以 `LARK_LEDGER_` 开头。至少需要配置：
+应用容器启动时先执行 `alembic upgrade head`，再启动 Uvicorn。数据库迁移失败时应用不会启动；请先检查数据库地址、网络、权限和 TLS 参数。
 
-- `LARK_LEDGER_DATABASE_URL`
-- `LARK_LEDGER_LARK_APP_ID`
-- `LARK_LEDGER_LARK_APP_SECRET`
-- `LARK_LEDGER_LARK_VERIFICATION_TOKEN`
-- `LARK_LEDGER_AI_API_KEY`
-
-推荐同时配置 `LARK_LEDGER_LARK_ENCRYPT_KEY`，以便校验飞书签名并解密加密事件。完整字段和默认值见 [`.env.example`](../.env.example)。
-
-## 生产环境
-
-在服务器上直接创建生产 `.env`，并限制为运行 LarkLedger 的操作系统账号可读。在 Linux 上可执行：
+健康检查：
 
 ```bash
-chmod 600 .env
+curl http://localhost:8000/healthz
 ```
 
-- 将应用放在 HTTPS 反向代理之后，不要直接将应用端口暴露到公网。
-- 应用与 PostgreSQL 应通过同一私有网络或 VPN 通信，不要向公网开放 PostgreSQL。
-- 数据库连接跨越不受信任网络时，使用数据库支持的 TLS 参数。
-- 日志中不得记录环境变量快照、数据库连接串、Authorization 请求头、包含财务信息的完整消息正文或未经脱敏的模型请求与响应。
-- `.env`、私钥和证书文件均已加入 `.gitignore`；提交前仍需检查暂存内容。
+Webhook 模式返回 `long_connection: disabled`；长连接模式返回当前连接状态。健康检查不会回显任何凭据。
 
-## 部署前检查
+## 本地开发
 
-- 曾经暴露的飞书 App Secret、模型 API Key 和数据库密码均已撤销或轮换。
-- 生产环境中不再包含示例占位符或默认密码。
-- 飞书事件 URL 使用 HTTPS，验证 Token 与 Encrypt Key 和开放平台配置一致。
-- 应用服务器可通过私网地址访问 PostgreSQL，且 PostgreSQL 无法从公网访问。
-- 健康检查 `GET /healthz` 返回成功。
-- 同一个飞书 `event_id` 重复投递时只生成一条账目记录。
-- 模型响应经过结构化校验后才会触发账本操作。
-- `git status` 不显示 `.env`、私钥、证书或其他真实凭据文件。
+```bash
+python -m venv .venv
+# Linux / macOS
+source .venv/bin/activate
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+cp .env.example .env
+alembic upgrade head
+uvicorn lark_ledger.main:app --reload
+```
+
+本地运行同样需要可访问的 PostgreSQL。若使用长连接，先启动应用，再到开放平台验证连接。
+
+## 生产安全
+
+- 将 `.env` 限制为运行 LarkLedger 的操作系统账号可读；Linux 可执行 `chmod 600 .env`。
+- Webhook 必须位于 HTTPS 反向代理之后；长连接模式的 `8000` 端口可只在私网开放用于健康检查。
+- PostgreSQL 仅允许应用所在私网或 VPN 访问，不要暴露到公网；跨越不受信任网络时启用数据库 TLS。
+- AI Key、App Secret、Verification Token 和 Encrypt Key 只通过环境变量或密钥管理服务注入。
+- 日志不得记录环境变量快照、数据库 URL、Authorization 头、完整消息正文、媒体内容或未脱敏的 AI 请求与响应。
+- 定期备份 PostgreSQL，并实际演练恢复流程。备份的访问控制和保留策略应与生产账本一致。
+- 轮换任何曾经出现在聊天、工单、源码或日志中的凭据，不能只从文件中删除。
+
+## 部署验收清单
+
+- [ ] PostgreSQL 使用独立账号和非示例密码，应用能执行 Alembic 迁移。
+- [ ] `.env` 不在 Git 跟踪或暂存列表中，权限仅允许服务账号读取。
+- [ ] 飞书应用只授予消息收发和媒体资源所需的最小权限。
+- [ ] 长连接显示 `connected`，或 Webhook URL verification 与验签通过。
+- [ ] `GET /healthz` 返回 `status: ok`，且事件模式与预期一致。
+- [ ] 文本消息可以记账，重复投递同一 `event_id` 不会生成第二条记录。
+- [ ] 图片、语音和报告功能使用的 AI 模型及飞书资源权限均已验证。
+- [ ] PostgreSQL 无法从公网访问，Webhook（如启用）只通过 HTTPS 暴露。
+- [ ] 已建立数据库备份、恢复和凭据轮换流程。
