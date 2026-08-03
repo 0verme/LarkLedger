@@ -1,5 +1,7 @@
 # 飞账用户手册
 
+> Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md). 飞书内的 `help` / `帮助` 回复是本手册的简要入口，完整行为与限制以本手册为准。
+
 飞账是运行在飞书 / Lark 中的 AI 记账机器人。你可以用日常语言记录收支，也可以修改或撤销最近一笔、查询汇总、管理分类月预算和生成消费报告。
 
 > 群聊中请先 `@飞账`；与机器人单聊时可以直接发送。只有收到“已记录”“已修改”“已撤销”或查询结果，才表示操作成功。

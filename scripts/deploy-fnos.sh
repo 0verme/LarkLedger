@@ -67,8 +67,12 @@ fi
 cd "$APP_DIR"
 
 origin_url="$(git remote get-url origin 2>/dev/null || true)"
-[[ "$origin_url" =~ (^|[:/])0verme/LarkLedger(\.git)?$ ]] || \
-  fail "origin 不是 0verme/LarkLedger（当前为：${origin_url:-未配置}）"
+normalized_origin="${origin_url%/}"
+normalized_origin="${normalized_origin%.git}"
+normalized_repo="${REPO_URL%/}"
+normalized_repo="${normalized_repo%.git}"
+[[ "${normalized_origin,,}" == "${normalized_repo,,}" ]] || \
+  fail "origin 与 REPO_URL 不一致（origin：${origin_url:-未配置}，REPO_URL：$REPO_URL）"
 
 current_branch="$(git branch --show-current)"
 [[ "$current_branch" == "$BRANCH" ]] || \

@@ -1,0 +1,62 @@
+name: Deployment help / 部署问题
+description: Ask for help with Docker, PostgreSQL, WebSocket, or Webhook setup.
+title: "[Deploy]: "
+labels:
+  - deployment
+body:
+  - type: markdown
+    attributes:
+      value: Read `docs/environment.md` first. Never paste `.env`, tokens, secrets, or a real database URL.
+  - type: input
+    id: version
+    attributes:
+      label: Version / 版本
+    validations:
+      required: true
+  - type: dropdown
+    id: method
+    attributes:
+      label: Deployment method / 部署方式
+      options:
+        - Source Docker Compose / 源码 Compose
+        - GHCR image / GHCR 镜像
+        - Feiniu NAS script / 飞牛 NAS 脚本
+        - Local Python / 本地 Python
+        - Other / 其他
+    validations:
+      required: true
+  - type: dropdown
+    id: event_mode
+    attributes:
+      label: Event mode / 事件模式
+      options:
+        - WebSocket long connection / 长连接模式
+        - Webhook
+        - Not reached yet / 尚未配置
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment / 环境
+      description: OS, architecture, Docker/Python/PostgreSQL versions, and network layout.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and attempted checks / 问题与已尝试检查
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs / 脱敏日志
+      render: shell
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy / 隐私确认
+      options:
+        - label: I removed all credentials and connection strings. / 我已移除全部凭据和连接串。
+          required: true

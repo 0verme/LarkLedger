@@ -1,7 +1,7 @@
 services:
   app:
     build: .
-    env_file: .env
+    env_file: ${LARK_LEDGER_ENV_FILE:-.env}
     ports:
       - "8000:8000"
     command: >-

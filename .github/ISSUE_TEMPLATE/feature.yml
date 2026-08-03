@@ -1,0 +1,30 @@
+name: Feature request / 功能建议
+description: Propose a user-visible capability or engineering improvement.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 要解决的问题
+      description: Describe the user or maintainer problem, not only a solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior / 建议行为
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives / 替代方案
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Project boundaries / 项目边界
+      options:
+        - label: This can remain self-hosted and preserve user isolation and the AI/database boundary. / 该建议可保持自托管、用户隔离和 AI/数据库边界。
+          required: true

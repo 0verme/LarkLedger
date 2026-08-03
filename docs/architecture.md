@@ -1,5 +1,7 @@
 # 架构说明
 
+> Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
+
 本文说明 LarkLedger `0.1.x` 的运行组件、消息数据流和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
 ## 组件

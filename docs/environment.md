@@ -1,5 +1,7 @@
 # 环境配置与部署指南
 
+> Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
+
 LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_` 开头。仓库只保留 [`.env.example`](../.env.example)；不要提交包含真实凭据的 `.env`。
 
 ## 外部依赖
@@ -11,6 +13,8 @@ LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_`
 3. 一个用于文字解析和消费建议的 AI 服务。图片和语音功能分别使用独立服务配置；推荐文字使用 DeepSeek、图片与语音使用阿里云百炼。
 
 当前 `compose.yaml` 只启动应用容器，不创建 PostgreSQL。`LARK_LEDGER_DATABASE_URL` 中的数据库主机必须能从容器内部访问；不要把容器内的 `localhost` 当作宿主机。
+
+代码内置默认值面向通用 OpenAI 兼容服务；`.env.example` 和下方示例则展示当前推荐的 DeepSeek 文字模型与百炼图片/语音模型组合。示例会显式覆盖代码默认值，两者不是互相冲突的配置来源。
 
 ## 完整配置项
 
@@ -42,6 +46,7 @@ LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_`
 | `LARK_LEDGER_REPORT_FONT_PATH` | 空 | 可选 | 中文报告字体文件；Docker 镜像已包含 Noto CJK |
 
 示例值只是占位符。生产部署前必须替换 `replace-me`、`change-me` 和所有示例账号密码。
+Compose 默认读取 `.env`；自动化验证需要使用其他文件时，可以通过 `LARK_LEDGER_ENV_FILE` 显式指定，但生产部署不得直接使用 `.env.example`。
 
 ### 多模型配置
 
@@ -65,7 +70,7 @@ LARK_LEDGER_TRANSCRIPTION_ENABLE_ITN=true
 
 视觉模型接收 JPEG、PNG 或 WebP，并使用图片真实格式构造 Base64 Data URL。语音模型接收飞书下载的 OPUS/OGG 等音频，通过千问 ASR 的 Chat Completions 接口转写。图片或语音 Key 为空时，对应功能会返回未配置提示，不会回退到文字模型。
 
-## 长连接模式（推荐）
+## 长连接模式（WebSocket，推荐）
 
 长连接仅需出站访问飞书和 AI 服务，不需要公网回调地址：
 
@@ -126,6 +131,35 @@ curl http://localhost:8000/healthz
 ```
 
 Webhook 模式返回 `long_connection: disabled`；长连接模式返回当前连接状态。健康检查不会回显任何凭据。
+
+### 本地体验数据库
+
+`compose.dev.yaml` 为本地试用增加 PostgreSQL 16、健康检查和命名卷，并覆盖应用的数据库地址：
+
+```bash
+cp .env.example .env
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+docker compose -f compose.yaml -f compose.dev.yaml logs -f app
+```
+
+其中的示例数据库密码只允许用于本机开发。删除容器不会删除命名卷；确实不再需要测试数据时，可显式执行 `docker compose -f compose.yaml -f compose.dev.yaml down -v`。
+开发数据库默认只映射到本机 `127.0.0.1:5432`；端口冲突时可设置 `LARK_LEDGER_DEV_POSTGRES_PORT`。
+
+### 使用 GHCR 预构建镜像
+
+正式版本镜像发布到 `ghcr.io/0verme/larkledger`。镜像本身不会自动修改数据库；首次部署和每次升级应先执行迁移，再启动应用：
+
+```bash
+cp .env.example .env
+docker compose -f compose.image.yaml run --rm app alembic upgrade head
+docker compose -f compose.image.yaml up -d
+```
+
+没有设置镜像标签时，`compose.image.yaml` 回退到 `latest`；当前 `.env.example` 已示范通过 `LARK_LEDGER_IMAGE_TAG=0.1.0` 固定版本。生产部署应保留这种版本固定方式。升级前请阅读[升级指南](upgrading.md)和[变更日志](../CHANGELOG.md)。
+
+### 飞牛 NAS 可选更新脚本
+
+`scripts/deploy-fnos.sh` 是面向飞牛 NAS 的可选 Git 更新入口，不是通用安装器。默认目录为 `/vol2/1000/LarkLedger`，可通过 `APP_DIR`、`REPO_URL` 和 `BRANCH` 覆盖；fork 使用者应把 `REPO_URL` 指向自己的仓库。脚本要求工作区位于指定分支、存在 `.env`，并仅执行 fast-forward 拉取。
 
 ## 本地开发
 

@@ -8,6 +8,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
 RUN python -m venv /app/.venv
+RUN pip install --no-cache-dir --upgrade pip setuptools
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir .

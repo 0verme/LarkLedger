@@ -1,0 +1,7 @@
+services:
+  app:
+    image: ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}
+    env_file: ${LARK_LEDGER_ENV_FILE:-.env}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

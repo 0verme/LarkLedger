@@ -1,0 +1,59 @@
+name: Bug report / 缺陷报告
+description: Report reproducible behavior, including recognition or bookkeeping errors.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a problem. 请勿提交真实账本、完整消息、凭据或未脱敏截图。
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area / 类型
+      options:
+        - Text or AI recognition / 文字或 AI 识别
+        - Image or voice / 图片或语音
+        - Ledger, budget, or report / 账本、预算或报告
+        - WebSocket or Webhook / 事件接入
+        - Other / 其他
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / 版本
+      description: Git tag, image tag, or commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction / 复现步骤
+      description: Use fictional, minimal data.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 预期行为
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / 实际行为
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs / 脱敏日志
+      render: shell
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy / 隐私确认
+      options:
+        - label: I removed credentials, personal data, message content, and database URLs. / 我已移除凭据、个人数据、消息正文和数据库连接串。
+          required: true

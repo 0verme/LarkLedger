@@ -22,7 +22,7 @@ classifiers = [
 dependencies = [
   "alembic>=1.14,<2",
   "asyncpg>=0.30,<1",
-  "cryptography>=44,<46",
+  "cryptography>=48.0.1,<49",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",
   "lark-oapi>=1.7.1,<2",
@@ -46,9 +46,9 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/0verme/lark-ledger"
-Repository = "https://github.com/0verme/lark-ledger"
-Issues = "https://github.com/0verme/lark-ledger/issues"
+Homepage = "https://github.com/0verme/LarkLedger"
+Repository = "https://github.com/0verme/LarkLedger"
+Issues = "https://github.com/0verme/LarkLedger/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lark_ledger"]
@@ -63,6 +63,9 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+  "postgres: integration tests that require TEST_POSTGRES_URL",
+]
 
 [tool.coverage.run]
 source = ["lark_ledger"]

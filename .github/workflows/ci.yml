@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  unit:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -23,4 +23,60 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: mypy src
-      - run: pytest --cov --cov-report=term-missing
+      - run: pytest --cov --cov-report=term-missing --cov-fail-under=88 -m "not postgres"
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: lark_ledger_test
+          POSTGRES_USER: lark_ledger
+          POSTGRES_PASSWORD: test-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U lark_ledger -d lark_ledger_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      LARK_LEDGER_DATABASE_URL: postgresql+asyncpg://lark_ledger:test-only-password@localhost:5432/lark_ledger_test
+      TEST_POSTGRES_URL: postgresql+asyncpg://lark_ledger:test-only-password@localhost:5432/lark_ledger_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: pip install -e ".[dev]"
+      - run: alembic upgrade head
+      - run: pytest tests/integration -m postgres
+
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --no-progress
+            --exclude-path LICENSE
+            --exclude '^https://github.com/0verme/LarkLedger/(compare|releases)/'
+            "**/*.md"
+            ".github/**/*.md"
+          fail: true
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip setuptools
+      - run: pip install -e . pip-audit
+      - run: pip-audit --local --timeout 60

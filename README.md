@@ -1,8 +1,10 @@
 # LarkLedger（飞账）
 
+[English](README.en.md) | 简体中文
+
 > 自托管的飞书 / Lark AI 记账机器人。通过文字、语音、小票照片或支付截图完成记账、查询、修改、撤销、分类月预算和消费报告。
 
-[![CI](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/lark-ledger/actions/workflows/ci.yml)
+[![CI](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
@@ -25,7 +27,29 @@ LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把
 
 完整使用示例与限制见[飞账用户手册](docs/help.md)。
 
-## 快速开始：长连接部署
+## 效果展示
+
+| 批量图片流水 | 语音批量记账 |
+| --- | --- |
+| ![从支付流水截图批量记账](docs/assets/batch-image-bookkeeping.png) | ![将语音中的多笔消费批量记账](docs/assets/voice-batch-bookkeeping.png) |
+| 小票识别 | 复杂文字批量记账 |
+| ![识别超市小票并记录消费](docs/assets/receipt-bookkeeping.png) | ![从一段自然语言中识别多笔收支](docs/assets/text-batch-bookkeeping.png) |
+
+以上截图使用已获准公开的脱敏数据。识别结果仍应以机器人确认回复为准。
+
+## 快速体验：自带 PostgreSQL
+
+用于本地试用时，可以让 Compose 同时启动应用和 PostgreSQL 16：
+
+```bash
+cp .env.example .env
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+curl http://localhost:8000/healthz
+```
+
+Windows PowerShell 可使用 `Copy-Item .env.example .env`。启动前仍需在 `.env` 中填写飞书应用和至少一个文字 AI 服务的测试凭据。开发数据库使用示例账号和命名卷，仅用于本地体验；生产环境继续使用独立 PostgreSQL。
+
+## 生产部署：长连接模式（WebSocket）
 
 长连接无需公网域名、HTTPS 回调或内网穿透，适合个人服务器、NAS 和本地开发。当前 `compose.yaml` 只启动 LarkLedger 应用；开始前请准备一个应用容器可以访问的 PostgreSQL 数据库。
 
@@ -88,7 +112,7 @@ curl http://localhost:8000/healthz
 
 | 模式 | 适用场景 | 公网 HTTPS | 飞书回调凭据 | 配置值 |
 | --- | --- | --- | --- | --- |
-| 长连接（推荐） | 本地、NAS、家庭服务器 | 不需要 | 不需要 Verification Token / Encrypt Key | `websocket` |
+| 长连接模式（WebSocket，推荐） | 本地、NAS、家庭服务器 | 不需要 | 不需要 Verification Token / Encrypt Key | `websocket` |
 | Webhook | 已有公网入口、反向代理或平台化部署 | 需要 | Verification Token；推荐 Encrypt Key | `webhook` |
 
 切换到 Webhook 时，将 `LARK_LEDGER_EVENT_MODE` 设为 `webhook`，配置 Verification Token，并在飞书开放平台把事件发送到：
@@ -115,7 +139,7 @@ AI 只能返回预定义的记账、修改、撤销、汇总、报告、预算�
 
 ## 本地开发
 
-需要 Python 3.11+ 和可访问的 PostgreSQL：
+需要 Python 3.11+。可使用已有 PostgreSQL，或通过 `compose.dev.yaml` 启动开发数据库：
 
 ```bash
 python -m venv .venv
@@ -145,6 +169,9 @@ pytest --cov
 - [架构说明](docs/architecture.md)：组件、数据流、信任边界和当前运行限制
 - [贡献指南](CONTRIBUTING.md)：开发环境、质量检查和提交要求
 - [安全策略](SECURITY.md)：漏洞报告和部署安全建议
+- [升级指南](docs/upgrading.md)：版本固定、数据库迁移和回滚前检查
+- [变更日志](CHANGELOG.md)：各版本面向部署者的变化
+- [English README](README.en.md)：英文项目介绍和部署入口
 
 ## 当前限制
 
