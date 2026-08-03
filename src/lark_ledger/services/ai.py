@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,9 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 图片规则：单笔支付详情或小票仍使用 create。只有支付宝、微信支付、银行账单等包含多笔独立交易
 的流水列表才使用 create_entries。小票中的多个商品属于同一笔消费，不得拆成多笔。不要把月度
 支出/收入合计、余额、优惠金额或统计卡片当成独立账目。
+多张图片出现在同一条消息时，它们共同构成一次记账请求；结合用户正文理解图片，正文中明确的
+补充或纠正优先于图片中的模糊信息，但不得臆造未提供的交易。多张图片可能是连续页面或重叠截图，
+相同交易只记录一次；所有图片合计仍最多返回前 20 笔独立流水。
 
 分类使用简短中文，例如：餐饮、交通、购物、居住、娱乐、医疗、教育、工资、奖金、其他。
 金额始终为正数；收入/支出由 direction 表示。不要臆造不明确的金额。
@@ -80,31 +84,33 @@ class AIInterpreter:
         text: str,
         *,
         now: datetime,
-        image: bytes | None = None,
+        images: Sequence[bytes] | None = None,
     ) -> ParsedCommand:
-        if image is None and not self.settings.ai_api_key:
+        image_payloads = list(images or ())
+        if not image_payloads and not self.settings.ai_api_key:
             raise RuntimeError("尚未配置 LARK_LEDGER_AI_API_KEY")
-        if image is not None and not self.vision_configured:
+        if image_payloads and not self.vision_configured:
             raise RuntimeError("尚未配置 LARK_LEDGER_VISION_API_KEY")
 
         user_content: str | list[dict[str, Any]] = text
-        if image is not None:
-            media_type = self._detect_image_media_type(image)
-            encoded = base64.b64encode(image).decode("ascii")
-            user_content = [
-                {"type": "text", "text": text or "识别图片中的收支并记账"},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{media_type};base64,{encoded}"},
-                },
-            ]
+        if image_payloads:
+            user_content = [{"type": "text", "text": text or "识别图片中的收支并记账"}]
+            for image in image_payloads:
+                media_type = self._detect_image_media_type(image)
+                encoded = base64.b64encode(image).decode("ascii")
+                user_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+                    }
+                )
 
-        api_key = self.settings.vision_api_key if image is not None else self.settings.ai_api_key
+        api_key = self.settings.vision_api_key if image_payloads else self.settings.ai_api_key
         base_url = (
-            self.settings.vision_base_url if image is not None else self.settings.ai_base_url
+            self.settings.vision_base_url if image_payloads else self.settings.ai_base_url
         )
-        model = self.settings.vision_model if image is not None else self.settings.ai_model
-        request_client = self._vision_client if image is not None else self._client
+        model = self.settings.vision_model if image_payloads else self.settings.ai_model
+        request_client = self._vision_client if image_payloads else self._client
 
         payload = {
             "model": model,
@@ -126,7 +132,7 @@ class AIInterpreter:
                 base_url=str(request_client.base_url) if request_client is not None else base_url,
             ),
         }
-        if image is not None and self._is_dashscope_url(base_url):
+        if image_payloads and self._is_dashscope_url(base_url):
             payload["enable_thinking"] = False
         response = await self._request(
             "/chat/completions",

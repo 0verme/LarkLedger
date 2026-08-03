@@ -77,7 +77,7 @@ async def test_interpreter_parses_multiple_image_transactions() -> None:
     command = await interpreter.interpret(
         "识别这张支付截图并记账",
         now=datetime(2026, 8, 3, tzinfo=UTC),
-        image=b"\x89PNG\r\n\x1a\ncontent",
+        images=[b"\x89PNG\r\n\x1a\ncontent"],
     )
     await client.aclose()
 

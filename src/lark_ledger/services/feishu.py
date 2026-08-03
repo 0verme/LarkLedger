@@ -23,6 +23,8 @@ from lark_ledger.services.report import ReportRenderer, build_report_card, fallb
 
 logger = logging.getLogger(__name__)
 
+MAX_POST_IMAGES = 5
+
 
 class FeishuClient:
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
@@ -169,10 +171,11 @@ class MessageProcessor:
         message_type = str(message.get("message_type", ""))
         command: ParsedCommand | None = None
         stage = "message_decode"
+        is_visual_message = message_type == "image"
         try:
             content = json.loads(message.get("content", "{}"))
             now = datetime.now(ZoneInfo(self.settings.timezone))
-            image: bytes | None = None
+            images: list[bytes] = []
             text = ""
             source_type = message_type
             if message_type == "text":
@@ -182,10 +185,39 @@ class MessageProcessor:
                     await self.feishu.reply_text(message_id, "图片识别功能尚未配置。")
                     return
                 stage = "image_download"
-                image = await self.feishu.download_resource(
-                    message_id, str(content["image_key"]), "image"
-                )
+                images = [
+                    await self.feishu.download_resource(
+                        message_id, str(content["image_key"]), "image"
+                    )
+                ]
                 text = "识别这张小票或支付截图并记账"
+            elif message_type == "post":
+                text, image_keys = self._parse_post_content(content)
+                if len(image_keys) > MAX_POST_IMAGES:
+                    await self.feishu.reply_text(
+                        message_id,
+                        f"一条富文本消息最多处理 {MAX_POST_IMAGES} 张图片，请拆分后重新发送。",
+                    )
+                    return
+                if image_keys:
+                    is_visual_message = True
+                    if not self.interpreter.vision_configured:
+                        await self.feishu.reply_text(message_id, "图片识别功能尚未配置。")
+                        return
+                    stage = "image_download"
+                    images = list(
+                        await asyncio.gather(
+                            *(
+                                self.feishu.download_resource(message_id, key, "image")
+                                for key in image_keys
+                            )
+                        )
+                    )
+                elif not text:
+                    await self.feishu.reply_text(
+                        message_id, "这条富文本中没有可识别的文字或图片。"
+                    )
+                    return
             elif message_type in {"audio", "file"}:
                 if not self.interpreter.transcription_configured:
                     await self.feishu.reply_text(message_id, "语音识别功能尚未配置。")
@@ -205,8 +237,8 @@ class MessageProcessor:
                     message_id, "暂时只支持文字、语音、小票照片和支付截图。"
                 )
                 return
-            stage = "vision_interpretation" if image is not None else "interpretation"
-            command = await self.interpreter.interpret(text, now=now, image=image)
+            stage = "vision_interpretation" if images else "interpretation"
+            command = await self.interpreter.interpret(text, now=now, images=images)
             stage = "persistence"
             async with self.session_factory() as session:
                 result = await LedgerService(
@@ -235,7 +267,7 @@ class MessageProcessor:
                 await self.feishu.reply_text(message_id, message_text)
         except CommandInterpretationError:
             error_id = self._log_processing_error(stage, message_id, message_type)
-            if message_type == "image":
+            if is_visual_message:
                 text = "没有完整识别图片中的交易，请裁剪无关内容或换一张更清晰的截图。"
             else:
                 text = (
@@ -260,6 +292,69 @@ class MessageProcessor:
                     f"{self._stage_error_message(stage)}（错误编号：{error_id}）",
                 )
             raise
+
+    @classmethod
+    def _parse_post_content(cls, content: dict[str, Any]) -> tuple[str, list[str]]:
+        body = content.get("content")
+        if not isinstance(body, list):
+            raise ValueError("富文本消息缺少 content 数组")
+
+        lines: list[str] = []
+        title = content.get("title")
+        if isinstance(title, str) and title.strip():
+            lines.append(title.strip())
+
+        image_keys: list[str] = []
+        seen_image_keys: set[str] = set()
+        for row in body:
+            if not isinstance(row, list):
+                continue
+            fragments: list[str] = []
+            for element in row:
+                cls._collect_post_element(
+                    element,
+                    fragments=fragments,
+                    image_keys=image_keys,
+                    seen_image_keys=seen_image_keys,
+                )
+            line = "".join(fragments).strip()
+            if line:
+                lines.append(line)
+        return "\n".join(lines), image_keys
+
+    @classmethod
+    def _collect_post_element(
+        cls,
+        element: object,
+        *,
+        fragments: list[str],
+        image_keys: list[str],
+        seen_image_keys: set[str],
+    ) -> None:
+        if not isinstance(element, dict):
+            return
+        tag = element.get("tag")
+        if tag in {"text", "a", "code_block"}:
+            value = element.get("text")
+            if isinstance(value, str):
+                fragments.append(value)
+            return
+        if tag == "img":
+            key = element.get("image_key")
+            if isinstance(key, str) and key and key not in seen_image_keys:
+                seen_image_keys.add(key)
+                image_keys.append(key)
+            return
+        if tag == "note":
+            nested = element.get("elements")
+            if isinstance(nested, list):
+                for child in nested:
+                    cls._collect_post_element(
+                        child,
+                        fragments=fragments,
+                        image_keys=image_keys,
+                        seen_image_keys=seen_image_keys,
+                    )
 
     @staticmethod
     def _log_processing_error(stage: str, message_id: str, message_type: str) -> str:

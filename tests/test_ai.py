@@ -148,7 +148,7 @@ async def test_image_interpreter_uses_vision_api(image: bytes, media_type: str) 
     command = await interpreter.interpret(
         "识别图片并记账",
         now=datetime(2026, 8, 2, tzinfo=UTC),
-        image=image,
+        images=[image],
     )
     await vision_client.aclose()
 
@@ -160,6 +160,39 @@ async def test_image_interpreter_uses_vision_api(image: bytes, media_type: str) 
     assert image_item["image_url"]["url"].startswith(f"data:{media_type};base64,")
 
 
+async def test_image_interpreter_preserves_multiple_image_order() -> None:
+    captured: dict[str, object] = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": json.dumps({"action": "help"})}}]},
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://vision.example/v1"
+    )
+    interpreter = AIInterpreter(
+        Settings(_env_file=None, vision_api_key="vision-key"),
+        vision_client=client,
+    )
+
+    await interpreter.interpret(
+        "第一页和第二页属于同一份账单",
+        now=datetime(2026, 8, 2, tzinfo=UTC),
+        images=[b"\x89PNG\r\n\x1a\nfirst", b"\xff\xd8\xffsecond"],
+    )
+    await client.aclose()
+
+    content = captured["messages"][1]["content"]  # type: ignore[index]
+    assert [item["type"] for item in content] == ["text", "image_url", "image_url"]
+    assert content[0]["text"] == "第一页和第二页属于同一份账单"
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[2]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+    assert "相同交易只记录一次" in captured["messages"][0]["content"]  # type: ignore[index]
+
+
 @pytest.mark.parametrize("image", [b"", b"not-an-image"])
 async def test_image_interpreter_rejects_invalid_media(image: bytes) -> None:
     interpreter = AIInterpreter(
@@ -169,7 +202,7 @@ async def test_image_interpreter_rejects_invalid_media(image: bytes) -> None:
         await interpreter.interpret(
             "识别图片并记账",
             now=datetime(2026, 8, 2, tzinfo=UTC),
-            image=image,
+            images=[image],
         )
 
 
