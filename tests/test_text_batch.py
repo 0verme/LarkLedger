@@ -115,7 +115,8 @@ async def test_interpreter_accepts_complex_text_batch_and_instructs_corrections(
     assert isinstance(messages, list)
     prompt = messages[0]["content"]
     assert "以用户最后的修正为准" in prompt
-    assert "必须展开为三笔独立收入" in prompt
+    assert "必须输出四笔独立流水" in prompt
+    assert '"action":"batch"' in prompt
     assert "修改、撤销、查询或报告动作" in prompt
 
 

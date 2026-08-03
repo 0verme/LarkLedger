@@ -46,7 +46,14 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
 
 复杂文字规则：以用户最后的修正为准，不要同时保留被纠正的旧金额；优惠或满减只记录实际
 支付金额；垫付支出、朋友还款、AA 收款和公司报销按真实资金流水分别记录，不要相互抵消。
-“三个人每人转给我 106.5”必须展开为三笔独立收入。单条文字只有一笔收支时仍使用 create。
+“聚餐 426 我先付，另外三个人每人转给我 106.5”必须输出四笔独立流水：一笔支出 426，
+再展开为三笔收入 106.5；垫付支出和 AA 收款缺一不可。单条文字只有一笔收支时仍使用 create。
+
+JSON 示例：用户输入“2025-01-02 晚餐 100，交通预算 500”，输出
+{{"action":"batch","entries":[{{"amount":"100","currency":null,"direction":"expense",
+"category":"餐饮","note":"晚餐","occurred_at":"2025-01-02T19:00:00+08:00"}}],
+"budgets":[{{"category":"交通","amount":"500","currency":null}}],
+"batch_truncated":false,"budgets_truncated":false}}。
 
 图片规则：单笔支付详情或小票仍使用 create。只有支付宝、微信支付、银行账单等包含多笔独立交易
 的流水列表才使用 create_entries。小票中的多个商品属于同一笔消费，不得拆成多笔。不要把月度
@@ -141,6 +148,9 @@ class AIInterpreter:
         }
         if image_payloads and self._is_dashscope_url(base_url):
             payload["enable_thinking"] = False
+        if not image_payloads and self._is_deepseek_url(base_url):
+            payload["thinking"] = {"type": "disabled"}
+            payload["max_tokens"] = 8192
         response = await self._request(
             "/chat/completions",
             api_key=api_key,
@@ -209,12 +219,7 @@ class AIInterpreter:
     def _response_format(
         self, model: type[BaseModel], name: str, *, base_url: str
     ) -> dict[str, Any]:
-        hostname = urlparse(base_url).hostname or ""
-        if (
-            hostname == "api.deepseek.com"
-            or hostname.endswith(".deepseek.com")
-            or self._is_dashscope_url(base_url)
-        ):
+        if self._is_deepseek_url(base_url) or self._is_dashscope_url(base_url):
             return {"type": "json_object"}
         return {
             "type": "json_schema",
@@ -303,6 +308,11 @@ class AIInterpreter:
     def _is_dashscope_url(base_url: str) -> bool:
         hostname = urlparse(base_url).hostname or ""
         return hostname == "dashscope.aliyuncs.com" or hostname.endswith(".maas.aliyuncs.com")
+
+    @staticmethod
+    def _is_deepseek_url(base_url: str) -> bool:
+        hostname = urlparse(base_url).hostname or ""
+        return hostname == "api.deepseek.com" or hostname.endswith(".deepseek.com")
 
     async def _request(
         self,

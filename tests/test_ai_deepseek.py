@@ -49,3 +49,5 @@ async def test_interpreter_uses_json_object_for_deepseek() -> None:
     await client.aclose()
 
     assert captured["response_format"] == {"type": "json_object"}
+    assert captured["thinking"] == {"type": "disabled"}
+    assert captured["max_tokens"] == 8192
