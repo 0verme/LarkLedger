@@ -167,6 +167,7 @@ pytest --cov
 - [用户手册](docs/help.md)：消息示例、预算和报告、使用限制、常见问题
 - [环境与部署指南](docs/environment.md)：完整配置、两种事件模式、生产安全检查
 - [架构说明](docs/architecture.md)：组件、数据流、信任边界和当前运行限制
+- [飞书多维表格存储方案提案](docs/bitable-storage-proposal.md)：低门槛存储的适用场景、技术边界和实施路线
 - [贡献指南](CONTRIBUTING.md)：开发环境、质量检查和提交要求
 - [安全策略](SECURITY.md)：漏洞报告和部署安全建议
 - [升级指南](docs/upgrading.md)：版本固定、数据库迁移和回滚前检查
