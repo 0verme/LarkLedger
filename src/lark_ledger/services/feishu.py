@@ -4,8 +4,10 @@ import hashlib
 import hmac
 import json
 import logging
+import tempfile
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -22,8 +24,10 @@ from lark_ledger.entry_commands import (
 from lark_ledger.schemas import (
     MAX_BATCH_BUDGETS,
     MAX_BATCH_ENTRIES,
+    MAX_EXPORT_BYTES,
     Action,
     ExecutionResult,
+    ExportFileResult,
     ParsedCommand,
 )
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
@@ -34,6 +38,35 @@ from lark_ledger.services.report import ReportRenderer, build_report_card, fallb
 logger = logging.getLogger(__name__)
 
 MAX_POST_IMAGES = 5
+
+
+def _safe_export_filename(filename: str) -> str:
+    """Accept only a basenamed application export file (no path segments)."""
+    if not filename or filename != Path(filename).name:
+        raise ValueError("导出文件名无效")
+    safe_name = Path(filename).name
+    if safe_name in {".", ".."} or ".." in safe_name:
+        raise ValueError("导出文件名无效")
+    if not safe_name.endswith(".csv"):
+        raise ValueError("导出文件名无效")
+    return safe_name
+
+
+def _write_export_temp_file(content: bytes, safe_name: str) -> Path:
+    """Write export bytes under the system temp dir; caller must delete the path."""
+    suffix = Path(safe_name).suffix or ".csv"
+    handle = tempfile.NamedTemporaryFile(
+        mode="wb",
+        prefix="larkledger-export-",
+        suffix=suffix,
+        delete=False,
+    )
+    try:
+        handle.write(content)
+        handle.flush()
+        return Path(handle.name)
+    finally:
+        handle.close()
 
 
 class FeishuClient:
@@ -121,6 +154,48 @@ class FeishuClient:
         if payload.get("code") != 0 or not isinstance(image_key, str) or not image_key:
             raise RuntimeError(f"上传飞书图片失败：{payload.get('msg', 'unknown')}")
         return image_key
+
+    async def upload_file(self, content: bytes, filename: str) -> str:
+        """Upload a message file and return Feishu ``file_key``.
+
+        Content is written to a secure temporary file for the multipart request,
+        then deleted in ``finally`` on both success and failure. The filename is
+        application-generated; user input never becomes a path.
+        """
+        if not content:
+            raise ValueError("导出文件不能为空")
+        if len(content) > MAX_EXPORT_BYTES:
+            raise ValueError("导出文件不能超过 5 MB")
+        safe_name = _safe_export_filename(filename)
+        token = await self.tenant_token()
+        temp_path: Path | None = None
+        try:
+            temp_path = _write_export_temp_file(content, safe_name)
+            with temp_path.open("rb") as handle:
+                response = await self._request(
+                    "POST",
+                    "/open-apis/im/v1/files",
+                    headers={"Authorization": f"Bearer {token}"},
+                    data={"file_type": "stream", "file_name": safe_name},
+                    files={"file": (safe_name, handle, "text/csv")},
+                )
+            payload = response.json()
+            file_key = payload.get("data", {}).get("file_key")
+            if payload.get("code") != 0 or not isinstance(file_key, str) or not file_key:
+                raise RuntimeError(f"上传飞书文件失败：{payload.get('msg', 'unknown')}")
+            return file_key
+        finally:
+            if temp_path is not None:
+                try:
+                    temp_path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning(
+                        "failed to remove export temp file after upload name=%s",
+                        safe_name,
+                    )
+
+    async def reply_file(self, message_id: str, file_key: str) -> None:
+        await self._reply_message(message_id, "file", {"file_key": file_key})
 
     async def download_resource(self, message_id: str, file_key: str, kind: str) -> bytes:
         token = await self.tenant_token()
@@ -282,6 +357,9 @@ class MessageProcessor:
             if command.action is Action.REPORT:
                 stage = "report_reply"
                 await self._reply_report(message_id, result)
+            elif command.action is Action.EXPORT_ENTRIES:
+                stage = "export_reply"
+                await self._reply_export(message_id, result)
             else:
                 message_text = result.message
                 if result.budget_alert:
@@ -404,8 +482,36 @@ class MessageProcessor:
             "interpretation": "指令识别服务调用失败，请稍后重试。",
             "persistence": "账目保存失败，本次未确认入账，请联系管理员检查数据库日志。",
             "report_reply": "报告生成或发送失败，请稍后重试。",
+            "export_reply": "账单已生成，但发送文件失败，请稍后重试。",
         }
         return messages.get(stage, "处理失败，请稍后重试。")
+
+    async def _reply_export(self, message_id: str, result: ExecutionResult) -> None:
+        """Upload CSV and reply with a file message; clean up any temp resources."""
+        export = result.export
+        if export is None:
+            await self.feishu.reply_text(message_id, result.message)
+            return
+        try:
+            file_key = await self._upload_export_file(export)
+            await self.feishu.reply_file(message_id, file_key)
+            await self.feishu.reply_text(message_id, result.message)
+        except Exception:
+            logger.exception(
+                "export file upload or send failed message_id=%s filename=%s rows=%s",
+                message_id,
+                export.filename,
+                export.row_count,
+            )
+            await self.feishu.reply_text(
+                message_id,
+                "账单已生成，但发送文件失败，请稍后重试。",
+            )
+
+    async def _upload_export_file(self, export: ExportFileResult) -> str:
+        """Upload export bytes; write a secure temp file only if needed, always clean up."""
+        # Primary path: in-memory multipart (no project-dir writes).
+        return await self.feishu.upload_file(export.content, export.filename)
 
     async def _reply_report(self, message_id: str, result: ExecutionResult) -> None:
         if result.report is None:

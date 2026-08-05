@@ -19,6 +19,7 @@ class Action(StrEnum):
     UPDATE_ENTRY = "update_entry"
     DELETE_ENTRY = "delete_entry"
     RESTORE_ENTRY = "restore_entry"
+    EXPORT_ENTRIES = "export_entries"
     SUMMARY = "summary"
     REPORT = "report"
     SET_BUDGET = "set_budget"
@@ -35,6 +36,10 @@ MAX_BATCH_ENTRIES = 30
 MAX_BATCH_BUDGETS = 10
 DEFAULT_LIST_LIMIT = 10
 MAX_LIST_LIMIT = 20
+# CSV export limits (P04); keep magic numbers out of call sites.
+MAX_EXPORT_ROWS = 5000
+MAX_EXPORT_BYTES = 5 * 1024 * 1024
+DEFAULT_EXPORT_DAYS = 90
 
 
 class BudgetCandidate(BaseModel):
@@ -89,6 +94,10 @@ class ParsedCommand(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=100)
     # Distinguish "note not provided" (False) from explicit clear (True).
     clear_note: bool = False
+    # export_entries only: full history when user explicitly asks for 全部/所有/完整历史.
+    export_all: bool = False
+    # export_entries only: include soft-deleted rows when user explicitly asks.
+    include_deleted: bool = False
 
     @field_validator("currency")
     @classmethod
@@ -240,6 +249,39 @@ class ParsedCommand(BaseModel):
                 )
             ):
                 raise ValueError(f"{self.action} only accepts entry_ref")
+        if self.action is Action.EXPORT_ENTRIES:
+            if self.clear_note:
+                raise ValueError("export_entries does not accept clear_note")
+            if any(
+                value is not None
+                for value in (
+                    self.amount,
+                    self.currency,
+                    self.direction,
+                    self.category,
+                    self.note,
+                    self.occurred_at,
+                    self.limit,
+                    self.entry_ref,
+                    self.before_entry_ref,
+                    self.entries,
+                    self.budgets,
+                )
+            ):
+                raise ValueError(
+                    "export_entries only accepts range_start, range_end, "
+                    "export_all, and include_deleted"
+                )
+            if self.export_all:
+                # Explicit full history; optional ranges are ignored at the service layer.
+                pass
+            elif self.range_start is not None and self.range_end is not None:
+                if self.range_start >= self.range_end:
+                    raise ValueError("export_entries range must be increasing")
+            elif self.range_start is not None or self.range_end is not None:
+                raise ValueError(
+                    "export_entries range requires both range_start and range_end"
+                )
         if self.action is Action.UPDATE_LAST and all(
             value is None
             for value in (self.amount, self.direction, self.category, self.note, self.occurred_at)
@@ -288,6 +330,10 @@ class ParsedCommand(BaseModel):
             raise ValueError("before_entry_ref is only supported for list_entries")
         if self.clear_note and self.action not in {Action.UPDATE_LAST, Action.UPDATE_ENTRY}:
             raise ValueError("clear_note is only supported for update actions")
+        if self.export_all and self.action is not Action.EXPORT_ENTRIES:
+            raise ValueError("export_all is only supported for export_entries")
+        if self.include_deleted and self.action is not Action.EXPORT_ENTRIES:
+            raise ValueError("include_deleted is only supported for export_entries")
         return self
 
 
@@ -325,7 +371,17 @@ class AdviceResult(BaseModel):
     )
 
 
+class ExportFileResult(BaseModel):
+    """In-memory CSV payload for Feishu file upload (not persisted)."""
+
+    filename: str
+    content: bytes
+    row_count: int = Field(ge=0)
+    range_label: str
+
+
 class ExecutionResult(BaseModel):
     message: str
     report: ReportData | None = None
     budget_alert: str | None = None
+    export: ExportFileResult | None = None

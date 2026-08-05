@@ -10,6 +10,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 - User-scoped five-character Crockford Base32 ledger `short_id` values (`#XXXXX` in chat replies), with migration backfill and unique constraint per user.
 - Bot actions `list_entries` and `get_entry` for recent/filtered ledger lines and single-entry detail by short ID (keyset pagination via `查看 #XXXXX 之前的N笔`).
 - Bot actions `update_entry`, `delete_entry`, and `restore_entry` for targeted short-ID mutations, with `ledger_entry_revisions` audit snapshots (also written by update-last / undo-last).
+- Bot action `export_entries` for user-scoped CSV Schema v1 export (default last 90 days, optional full history / include deleted, 5000-row and 5MB caps, formula-injection hardening, Feishu file message delivery).
 
 ### Changed
 

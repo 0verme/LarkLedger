@@ -148,6 +148,80 @@ async def test_entry_mutation_and_revision_on_postgres(
         assert entry.short_id == "MUT01"
 
 
+async def test_export_entries_query_on_postgres(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """P04: export query, isolation, half-open range, deleted filter, stable sort."""
+    start = datetime(2026, 6, 1, tzinfo=UTC)
+    end = datetime(2026, 7, 1, tzinfo=UTC)
+    mid = datetime(2026, 6, 15, 8, tzinfo=UTC)
+    async with postgres_session_factory() as session:
+        for index, (user, code, deleted, when) in enumerate(
+            [
+                ("ou_export_a", "EX001", False, mid),
+                ("ou_export_a", "EX002", True, mid + timedelta(hours=1)),
+                ("ou_export_a", "EX003", False, mid + timedelta(hours=2)),
+                ("ou_export_b", "EX001", False, mid),
+                ("ou_export_a", "EXAGE", False, datetime(2026, 1, 1, tzinfo=UTC)),
+            ]
+        ):
+            entry = LedgerEntry(
+                user_open_id=user,
+                short_id=code,
+                amount=Decimal(str(index + 1)),
+                currency="CNY",
+                direction=Direction.EXPENSE,
+                category="餐饮" if user == "ou_export_a" else "他户",
+                note="secret-b" if user == "ou_export_b" else "",
+                occurred_at=when,
+                source_type="text",
+                deleted_at=when if deleted else None,
+            )
+            session.add(entry)
+            await session.flush()
+            entry.created_at = when + timedelta(seconds=index)
+            entry.updated_at = entry.created_at
+        await session.commit()
+
+        service = LedgerService(session)
+        default = await service.execute(
+            "ou_export_a",
+            ParsedCommand(
+                action=Action.EXPORT_ENTRIES,
+                range_start=start,
+                range_end=end,
+            ),
+        )
+        assert default.export is not None
+        body = default.export.content.decode("utf-8-sig")
+        assert "#EX001" in body
+        assert "#EX003" in body
+        assert "#EX002" not in body
+        assert "#EXAGE" not in body
+        assert "他户" not in body
+        assert "secret-b" not in body
+        assert "ou_export" not in body
+        rows = [line for line in body.splitlines() if line.startswith("#")]
+        assert rows[0].startswith("#EX001")
+        assert rows[1].startswith("#EX003")
+
+        with_deleted = await service.execute(
+            "ou_export_a",
+            ParsedCommand(
+                action=Action.EXPORT_ENTRIES,
+                range_start=start,
+                range_end=end,
+                include_deleted=True,
+            ),
+        )
+        assert with_deleted.export is not None
+        assert with_deleted.export.row_count == 3
+        assert "#EX002" in with_deleted.export.content.decode("utf-8-sig")
+
+        revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
+        assert revision == "20260805_0006"
+
+
 async def test_short_id_unique_per_user_allows_cross_user_reuse(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

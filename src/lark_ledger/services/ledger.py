@@ -23,9 +23,11 @@ from lark_ledger.models import (
     LedgerEntryRevision,
 )
 from lark_ledger.schemas import (
+    DEFAULT_EXPORT_DAYS,
     DEFAULT_LIST_LIMIT,
     MAX_BATCH_BUDGETS,
     MAX_BATCH_ENTRIES,
+    MAX_EXPORT_ROWS,
     MAX_LIST_LIMIT,
     SUPPORTED_INPUT_CURRENCIES,
     Action,
@@ -38,6 +40,7 @@ from lark_ledger.schemas import (
     TrendPoint,
 )
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
+from lark_ledger.services.export import ExportTooLargeError, build_export_file
 from lark_ledger.short_id import (
     MAX_SHORT_ID_ALLOCATION_ATTEMPTS,
     ShortIdError,
@@ -63,11 +66,12 @@ class _ConvertedAmount:
         return self.original_currency != ""
 
 HELP_TEXT = (
-    "我可以帮你记账、修改、撤销、查看账单、汇总、设置预算和生成消费报告。试试：\n"
+    "我可以帮你记账、修改、撤销、查看账单、导出 CSV、汇总、设置预算和生成消费报告。试试：\n"
     "• 午饭32\n• 昨天打车38.5\n• 工资到账10000\n"
     "• 早餐12，午饭32，打车45，餐饮预算1000\n"
     "• 最近10笔\n• 查看 #A83F2\n• 把 #A83F2 改成35元\n"
     "• 删除 #A83F2\n• 恢复 #A83F2\n• 上一笔改成8块\n"
+    "• 导出本月账单\n• 导出最近90天账单\n• 导出全部账单\n"
     "• 这个月餐饮花了多少\n• 撤销刚才那笔\n"
     "• 交通预算500，人情往来预算1000\n• 查看预算\n• 生成这个月的消费图表"
 )
@@ -136,6 +140,8 @@ class LedgerService:
             return await self._delete_entry(user_open_id, command)
         if command.action is Action.RESTORE_ENTRY:
             return await self._restore_entry(user_open_id, command)
+        if command.action is Action.EXPORT_ENTRIES:
+            return await self._export_entries(user_open_id, command)
         if command.action is Action.SUMMARY:
             return await self._summary(user_open_id, command)
         if command.action is Action.REPORT:
@@ -1170,6 +1176,108 @@ class LedgerService:
                 f"创建时间：{created}",
                 f"更新时间：{updated}",
             ]
+        )
+
+    @staticmethod
+    def _export_order_by() -> tuple[Any, ...]:
+        """Stable chronological order for CSV timeline export."""
+        return (
+            LedgerEntry.occurred_at.asc(),
+            LedgerEntry.created_at.asc(),
+            LedgerEntry.id.asc(),
+        )
+
+    def _resolve_export_range(
+        self, command: ParsedCommand
+    ) -> tuple[datetime | None, datetime | None, str]:
+        """Return (range_start, range_end, label) with left-closed right-open bounds.
+
+        Defaults to the last DEFAULT_EXPORT_DAYS when neither export_all nor an
+        explicit range is provided. AI must not set export_all merely because
+        dates are empty.
+        """
+        if command.export_all:
+            return None, None, "全部历史"
+        if command.range_start is not None and command.range_end is not None:
+            if command.range_start >= command.range_end:
+                raise ValueError("export range must be increasing")
+            return (
+                command.range_start,
+                command.range_end,
+                self._export_range_label(command.range_start, command.range_end),
+            )
+        current = self._current_local_datetime()
+        start = current - timedelta(days=DEFAULT_EXPORT_DAYS)
+        # Exclusive upper bound slightly past "now" so current-moment rows are included.
+        end = current + timedelta(seconds=1)
+        return start, end, self._export_range_label(start, end)
+
+    def _export_range_label(self, start: datetime, end: datetime) -> str:
+        local_start = self._local_datetime(start)
+        # end is exclusive; show the last included calendar day in app timezone.
+        last_included = self._local_datetime(end) - timedelta(microseconds=1)
+        return (
+            f"{local_start.strftime('%Y-%m-%d')} 至 "
+            f"{last_included.strftime('%Y-%m-%d')}"
+        )
+
+    async def _export_entries(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        try:
+            range_start, range_end, range_label = self._resolve_export_range(command)
+        except ValueError:
+            return ExecutionResult(
+                message="导出时间范围无效：开始时间必须早于结束时间。"
+            )
+
+        filters: list[Any] = [LedgerEntry.user_open_id == user_open_id]
+        if not command.include_deleted:
+            filters.append(LedgerEntry.deleted_at.is_(None))
+        if range_start is not None and range_end is not None:
+            filters.append(LedgerEntry.occurred_at >= range_start)
+            filters.append(LedgerEntry.occurred_at < range_end)
+
+        # Fetch one extra row to detect over-limit without silent truncation.
+        fetched = (
+            (
+                await self.session.execute(
+                    select(LedgerEntry)
+                    .where(*filters)
+                    .order_by(*self._export_order_by())
+                    .limit(MAX_EXPORT_ROWS + 1)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if len(fetched) > MAX_EXPORT_ROWS:
+            return ExecutionResult(
+                message=(
+                    f"符合条件的账目超过 {MAX_EXPORT_ROWS} 笔，"
+                    "请缩小导出时间范围后重试。"
+                )
+            )
+        if not fetched:
+            return ExecutionResult(message="该时间范围内没有可导出的账目。")
+
+        try:
+            export_file = build_export_file(
+                fetched,
+                timezone=self.timezone,
+                when=self._current_local_datetime(),
+                range_label=range_label,
+            )
+        except ExportTooLargeError:
+            return ExecutionResult(
+                message="导出文件超过 5MB，请缩小时间范围后重试。"
+            )
+
+        return ExecutionResult(
+            message=(
+                f"已导出 {export_file.row_count} 笔账目，时间范围：{range_label}。"
+            ),
+            export=export_file,
         )
 
     @staticmethod
