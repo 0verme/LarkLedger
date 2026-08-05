@@ -104,7 +104,7 @@ async def test_entry_mutation_and_revision_on_postgres(
         session.add(
             LedgerEntry(
                 user_open_id="ou_mut",
-                short_id="MUT01",
+                short_id="MT01A",
                 amount=Decimal("10.00"),
                 currency="CNY",
                 direction=Direction.EXPENSE,
@@ -120,32 +120,32 @@ async def test_entry_mutation_and_revision_on_postgres(
             "ou_mut",
             ParsedCommand(
                 action=Action.UPDATE_ENTRY,
-                entry_ref="MUT01",
+                entry_ref="MT01A",
                 amount=Decimal("12.00"),
             ),
         )
-        assert "已修改 #MUT01" in updated.message
+        assert "已修改 #MT01A" in updated.message
         deleted = await service.execute(
-            "ou_mut", ParsedCommand(action=Action.DELETE_ENTRY, entry_ref="MUT01")
+            "ou_mut", ParsedCommand(action=Action.DELETE_ENTRY, entry_ref="MT01A")
         )
-        assert "已删除 #MUT01" in deleted.message
+        assert "已删除 #MT01A" in deleted.message
         restored = await service.execute(
-            "ou_mut", ParsedCommand(action=Action.RESTORE_ENTRY, entry_ref="MUT01")
+            "ou_mut", ParsedCommand(action=Action.RESTORE_ENTRY, entry_ref="MT01A")
         )
-        assert "已恢复 #MUT01" in restored.message
+        assert "已恢复 #MT01A" in restored.message
         count = await session.scalar(select(func.count()).select_from(LedgerEntryRevision))
         assert count == 3
         entry = (
             await session.execute(
                 select(LedgerEntry).where(
                     LedgerEntry.user_open_id == "ou_mut",
-                    LedgerEntry.short_id == "MUT01",
+                    LedgerEntry.short_id == "MT01A",
                 )
             )
         ).scalar_one()
         assert entry.amount == Decimal("12.00")
         assert entry.deleted_at is None
-        assert entry.short_id == "MUT01"
+        assert entry.short_id == "MT01A"
 
 
 async def test_export_entries_query_on_postgres(
