@@ -2,92 +2,142 @@
 
 [简体中文](README.md) | English
 
-> A self-hosted AI bookkeeping bot for Feishu/Lark. Record, query, correct, undo, budget, and review expenses through text, voice, receipts, or payment screenshots.
+> A self-hosted AI bookkeeping bot for Feishu/Lark. The ledger lives in your PostgreSQL database. Language models only turn messages into strictly validated business actions—never SQL, never a database connection.
 
 [![CI](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-LarkLedger keeps the ledger in your own PostgreSQL database. AI providers only turn messages into strictly validated business actions. They never receive a database connection, cannot generate or execute SQL, and all reads and writes use predefined parameterized queries.
+Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-Detailed user, deployment, and architecture documentation is currently Chinese-first. This README and the [English contribution guide](CONTRIBUTING.en.md) provide the international entry points.
+## What works on `main` (pre-release v0.2.0 feature set)
 
-## Features
+- **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies
+- **Recent list / single-entry detail** (`最近10笔`, `查看 #XXXXX`)
+- **Targeted update, soft-delete, and restore** by short ID (plus last-entry shortcuts)
+- **CSV export** of the current user's ledger (Feishu file message; needs extra scopes)
+- Summaries, monthly category budgets, consumption report cards
+- Image / voice bookkeeping as **optional extensions** (not required for first success)
+- User isolation by Feishu `open_id` and claim-first `event_id` idempotency
+- Self-hosted stack: FastAPI, PostgreSQL, Docker Compose
 
-- Text, voice, receipt, payment-flow screenshot, and rich-text image bookkeeping
-- Up to 30 entries and 10 category budgets in one text request
-- Up to five images in one rich-text message and up to 30 transactions from payment screenshots
-- Correct or undo the current user's latest active entry
-- Reference-rate conversion for common foreign currencies
-- Time-, direction-, and category-based summaries
-- Monthly category budgets with one-time 80% and 100% alerts
-- Consumption report cards with aggregate AI suggestions
-- User isolation by Feishu `open_id` and event idempotency by `event_id`
-- WebSocket long-connection and Webhook delivery modes
+## Who it is for
 
-## Showcase
+Technical self-hosters who use Feishu heavily and want a **private** ledger. The first-run goal is one successful **text-only** entry—not a full multi-modal production rollout.
 
-| Payment screenshot batch | Voice batch |
-| --- | --- |
-| ![Batch bookkeeping from a payment screenshot](docs/assets/batch-image-bookkeeping.png) | ![Batch bookkeeping from a voice message](docs/assets/voice-batch-bookkeeping.png) |
-| Receipt recognition | Complex text batch |
-| ![Bookkeeping from a receipt photo](docs/assets/receipt-bookkeeping.png) | ![Multiple income and expense entries from natural language](docs/assets/text-batch-bookkeeping.png) |
+## Quick start (recommended)
 
-The screenshots use sanitized data approved for publication. Always treat the bot's confirmation reply as the authoritative result.
+**WebSocket long connection + text-only + PostgreSQL + Docker Compose.**
 
-## Quick local trial
-
-Python 3.11+ and Docker Compose are required. The development overlay starts PostgreSQL 16 together with the application:
+No public callback URL is required. The host must still make **outbound** HTTPS calls to Feishu and your text AI provider.
 
 ```bash
 git clone https://github.com/0verme/LarkLedger.git
 cd LarkLedger
 cp .env.example .env
+# On Windows PowerShell: Copy-Item .env.example .env
+# Edit .env: App ID/Secret, text AI key, and keep EVENT_MODE=websocket
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-curl http://localhost:8000/healthz
+curl http://127.0.0.1:8000/healthz
 ```
 
-On Windows PowerShell, use `Copy-Item .env.example .env`. Before starting, replace the Feishu/Lark application and text AI placeholders in `.env`. The bundled database credentials are for local development only.
+### Minimum environment variables (text-only)
 
-## Production deployment
+```dotenv
+LARK_LEDGER_EVENT_MODE=websocket
+LARK_LEDGER_DATABASE_URL=postgresql+asyncpg://lark_ledger:change-me@db:5432/lark_ledger
+LARK_LEDGER_LARK_APP_ID=cli_xxxxxxxxxxxxx
+LARK_LEDGER_LARK_APP_SECRET=replace-me
+LARK_LEDGER_AI_API_KEY=replace-me
+LARK_LEDGER_AI_BASE_URL=https://api.deepseek.com
+LARK_LEDGER_AI_MODEL=deepseek-v4-flash
+```
 
-The recommended event transport is the WebSocket long-connection mode because it needs no public domain, HTTPS callback, or tunnel. Use an independently managed PostgreSQL database in production.
+Important:
 
-1. Copy `.env.example` to `.env` and set `LARK_LEDGER_EVENT_MODE=websocket`.
-2. Configure the PostgreSQL URL, Lark App ID/Secret, and the AI provider keys you use.
-3. In the Feishu/Lark developer console, enable the bot, select long-connection event delivery, subscribe to `im.message.receive_v1`, and publish the application version.
-4. Start from source with `docker compose up -d --build`, or use the versioned GHCR image described below.
+- Set `LARK_LEDGER_EVENT_MODE=websocket` in `.env`. The **runtime code default remains `webhook`**; the example and docs recommend WebSocket for first deploy.
+- With `compose.dev.yaml`, Compose overrides the database URL to the bundled Postgres service.
+- Vision / transcription keys are **not** required for text-only bookkeeping.
+- WebSocket mode does **not** need Verification Token or Encrypt Key.
+- Safe defaults you usually leave alone: `TIMEZONE=Asia/Shanghai`, `CURRENCY=CNY`.
 
-For the prebuilt image, migrations are an explicit deployment step:
+Full variable table, Feishu permission notes, Webhook, and troubleshooting: [Chinese environment guide](docs/environment.md).
+
+### Feishu app (text-only)
+
+1. Create an enterprise custom app and enable the bot.
+2. Under Events, choose **long connection** (WebSocket)—do not set a request URL.
+3. Subscribe to `im.message.receive_v1`.
+4. Grant the minimum scopes needed to **receive and send messages** (confirm exact scope names in the Feishu console).
+5. Publish an app version so the config takes effect.
+6. Add the bot to a test chat; in groups, mention the bot.
+7. Start the container first if the console needs to verify the long connection.
+
+### First acceptance checks
+
+Send in Feishu (replace `#XXXXX` with the short ID the bot actually returns):
+
+1. `午饭32元` → success reply with `#XXXXX`
+2. `最近10笔` → the new row appears
+3. `查看 #XXXXX` → detail
+4. `把 #XXXXX 改成35元` → update
+5. `删除 #XXXXX` / `恢复 #XXXXX` → soft-delete and restore
+6. `导出最近90天账单` → CSV file message (**requires Feishu file upload / file message scopes**; not claimed as verified end-to-end in a real tenant from this repository alone)
+
+### Health and logs
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.1.0
-docker compose -f compose.image.yaml run --rm app alembic upgrade head
-docker compose -f compose.image.yaml up -d
+docker compose -f compose.yaml -f compose.dev.yaml ps
+docker compose -f compose.yaml -f compose.dev.yaml logs -f app
+curl http://127.0.0.1:8000/healthz
 ```
 
-Images are published as `ghcr.io/0verme/larkledger:<version>`. Read the [Chinese environment guide](docs/environment.md) for the complete variable table, event-mode setup, and production checklist.
+Service name: `app`. Host port: **8000**. Source Compose runs `alembic upgrade head` before Uvicorn.
+
+Expected WebSocket health shape:
+
+```json
+{"status":"ok","event_mode":"websocket","long_connection":"connected"}
+```
+
+### Existing PostgreSQL
+
+Create a dedicated user/database, point `LARK_LEDGER_DATABASE_URL` at a host the **container** can reach (not `localhost` meaning the container itself), then:
+
+```bash
+docker compose up -d --build
+```
+
+SQL examples and URL encoding notes live in [docs/environment.md](docs/environment.md).
 
 ## Event transports
 
-| Mode | Best for | Public HTTPS | Callback credentials |
+| Mode | Role | Public HTTPS | Extra credentials |
 | --- | --- | --- | --- |
-| WebSocket long connection | Local hosts, NAS, home servers | No | App ID and App Secret |
-| Webhook | Existing public ingress or platform deployments | Yes | Verification Token and preferably Encrypt Key |
+| **WebSocket (recommended first path)** | NAS, home server, private network | No | App ID / Secret |
+| **Webhook (advanced alternative)** | Existing public ingress / reverse proxy | Yes | Verification Token; Encrypt Key recommended |
 
-Both transports use the same source validation, `event_id` claim, message parsing, ledger action, and reply pipeline.
+Webhook URL: `https://your-domain/webhooks/feishu`. Webhook remains a supported path; it is not deprecated.
 
-## Security boundary
+## Known limitations
+
+Still **claim-first** synchronous processing—do not describe this as reliable delivery:
+
+- Failed events are **not** automatically retried
+- Successful ledger writes with failed replies are **not** auto-compensated
+- Image / voice / batch paths have **no** pre-write confirmation flow yet
+- Failed CSV file delivery is **not** auto-retried
+- No web admin UI, no shared ledgers
+- **JSON export is not a formal capability** (CSV only)
+
+Roadmap themes (no promised ship dates):
 
 ```text
-Lark message -> source verification / event claim -> media download -> AI parsing
-                                                            |
-                                            strict Pydantic validation
-                                                            |
-                                      fixed actions -> SQLAlchemy -> PostgreSQL
+v0.2.1: reliable delivery (state machine / worker / outbox)
+v0.3.0: high-risk confirmation (image / voice / batch, etc.)
 ```
 
-AI output is limited to predefined actions. Report suggestions receive aggregate totals and trends, not entry notes or user identifiers. See the [security policy](SECURITY.md) and [Chinese architecture document](docs/architecture.md).
+Versioning honesty: package version is still `0.1.0`. **v0.2.0 is not yet a tagged Release with a guaranteed pullable GHCR image.** Prefer source `docker compose ... --build` until a published tag is verified.
 
 ## Development
 
@@ -100,7 +150,7 @@ mypy src
 pytest --cov --cov-fail-under=88 -m "not postgres"
 ```
 
-PostgreSQL-specific migrations, constraints, and concurrency behavior are tested separately in CI. See [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
+PostgreSQL-specific tests run in CI. See [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
 
 ## Documentation
 
@@ -110,13 +160,6 @@ PostgreSQL-specific migrations, constraints, and concurrency behavior are tested
 - [Upgrade guide](docs/upgrading.md)
 - [Changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md)
-
-## Current limitations
-
-- Search, arbitrary historical editing, custom categories, per-user timezone/currency, data export, shared ledgers, and undo restoration are not yet supported.
-- Background processing runs in the web process and is not a durable queue.
-- Currency conversion uses a current reference rate; summaries cannot switch display currency.
-- Receipt and model outputs must be checked against the confirmation reply.
 
 ## License
 

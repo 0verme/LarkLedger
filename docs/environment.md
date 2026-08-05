@@ -2,77 +2,239 @@
 
 > Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
 
-LarkLedger 从环境变量读取运行配置，所有变量都以 `LARK_LEDGER_` 开头。仓库只保留 [`.env.example`](../.env.example)；不要提交包含真实凭据的 `.env`。
+LarkLedger 从环境变量读取运行配置，所有运行时变量都以 `LARK_LEDGER_` 开头（见 `src/lark_ledger/config.py` 中的 `Settings`）。仓库只保留 [`.env.example`](../.env.example)；不要提交包含真实凭据的 `.env`（已在 `.gitignore` 中忽略）。
+
+## 推荐快速路径（文字-only）
+
+目标：技术用户在**无公网回调**的情况下，用 WebSocket + PostgreSQL + Docker Compose 完成**第一笔纯文字记账**。
+
+```text
+已有 Docker
+→ 创建飞书自建应用（机器人 + 长连接 + im.message.receive_v1）
+→ 准备 PostgreSQL（推荐 compose.dev 体验库）
+→ 填写最小 .env
+→ docker compose 启动
+→ 检查 healthz 与日志
+→ 飞书发送「午饭32元」→ 收到含 #XXXXX 的回复
+→ 「最近10笔」核对
+```
+
+主路径**只承诺**文字记账、五位短 ID、最近账目/详情、按短 ID 改删恢复、CSV 导出（导出另需文件权限）。图片、语音、Webhook、公网域名放在本文后续扩展章节。
+
+### 最小必填环境变量
+
+| 环境变量 | 说明 |
+| --- | --- |
+| `LARK_LEDGER_EVENT_MODE` | 快速路径请设为 `websocket` |
+| `LARK_LEDGER_DATABASE_URL` | `postgresql+asyncpg://...` 异步连接串 |
+| `LARK_LEDGER_LARK_APP_ID` | 飞书应用 App ID |
+| `LARK_LEDGER_LARK_APP_SECRET` | 飞书应用 App Secret |
+| `LARK_LEDGER_AI_API_KEY` | 文字 AI API Key |
+| `LARK_LEDGER_AI_BASE_URL` | 文字 AI 的 OpenAI 兼容根地址（示例常用 DeepSeek） |
+| `LARK_LEDGER_AI_MODEL` | 文字模型名 |
+
+**不要**为了纯文字记账去填写图片模型、语音识别或 Webhook 验签相关占位值。Pydantic `Settings` 对图片/语音 Key 允许为空；未配置时仅禁用对应功能。
+
+**有明确安全默认、通常不必改：**
+
+| 环境变量 | 代码默认 |
+| --- | --- |
+| `LARK_LEDGER_TIMEZONE` | `Asia/Shanghai` |
+| `LARK_LEDGER_CURRENCY` | `CNY` |
+| `LARK_LEDGER_AI_TIMEOUT_SECONDS` | `45` |
+| `LARK_LEDGER_EXCHANGE_RATE_API_URL` | `https://api.frankfurter.dev` |
+| `LARK_LEDGER_EXCHANGE_RATE_CACHE_TTL_SECONDS` | `3600` |
+
+**代码中不存在** `LOG_LEVEL` / 日志级别环境变量；当前依赖标准库与应用日志默认行为。
+
+### 一键本地体验（推荐）
+
+`compose.dev.yaml` 提供 PostgreSQL 16、健康检查、命名卷，并覆盖应用的数据库地址：
+
+```bash
+cp .env.example .env
+# 编辑 .env：填写飞书 App ID/Secret 与文字 AI Key；保持 EVENT_MODE=websocket
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+docker compose -f compose.yaml -f compose.dev.yaml ps
+docker compose -f compose.yaml -f compose.dev.yaml logs -f app
+curl http://127.0.0.1:8000/healthz
+```
+
+Windows PowerShell 复制：`Copy-Item .env.example .env`。
+
+| 项 | 事实 |
+| --- | --- |
+| 应用服务名 | `app` |
+| 数据库服务名 | `db`（仅 dev 叠加） |
+| 健康检查 | `GET http://127.0.0.1:8000/healthz` |
+| 开发库账号 | 用户/库 `lark_ledger`，密码 `dev-only-password`（**仅本地**） |
+| 数据卷 | `lark_ledger_dev_pgdata` |
+| 库端口映射 | `127.0.0.1:${LARK_LEDGER_DEV_POSTGRES_PORT:-5432}:5432` |
+| 启动迁移 | `compose.yaml` 中 `alembic upgrade head` 后启动 Uvicorn |
+
+常用运维：
+
+```bash
+# 停止但保留数据
+docker compose -f compose.yaml -f compose.dev.yaml down
+
+# 停止并删除开发库数据卷（不可恢复）
+docker compose -f compose.yaml -f compose.dev.yaml down -v
+```
+
+### 第一笔账验收
+
+在飞书中发送（`#XXXXX` 换成机器人实际返回的短 ID）：
+
+1. `午饭32元` → 成功回复含 `#XXXXX`
+2. `最近10笔` → 能看到该笔
+3. `查看 #XXXXX` → 详情
+4. `把 #XXXXX 改成35元` → 修改成功
+5. `删除 #XXXXX` / `恢复 #XXXXX` → 软删除与恢复
+6. `导出最近90天账单` → CSV 文件消息（**需额外确认飞书文件上传与文件消息权限**；本仓库不宣称已在真实飞书租户完成该项验收）
+
+---
 
 ## 外部依赖
 
-运行前需要准备：
+1. 开启机器人能力并订阅 `im.message.receive_v1` 的飞书 / Lark 企业自建应用。
+2. 应用可访问的 PostgreSQL（开发叠加提供 16；生产请使用受支持的 PostgreSQL 16 或与项目测试一致的版本）。
+3. 文字解析 AI 服务。图片与语音为可选独立配置。
 
-1. 一个开启机器人能力并订阅 `im.message.receive_v1` 的飞书 / Lark 企业自建应用。
-2. 一个应用可访问的 PostgreSQL 数据库、独立数据库用户和高强度密码。
-3. 一个用于文字解析和消费建议的 AI 服务。图片和语音功能分别使用独立服务配置；推荐文字使用 DeepSeek、图片与语音使用阿里云百炼。
+当前 `compose.yaml` **只**启动应用容器，不创建 PostgreSQL。`LARK_LEDGER_DATABASE_URL` 中的主机必须从**容器内部**可达；容器内的 `localhost` 不是宿主机。
 
-当前 `compose.yaml` 只启动应用容器，不创建 PostgreSQL。`LARK_LEDGER_DATABASE_URL` 中的数据库主机必须能从容器内部访问；不要把容器内的 `localhost` 当作宿主机。
+代码内置默认值面向通用 OpenAI 兼容服务；[`.env.example`](../.env.example) 展示推荐的文字模型示例与可选图片/语音分组。示例会覆盖部分代码默认（例如文字 `AI_BASE_URL` / `AI_MODEL`），**不是**两套互相打架的权威源：以你部署时 `.env` 的最终值为准。
 
-代码内置默认值面向通用 OpenAI 兼容服务；`.env.example` 和下方示例则展示当前推荐的 DeepSeek 文字模型与百炼图片/语音模型组合。示例会显式覆盖代码默认值，两者不是互相冲突的配置来源。
+## 配置项对照（Settings 事实）
 
-## 完整配置项
+以下变量名与默认值来自当前 `Settings`（`env_prefix=LARK_LEDGER_`），**不是**印象值。
 
-| 环境变量 | 默认值 | 必需条件 | 说明 |
+| 配置项 | 代码默认 | `.env.example` 推荐 | 快速路径 |
 | --- | --- | --- | --- |
-| `LARK_LEDGER_EVENT_MODE` | `webhook` | 始终 | `websocket` 或 `webhook`，不区分大小写 |
-| `LARK_LEDGER_DATABASE_URL` | 示例 Compose 地址 | 始终 | SQLAlchemy async PostgreSQL URL，驱动应为 `asyncpg` |
-| `LARK_LEDGER_TIMEZONE` | `Asia/Shanghai` | 始终 | IANA 时区，用于解析“昨天”“这个月”和预算自然月 |
-| `LARK_LEDGER_CURRENCY` | `CNY` | 始终 | 三字母 ISO 4217 币种代码，启动时转为大写 |
-| `LARK_LEDGER_EXCHANGE_RATE_API_URL` | `https://api.frankfurter.dev` | 使用外币金额 | Frankfurter v2 或兼容服务的 API 根地址，无需填写密钥 |
-| `LARK_LEDGER_EXCHANGE_RATE_CACHE_TTL_SECONDS` | `3600` | 使用外币金额 | 最新汇率的进程内缓存秒数，允许范围 60～86400 |
-| `LARK_LEDGER_LARK_APP_ID` | 空 | 始终 | 飞书 / Lark 应用 App ID |
-| `LARK_LEDGER_LARK_APP_SECRET` | 空 | 始终 | 应用 App Secret |
-| `LARK_LEDGER_LARK_BASE_URL` | `https://open.feishu.cn` | 始终 | 开放平台 API 根地址；Lark 国际版按平台文档调整 |
-| `LARK_LEDGER_LARK_VERIFICATION_TOKEN` | 空 | Webhook 应配置 | 校验回调来源；长连接不使用 |
-| `LARK_LEDGER_LARK_ENCRYPT_KEY` | 空 | Webhook 推荐 | Webhook 签名校验和加密事件解密；长连接不使用 |
-| `LARK_LEDGER_AI_API_KEY` | 空 | 始终 | 文字解析和消费建议服务的 API Key |
-| `LARK_LEDGER_AI_BASE_URL` | `https://api.openai.com/v1` | 始终 | 文字服务的 OpenAI 兼容 API 根地址 |
-| `LARK_LEDGER_AI_MODEL` | `gpt-4.1-mini` | 始终 | 文字消息解析和消费建议模型 |
-| `LARK_LEDGER_VISION_API_KEY` | 空 | 图片记账 | 图片理解服务 API Key；未配置时明确提示图片功能不可用 |
-| `LARK_LEDGER_VISION_BASE_URL` | 百炼北京兼容地址 | 图片记账 | 图片服务的 OpenAI 兼容 API 根地址 |
-| `LARK_LEDGER_VISION_MODEL` | `qwen3.7-plus` | 图片记账 | 支持图片输入和 JSON Object 输出的视觉模型 |
-| `LARK_LEDGER_TRANSCRIPTION_API_KEY` | 空 | 语音记账 | 千问 ASR 服务 API Key；可以与图片服务使用同一个百炼 Key |
-| `LARK_LEDGER_TRANSCRIPTION_BASE_URL` | 百炼北京兼容地址 | 语音记账 | 千问 ASR 的 OpenAI 兼容 API 根地址 |
-| `LARK_LEDGER_TRANSCRIPTION_MODEL` | `qwen3-asr-flash` | 语音记账 | 通过 Chat Completions `input_audio` 调用的转写模型 |
-| `LARK_LEDGER_TRANSCRIPTION_LANGUAGE` | `zh` | 语音记账 | ASR 语言代码；留空时自动识别 |
-| `LARK_LEDGER_TRANSCRIPTION_ENABLE_ITN` | `true` | 语音记账 | 将口语数字、日期等归一化为书面形式 |
-| `LARK_LEDGER_AI_TIMEOUT_SECONDS` | `45` | 始终 | 单次 AI HTTP 请求超时，必须大于 0 且不超过 180 秒 |
-| `LARK_LEDGER_REPORT_FONT_PATH` | 空 | 可选 | 中文报告字体文件；Docker 镜像已包含 Noto CJK |
+| 事件模式 `EVENT_MODE` | `webhook` | `websocket` | **必填设为 websocket** |
+| PostgreSQL `DATABASE_URL` | `postgresql+asyncpg://lark_ledger:change-me@db:5432/lark_ledger` | 同左占位 | 必填（dev 可被 Compose 覆盖） |
+| 飞书 App ID | 空字符串 | 占位 `cli_…` | 必填 |
+| 飞书 App Secret | 空字符串 | `replace-me` | 必填 |
+| 飞书 Base URL | `https://open.feishu.cn` | 同左 | 可选 |
+| Verification Token | 空 | 空（Webhook 时再填） | 文字 WebSocket **不需要** |
+| Encrypt Key | 空 | 空 | 文字 WebSocket **不需要** |
+| 文字 AI API Key | 空 | `replace-me` | 必填 |
+| 文字 AI Base URL | `https://api.openai.com/v1` | `https://api.deepseek.com` | 必填（或接受代码默认并确保 Key 匹配） |
+| 文字 AI Model | `gpt-4.1-mini` | `deepseek-v4-flash` | 必填（或接受代码默认） |
+| 时区 | `Asia/Shanghai` | 同左 | 有默认 |
+| 默认币种 | `CNY` | 同左 | 有默认 |
+| 图片 Vision Key / URL / Model | 空 / 百炼兼容地址 / `qwen3.7-plus` | Key 空 | 文字-only **不需要** |
+| 语音 Transcription 配置 | Key 空；模型 `qwen3-asr-flash` 等 | Key 空 | 文字-only **不需要** |
+| AI 超时秒 | `45`（0–180） | `45` | 有默认 |
+| 汇率 API / 缓存 TTL | frankfurter / `3600` | 同左 | 外币时相关 |
+| 报告字体路径 | `None` | 空 | 可选 |
+| 日志级别 | **无此配置项** | — | — |
+| Webhook 监听 | 进程内 `0.0.0.0:8000`（Compose 映射 `8000:8000`） | — | WebSocket 仅用于 healthz 时可内网访问 |
+| Compose 应用服务名 | `app` | — | — |
+| 数据库迁移 | 源码 Compose：`alembic upgrade head` 再 uvicorn | — | 自动 |
+| healthz | `GET /healthz` | — | 验收 |
 
-示例值只是占位符。生产部署前必须替换 `replace-me`、`change-me` 和所有示例账号密码。
-Compose 默认读取 `.env`；自动化验证需要使用其他文件时，可以通过 `LARK_LEDGER_ENV_FILE` 显式指定，但生产部署不得直接使用 `.env.example`。
+Compose 默认读取 `.env`；可用 `LARK_LEDGER_ENV_FILE` 指定其他文件。生产**不得**直接把 `.env.example` 当运行配置。
 
-### 多模型配置
+### 多模型配置（扩展）
 
-推荐让不同能力使用独立模型，避免把图片或语音发送给不支持对应输入格式的文字模型：
+需要图片或语音时再填写：
 
 ```dotenv
-LARK_LEDGER_AI_API_KEY=replace-with-deepseek-key
-LARK_LEDGER_AI_BASE_URL=https://api.deepseek.com
-LARK_LEDGER_AI_MODEL=deepseek-v4-flash
-
-LARK_LEDGER_VISION_API_KEY=replace-with-dashscope-key
+LARK_LEDGER_VISION_API_KEY=replace-with-provider-key
 LARK_LEDGER_VISION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LARK_LEDGER_VISION_MODEL=qwen3.7-plus
 
-LARK_LEDGER_TRANSCRIPTION_API_KEY=replace-with-dashscope-key
+LARK_LEDGER_TRANSCRIPTION_API_KEY=replace-with-provider-key
 LARK_LEDGER_TRANSCRIPTION_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LARK_LEDGER_TRANSCRIPTION_MODEL=qwen3-asr-flash
 LARK_LEDGER_TRANSCRIPTION_LANGUAGE=zh
 LARK_LEDGER_TRANSCRIPTION_ENABLE_ITN=true
 ```
 
-视觉模型接收 JPEG、PNG 或 WebP，并使用图片真实格式构造 Base64 Data URL。语音模型接收飞书下载的 OPUS/OGG 等音频，通过千问 ASR 的 Chat Completions 接口转写。图片或语音 Key 为空时，对应功能会返回未配置提示，不会回退到文字模型。
+图片或语音 Key 为空时，对应功能返回未配置提示，**不会**回退到文字模型，也**不会**阻止纯文字记账。
 
-## 长连接模式（WebSocket，推荐）
+---
 
-长连接仅需出站访问飞书和 AI 服务，不需要公网回调地址：
+## PostgreSQL
+
+### 方式 A：开发叠加（最简单）
+
+见上文「一键本地体验」。适合本机试用与个人验证，不适合把 `dev-only-password` 暴露到公网。
+
+### 方式 B：已有 PostgreSQL
+
+由 DBA 或你自己创建独立用户与数据库（**示例密码请替换**；不要把真实密码写进 README 或提交到 Git）：
+
+```sql
+CREATE USER lark_ledger WITH PASSWORD 'replace-with-strong-password';
+CREATE DATABASE lark_ledger OWNER lark_ledger;
+```
+
+连接串形态：
+
+```text
+postgresql+asyncpg://用户名:密码@主机:5432/数据库名
+```
+
+注意：
+
+- 密码或用户名含 `@`、`:`、`/`、`#` 等特殊字符时，必须在 URL 中**百分号编码**。
+- 数据库在宿主机时，容器内不能写容器自己的 `localhost`。Windows / macOS Docker Desktop 常用 `host.docker.internal`；Linux 或远程库请用容器可达的主机名或私网地址。
+- 应用启动（源码 `compose.yaml`）会执行 `alembic upgrade head`；迁移失败则进程退出。
+- **升级生产库前请备份**。本项目不自动创建数据库用户或库。
+- 当前集成测试与 dev 镜像面向 **PostgreSQL 16**；其他大版本请自行验证。
+
+仅启动应用（外部库已就绪）：
+
+```bash
+docker compose up -d --build
+```
+
+---
+
+## 飞书权限
+
+权限**标识名称以飞书开放平台控制台为准**；下列为按代码能力整理的用途说明。若无法与控制台逐字对齐，请在真实控制台核对后再授予。
+
+### 文字-only 必需（用途）
+
+- 接收用户消息（订阅 `im.message.receive_v1`）
+- 以机器人身份回复文本消息
+- 机器人能力开启，并将机器人加入测试会话
+
+### CSV 导出额外需要
+
+- 上传文件资源（代码调用 `POST /open-apis/im/v1/files`）
+- 以**文件消息**回复当前会话（`msg_type=file`）
+
+导出失败时用户会看到发送失败类提示；**v0.2.0 能力集不会自动重试文件投递**。需在真实飞书租户确认文件上传与文件消息权限是否齐全。
+
+### 图片 / 语音扩展额外需要
+
+- 下载消息中的图片 / 文件资源（代码经 `messages/{message_id}/resources/{file_key}`）
+- 消费报告若发送图片卡片，还需要上传图片类能力
+
+### 配置步骤摘要（WebSocket）
+
+1. 创建企业自建应用
+2. 启用机器人能力
+3. 事件与回调选择**长连接**，不填请求地址
+4. 订阅 `im.message.receive_v1`
+5. 添加上文「文字-only」权限
+6. 发布应用版本
+7. 将机器人加入可测试会话
+8. 应用已连接后发送第一条消息
+
+长连接验证通常要求进程已在线。Webhook 步骤见下文。
+
+---
+
+## 长连接模式（WebSocket，推荐首次部署）
+
+- **推荐首次部署**；不需要公网回调 URL
+- 适合 NAS、家庭服务器和内网
+- 仍需服务器**主动出站**访问飞书与 AI API
 
 ```dotenv
 LARK_LEDGER_EVENT_MODE=websocket
@@ -80,21 +242,26 @@ LARK_LEDGER_LARK_APP_ID=cli_xxxxxxxxxxxxx
 LARK_LEDGER_LARK_APP_SECRET=replace-me
 ```
 
-在飞书开放平台的「事件与回调」中选择「使用长连接接收事件」，验证连接后订阅 `im.message.receive_v1` 并发布版本。不要填写请求地址，也不需要 Verification Token 或 Encrypt Key。
+不需要 Verification Token 或 Encrypt Key。
 
-应用启动时会建立连接，断线后自动重连；退出时会关闭连接。`GET /healthz` 的 `long_connection` 可能为：
+`GET /healthz` 中 `long_connection` 可能为：
 
-- `connected`：连接可用
-- `connecting`：正在建立连接
-- `reconnecting`：断线重连中
-- `error`：连接线程异常停止
-- `stopped` 或 `stopping`：应用正在停止
+| 值 | 含义 |
+| --- | --- |
+| `connected` | 连接可用 |
+| `connecting` | 正在建立 |
+| `reconnecting` | 断线重连中 |
+| `error` | 连接线程异常停止 |
+| `stopped` / `stopping` | 应用正在停止 |
+| `disabled` | 当前为 Webhook 模式 |
 
-使用 Uvicorn `--reload` 时，由实际 worker 的生命周期管理连接。不要同时运行多个长期连接实例，除非已经确认事件分发和处理能力符合部署预期。
+使用 Uvicorn `--reload` 时，由实际 worker 生命周期管理连接。不要同时运行多个长期连接实例，除非已确认事件分发符合预期。
 
-## Webhook 模式
+---
 
-Webhook 适合已有公网 HTTPS、反向代理或平台化入口的部署：
+## Webhook 模式（高级 / 生产替代）
+
+Webhook **仍然支持**，适合已有公网 HTTPS、反向代理或平台化入口的部署。它不是废弃路径，只是**不作为**首次快速路径的默认推荐。
 
 ```dotenv
 LARK_LEDGER_EVENT_MODE=webhook
@@ -102,64 +269,88 @@ LARK_LEDGER_LARK_VERIFICATION_TOKEN=replace-me-for-webhook
 LARK_LEDGER_LARK_ENCRYPT_KEY=replace-with-encrypt-key
 ```
 
-在开放平台选择将事件发送至开发者服务器，并配置：
+开放平台事件发送地址：
 
 ```text
 https://你的域名/webhooks/feishu
 ```
 
-服务支持 URL verification、Verification Token 校验、`X-Lark-Signature` 验签和加密事件解密。配置 Encrypt Key 后，飞书后台与 `.env` 中的值必须一致。
+服务支持 URL verification、Verification Token 校验、`X-Lark-Signature` 验签和加密事件解密。配置 Encrypt Key 后，飞书后台与 `.env` 必须一致。
 
-Webhook 在验证来源和请求格式后立即返回，把实际消息处理加入 FastAPI 后台任务。该任务与 Web 进程同生共死，不具备持久队列的重试和故障恢复能力。
+Webhook 在验证来源后尽快返回，实际处理在 FastAPI 后台任务中执行；任务与 Web 进程同生共死，**不具备**持久队列的重试与故障恢复（当前版本整体仍为 claim-first）。
+
+长连接模式下 Webhook 端点返回 404；Webhook 模式下不会启动长连接。
+
+---
 
 ## Docker Compose 部署
 
-复制并填写配置：
+### 源码构建（推荐，在正式 GHCR 发布前）
 
 ```bash
 cp .env.example .env
 docker compose up -d --build
-docker compose logs -f app
-```
-
-应用容器启动时先执行 `alembic upgrade head`，再启动 Uvicorn。数据库迁移失败时应用不会启动；请先检查数据库地址、网络、权限和 TLS 参数。
-
-健康检查：
-
-```bash
-curl http://localhost:8000/healthz
-```
-
-Webhook 模式返回 `long_connection: disabled`；长连接模式返回当前连接状态。健康检查不会回显任何凭据。
-
-### 本地体验数据库
-
-`compose.dev.yaml` 为本地试用增加 PostgreSQL 16、健康检查和命名卷，并覆盖应用的数据库地址：
-
-```bash
-cp .env.example .env
+# 或叠加开发库：
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-docker compose -f compose.yaml -f compose.dev.yaml logs -f app
+docker compose logs -f app
+curl http://127.0.0.1:8000/healthz
 ```
 
-其中的示例数据库密码只允许用于本机开发。删除容器不会删除命名卷；确实不再需要测试数据时，可显式执行 `docker compose -f compose.yaml -f compose.dev.yaml down -v`。
-开发数据库默认只映射到本机 `127.0.0.1:5432`；端口冲突时可设置 `LARK_LEDGER_DEV_POSTGRES_PORT`。
+应用容器启动时先执行 `alembic upgrade head`，再启动 Uvicorn。迁移失败时应用不会启动。
 
-### 使用 GHCR 预构建镜像
+### 使用 GHCR 预构建镜像（可选）
 
-正式版本镜像发布到 `ghcr.io/0verme/larkledger`。镜像本身不会自动修改数据库；首次部署和每次升级应先执行迁移，再启动应用：
+`compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}`。
+
+**诚实说明：**
+
+- 包版本与 `__version__` 当前仍为 `0.1.0`
+- **不要假设** `v0.1.0` 或 `v0.2.0` 镜像一定可 pull，除非你已在干净环境验证
+- **v0.2.0 正式 Tag / Release / GHCR 发布不在本工作包范围**（见实施计划 P09）
+
+若你确认某一标签可用：
 
 ```bash
-cp .env.example .env
+export LARK_LEDGER_IMAGE_TAG=替换为你已验证的标签
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
 ```
 
-没有设置镜像标签时，`compose.image.yaml` 回退到 `latest`；当前 `.env.example` 已示范通过 `LARK_LEDGER_IMAGE_TAG=0.1.0` 固定版本。生产部署应保留这种版本固定方式。升级前请阅读[升级指南](upgrading.md)和[变更日志](../CHANGELOG.md)。
+镜像启动**不会**像源码 `compose.yaml` 那样自动跑迁移；升级请显式 `alembic upgrade head`。详见[升级指南](upgrading.md)。
 
-### 飞牛 NAS 可选更新脚本
+### 飞牛 NAS 可选脚本
 
-`scripts/deploy-fnos.sh` 是面向飞牛 NAS 的可选 Git 更新入口，不是通用安装器。默认目录为 `/vol2/1000/LarkLedger`，可通过 `APP_DIR`、`REPO_URL` 和 `BRANCH` 覆盖；fork 使用者应把 `REPO_URL` 指向自己的仓库。脚本要求工作区位于指定分支、存在 `.env`，并仅执行 fast-forward 拉取。
+`scripts/deploy-fnos.sh` 是面向飞牛 NAS 的可选 Git 更新入口，不是通用安装器。默认目录与 `REPO_URL` 可能需按 fork 修改。
+
+---
+
+## 健康检查与日志
+
+```bash
+docker compose ps
+# 使用 dev 叠加时：
+docker compose -f compose.yaml -f compose.dev.yaml ps
+
+docker compose logs -f app
+curl http://127.0.0.1:8000/healthz
+```
+
+健康检查**不会**回显凭据。排查时不要在工单中粘贴 App Secret、AI Key、数据库密码、完整消息正文。
+
+### 常见问题区分
+
+| 现象 | 优先检查 |
+| --- | --- |
+| 容器未启动 / 反复退出 | `docker compose ps`、`logs`；构建错误或启动命令失败 |
+| PostgreSQL 无法连接 | URL 主机是否容器可达、账号密码、库是否存在、dev 库是否 healthy |
+| Alembic 迁移失败 | 权限、网络、是否连错库、日志中的 migration 错误（升级前应有备份） |
+| WebSocket 未建立 | `EVENT_MODE=websocket`、App ID/Secret、出站网络、healthz 的 `long_connection` |
+| 飞书权限不足 | 是否发布版本、机器人是否在会话中、是否订阅消息事件 |
+| AI API 鉴权失败 | Key、Base URL、模型名是否匹配供应商 |
+| AI 返回格式错误 | 模型是否支持 JSON / 结构化输出；超时是否过短 |
+| CSV 上传失败 | 文件上传与文件消息权限；行数/体积是否超限 |
+
+---
 
 ## 本地开发
 
@@ -175,30 +366,50 @@ alembic upgrade head
 uvicorn lark_ledger.main:app --reload
 ```
 
-本地运行同样需要可访问的 PostgreSQL。若使用长连接，先启动应用，再到开放平台验证连接。
+本地同样需要可访问的 PostgreSQL。长连接模式下先启动应用，再到开放平台验证连接。
+
+---
 
 ## 生产安全
 
-- 将 `.env` 限制为运行 LarkLedger 的操作系统账号可读；Linux 可执行 `chmod 600 .env`。
-- Webhook 必须位于 HTTPS 反向代理之后；长连接模式的 `8000` 端口可只在私网开放用于健康检查。
-- PostgreSQL 仅允许应用所在私网或 VPN 访问，不要暴露到公网；跨越不受信任网络时启用数据库 TLS。
-- AI Key、App Secret、Verification Token 和 Encrypt Key 只通过环境变量或密钥管理服务注入。
-- 日志不得记录环境变量快照、数据库 URL、Authorization 头、完整消息正文、媒体内容或未脱敏的 AI 请求与响应。
-- 定期备份 PostgreSQL，并实际演练恢复流程。备份的访问控制和保留策略应与生产账本一致。
-- 轮换任何曾经出现在聊天、工单、源码或日志中的凭据，不能只从文件中删除。
+- 将 `.env` 限制为运行账号可读；Linux 可 `chmod 600 .env`
+- Webhook 必须位于 HTTPS 反向代理之后；长连接的 `8000` 可仅内网开放用于 healthz
+- PostgreSQL 不要暴露到公网；跨不可信网络时启用数据库 TLS
+- AI Key、App Secret、Verification Token、Encrypt Key 只通过环境变量或密钥管理注入
+- 日志不得记录环境变量快照、数据库 URL、Authorization 头、完整消息正文、媒体内容或未脱敏 AI 响应
+- 定期备份 PostgreSQL 并演练恢复；升级前备份
+- 轮换曾出现在聊天、工单、源码或日志中的凭据
+
+---
+
+## 已知限制（部署视角）
+
+与产品手册一致，部署文档也不使用「可靠投递」「永不丢消息」等措辞：
+
+- 仍采用 **claim-first**：处理失败不会自动重试
+- 入账成功但回复失败不会自动补偿
+- 图片 / 语音 / 批量尚无写入前确认
+- CSV 文件发送失败不会自动重试
+- 无 Web 管理页面、无共享账本
+- JSON 导出不是正式能力
+
+路线主题（**无发布日期承诺**）：
+
+```text
+v0.2.1：可靠投递
+v0.3.0：高风险确认
+```
+
+---
 
 ## 部署验收清单
 
-- [ ] PostgreSQL 使用独立账号和非示例密码，应用能执行 Alembic 迁移。
-- [ ] `.env` 不在 Git 跟踪或暂存列表中，权限仅允许服务账号读取。
-- [ ] 飞书应用只授予消息收发、媒体资源与**文件消息**所需的最小权限（CSV 导出需能上传并发送文件；权限不足时用户会看到发送失败提示）。
-- [ ] 长连接显示 `connected`，或 Webhook URL verification 与验签通过。
-- [ ] `GET /healthz` 返回 `status: ok`，且事件模式与预期一致。
-- [ ] 文本消息可以记账，重复投递同一 `event_id` 不会生成第二条记录。
-- [ ] （可选）发送 `导出本月账单`，手机与电脑均能收到 CSV；Windows Excel 打开中文不乱码。
-- [ ] `午饭1300日元` 能换算成默认币种保存；汇率服务不可用且没有缓存时不会写入账目。
-- [ ] 图片、语音和报告功能使用的 AI 模型及飞书资源权限均已验证。
-- [ ] 使用包含多笔独立交易的支付流水截图验证批量图片记账、部分失败汇总和 30 笔上限提示。
-- [ ] 图片和语音专项 API Key 已分别配置；如复用同一个百炼 Key，两项均已显式填写。
-- [ ] PostgreSQL 无法从公网访问，Webhook（如启用）只通过 HTTPS 暴露。
-- [ ] 已建立数据库备份、恢复和凭据轮换流程。
+- [ ] PostgreSQL 使用独立账号（生产非示例密码），应用能完成 Alembic 迁移
+- [ ] `.env` 不在 Git 跟踪列表，权限仅服务账号可读
+- [ ] `LARK_LEDGER_EVENT_MODE=websocket`（或你明确选择的 webhook）
+- [ ] 飞书文字-only 权限与 `im.message.receive_v1` 已配置并发布版本
+- [ ] `GET /healthz` 为 `status: ok`，长连接为 `connected`（WebSocket）
+- [ ] `午饭32元` 可记账且回复含 `#XXXXX`；`最近10笔` 可核对
+- [ ] （可选）CSV 导出在真实飞书确认文件权限后可用
+- [ ] （可选）图片 / 语音 Key 与资源权限仅在需要时配置并验证
+- [ ] 已建立备份、恢复与凭据轮换流程

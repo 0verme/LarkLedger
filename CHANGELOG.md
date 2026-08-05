@@ -16,6 +16,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 - `EventService` documents and implements an explicit T1 claim / T2 sync-process boundary; duplicate `event_id` delivery behavior is unchanged (still claim-first, no automatic retry).
 - Create / update-last / undo-last success messages include the affected entry short ID.
+- Documentation and `.env.example` converge on a WebSocket + text-only + PostgreSQL quickstart; image/voice/Webhook remain documented extension paths. Runtime `Settings.event_mode` default remains `webhook` unless `.env` sets `websocket`.
 
 ### Security
 

@@ -2,30 +2,179 @@
 
 [English](README.en.md) | 简体中文
 
-> 自托管的飞书 / Lark AI 记账机器人。通过文字、语音、小票照片或支付截图完成记账、查询、修改、撤销、分类月预算和消费报告。
+> 自托管的飞书 / Lark AI 记账机器人。账本保存在你自己的 PostgreSQL 中；大模型只负责把消息变成经过严格校验的业务动作。
 
 [![CI](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把消息转换成经过严格校验的业务动作：它拿不到数据库连接，不能生成或执行 SQL，所有读写都由项目中预先定义的参数化查询完成。
+## 当前能力（main / 未发布 v0.2.0 能力集）
 
-## 功能
-
-- 文字、语音、图片和图文富文本记账：`昨天打车38.5`、`工资到账10000`
-- 复杂文字批量记账：一条消息可处理最多 30 笔收支，并可同时设置最多 10 项预算
-- 文字 + 图片记账：一条飞书富文本可附加说明并包含最多 5 张账单图片
-- 批量图片记账：从支付流水截图中逐笔校验并记录最多 30 笔独立交易
-- 修改或撤销最近一笔：`上一笔改成8块`、`撤销刚才那笔`
-- 外币金额约算：`午饭1300日元`、`上一笔改成20美元`
-- 按时间、收支方向和分类汇总：`这个月餐饮花了多少`
-- 分类月预算：支持一条消息批量设置最多 10 项，达到 80% 和 100% 时分别提醒一次
-- 消费报告：展示分类占比、支出趋势、收支对比和消费建议
-- 多用户隔离：所有账目操作都以飞书用户 `open_id` 为边界
-- 事件幂等：按飞书 `event_id` 去重，避免重复投递造成重复记账
+- **文字记账**，成功回复含用户内唯一五位短 ID（`#XXXXX`）
+- **最近账目 / 单笔详情**（例如 `最近10笔`、`查看 #XXXXX`）
+- **按短 ID 修改、软删除与恢复**（另保留「上一笔」快捷方式）
+- **CSV 导出**本人账目（飞书文件消息；需额外文件权限）
+- 汇总、分类月预算、消费报告
+- 图片 / 语音记账（扩展能力，快速路径不要求）
+- 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
 - 自托管：FastAPI、PostgreSQL、Docker Compose
 
-完整使用示例与限制见[飞账用户手册](docs/help.md)。
+完整消息示例见[用户手册](docs/help.md)。
+
+## 适合谁
+
+- 技术用户，能配置 Docker 与 PostgreSQL
+- 重度飞书用户，希望**自托管**个人账本
+- 首次部署只想尽快完成**一笔纯文字记账**
+
+不适合：需要 Web 管理页、共享账本、可靠自动重试（见下方限制与路线）。
+
+## 快速开始（推荐）
+
+主路径：**WebSocket 长连接 + 文字-only + PostgreSQL + Docker Compose**。
+
+不需要公网回调 URL；服务器仍需能**主动访问**飞书开放平台与文字 AI API。
+
+```text
+已有 Docker
+→ 创建飞书自建应用（机器人 + 长连接 + 消息事件）
+→ 准备 PostgreSQL（推荐 compose.dev 一键体验）
+→ 填写最小 .env
+→ docker compose 启动
+→ 检查 healthz 与日志
+→ 飞书发送「午饭32元」
+→ 收到含 #XXXXX 的记账回复
+→ 发送「最近10笔」核对
+```
+
+### 1. 复制环境变量
+
+```bash
+cp .env.example .env
+```
+
+Windows PowerShell：`Copy-Item .env.example .env`
+
+### 2. 填写最小必填项
+
+文字-only 快速路径只需：
+
+```dotenv
+LARK_LEDGER_EVENT_MODE=websocket
+LARK_LEDGER_DATABASE_URL=postgresql+asyncpg://lark_ledger:change-me@db:5432/lark_ledger
+LARK_LEDGER_LARK_APP_ID=cli_xxxxxxxxxxxxx
+LARK_LEDGER_LARK_APP_SECRET=replace-me
+LARK_LEDGER_AI_API_KEY=replace-me
+LARK_LEDGER_AI_BASE_URL=https://api.deepseek.com
+LARK_LEDGER_AI_MODEL=deepseek-v4-flash
+```
+
+说明：
+
+| 项 | 说明 |
+| --- | --- |
+| `EVENT_MODE` | **请在 `.env` 显式设为 `websocket`**。代码运行时默认仍是 `webhook`，与推荐路径不同 |
+| `DATABASE_URL` | 使用 `compose.dev.yaml` 时，Compose 会覆盖为开发库地址；自备库时改为容器可达的 URL |
+| 文字 AI | 代码默认指向 OpenAI 兼容地址；示例推荐 DeepSeek，请按你的服务填写 |
+| 图片 / 语音 Key | **文字-only 不需要**。留空只禁用对应能力 |
+| Webhook 验签 | 长连接**不需要** Verification Token / Encrypt Key |
+
+有安全默认值、通常不必改：`TIMEZONE=Asia/Shanghai`、`CURRENCY=CNY`。完整变量表见[环境与部署指南](docs/environment.md)。
+
+### 3. 准备 PostgreSQL
+
+**推荐（本地 / 个人试用）：** 使用开发叠加文件同时启动应用与 PostgreSQL 16：
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+```
+
+- 开发库账号密码仅用于本机或个人测试，**不要**当作互联网生产密码
+- 数据在命名卷 `lark_ledger_dev_pgdata`；`down` 默认保留数据，彻底清理用 `down -v`
+- 库端口默认映射到本机 `127.0.0.1:5432`，冲突时可设 `LARK_LEDGER_DEV_POSTGRES_PORT`
+
+**已有 PostgreSQL：** 创建低权限用户与库（示例，请替换密码），再把 `LARK_LEDGER_DATABASE_URL` 指过去，并用：
+
+```bash
+docker compose up -d --build
+```
+
+SQL 示例与 URL 注意事项见[环境与部署指南 · PostgreSQL](docs/environment.md#postgresql)。
+
+### 4. 配置飞书应用（文字-only）
+
+1. 在[飞书开放平台](https://open.feishu.cn/app)创建**企业自建应用**，开启**机器人**能力
+2. 事件与回调：选择**使用长连接接收事件**（不要填请求地址）
+3. 订阅 `im.message.receive_v1`（接收消息）
+4. 申请**接收消息 / 发送消息**等文字对话所需最小权限（权限标识请在控制台与[飞书文档](https://open.feishu.cn/document/)核对）
+5. **发布应用版本**使配置生效
+6. 将机器人加入可测试的单聊或群；群聊中需 `@机器人`
+7. 应用进程已启动并建立长连接后，再在控制台点击连接验证（如需要）
+
+CSV 导出、图片、语音所需权限见[环境与部署指南 · 飞书权限](docs/environment.md#飞书权限)。
+
+### 5. 启动后检查
+
+```bash
+docker compose -f compose.yaml -f compose.dev.yaml ps
+docker compose -f compose.yaml -f compose.dev.yaml logs -f app
+curl http://127.0.0.1:8000/healthz
+```
+
+仅使用 `compose.yaml` 时，去掉 `-f compose.dev.yaml` 即可。服务名是 `app`，宿主机端口默认 **8000**。
+
+源码 Compose 启动命令会先执行 `alembic upgrade head` 再启动 Uvicorn；迁移失败则应用不会起来。
+
+长连接正常时，健康检查类似：
+
+```json
+{"status":"ok","event_mode":"websocket","long_connection":"connected"}
+```
+
+`connecting` / `reconnecting` 表示尚未就绪或正在重连。
+
+### 6. 第一笔账验收
+
+在飞书中依次发送（将 `#XXXXX` 换成机器人**实际返回**的短 ID）：
+
+| 你发送 | 预期 |
+| --- | --- |
+| `午饭32元` | 成功记账回复，含五位短 ID，如 `#A83F2` |
+| `最近10笔` | 列表中能看到刚才那笔 |
+| `查看 #XXXXX` | 单笔详情（金额、分类、时间等） |
+| `把 #XXXXX 改成35元` | 金额变为 35 |
+| `删除 #XXXXX` | 软删除；列表默认不再显示 |
+| `恢复 #XXXXX` | 恢复后可再次出现在列表中 |
+| `导出最近90天账单` | 收到 CSV 文件消息（**需额外确认飞书文件上传与文件消息权限**；本仓库未宣称已在真实飞书完成该验收） |
+
+## 事件接入方式
+
+| 模式 | 定位 | 公网 HTTPS | 额外凭据 |
+| --- | --- | --- | --- |
+| **WebSocket 长连接（推荐首次部署）** | NAS、家庭服务器、内网 | 不需要 | App ID / Secret |
+| **Webhook（高级 / 生产替代）** | 已有公网入口或反向代理 | 需要 | Verification Token；推荐 Encrypt Key |
+
+Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[环境与部署指南](docs/environment.md)。Webhook 仍是正式支持路径，并非废弃。
+
+## 已知限制（诚实边界）
+
+当前仍为 **claim-first** 同步处理，**不要**理解为可靠投递：
+
+- 事件领取后处理失败**不会**自动重试
+- 入账成功但回复失败**不会**自动补偿
+- 图片 / 语音 / 批量尚无写入前确认
+- CSV 文件发送失败**不会**自动重试
+- 无 Web 管理页面、无共享账本
+- JSON 导出**不是**正式能力（当前仅 CSV）
+
+路线（无具体发布日期承诺）：
+
+```text
+v0.2.1：可靠投递（状态机 / Worker / Outbox）
+v0.3.0：高风险确认（图片、语音、批量等）
+```
+
+镜像与版本：仓库代码版本号仍为 `0.1.0`；**v0.2.0 尚未正式 Tag / Release / 保证可 pull 的 GHCR 镜像**。请优先用本仓库源码 `docker compose ... --build` 部署。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -35,95 +184,7 @@ LarkLedger 将账本保存在你自己的 PostgreSQL 中。大模型只负责把
 | 小票识别 | 复杂文字批量记账 |
 | ![识别超市小票并记录消费](docs/assets/receipt-bookkeeping.png) | ![从一段自然语言中识别多笔收支](docs/assets/text-batch-bookkeeping.png) |
 
-以上截图使用已获准公开的脱敏数据。识别结果仍应以机器人确认回复为准。
-
-## 快速体验：自带 PostgreSQL
-
-用于本地试用时，可以让 Compose 同时启动应用和 PostgreSQL 16：
-
-```bash
-cp .env.example .env
-docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-curl http://localhost:8000/healthz
-```
-
-Windows PowerShell 可使用 `Copy-Item .env.example .env`。启动前仍需在 `.env` 中填写飞书应用和至少一个文字 AI 服务的测试凭据。开发数据库使用示例账号和命名卷，仅用于本地体验；生产环境继续使用独立 PostgreSQL。
-
-## 生产部署：长连接模式（WebSocket）
-
-长连接无需公网域名、HTTPS 回调或内网穿透，适合个人服务器、NAS 和本地开发。当前 `compose.yaml` 只启动 LarkLedger 应用；开始前请准备一个应用容器可以访问的 PostgreSQL 数据库。
-
-### 1. 准备 PostgreSQL
-
-创建独立数据库和低权限用户，并记下 SQLAlchemy 异步连接地址：
-
-```text
-postgresql+asyncpg://用户名:密码@数据库主机:5432/数据库名
-```
-
-数据库在宿主机上时，容器内不能用 `localhost` 访问它。Windows 和 macOS 通常可使用 `host.docker.internal`；Linux 或远程数据库请填写容器可达的主机名或私网地址。
-
-### 2. 配置应用
-
-```bash
-cp .env.example .env
-```
-
-Windows PowerShell 可使用 `Copy-Item .env.example .env`。至少修改以下配置：
-
-```dotenv
-LARK_LEDGER_EVENT_MODE=websocket
-LARK_LEDGER_DATABASE_URL=postgresql+asyncpg://用户名:密码@数据库主机:5432/数据库名
-LARK_LEDGER_LARK_APP_ID=cli_xxxxxxxxxxxxx
-LARK_LEDGER_LARK_APP_SECRET=replace-me
-LARK_LEDGER_AI_API_KEY=replace-me
-LARK_LEDGER_VISION_API_KEY=replace-with-dashscope-key
-LARK_LEDGER_TRANSCRIPTION_API_KEY=replace-with-dashscope-key
-```
-
-长连接模式不需要 `LARK_LEDGER_LARK_VERIFICATION_TOKEN` 或 `LARK_LEDGER_LARK_ENCRYPT_KEY`。文字、图片和语音使用独立的 API 配置：文字模型负责解析消息和生成建议，视觉模型负责图片记账，ASR 模型先把语音转为文字。图片或语音 Key 未配置时，仅禁用对应功能，不影响文字记账。
-
-### 3. 配置飞书应用
-
-1. 在[飞书开放平台](https://open.feishu.cn/app)创建企业自建应用并开启机器人能力。
-2. 添加接收消息、发送消息，以及获取和上传图片或文件资源所需的最小权限。
-3. 在「事件与回调」选择「使用长连接接收事件」，然后点击验证。
-4. 订阅 `im.message.receive_v1`（接收消息 v2.0）。
-5. 发布应用版本，并将机器人加入需要使用的会话。
-
-长连接模式不要填写请求地址。只有在应用已经运行并建立连接后，开放平台的连接验证才会成功。
-
-### 4. 启动并检查
-
-```bash
-docker compose up -d --build
-curl http://localhost:8000/healthz
-```
-
-容器启动时会先执行 `alembic upgrade head`。长连接正常时，健康检查类似：
-
-```json
-{"status":"ok","event_mode":"websocket","long_connection":"connected"}
-```
-
-`connecting` 或 `reconnecting` 表示连接尚未就绪或正在重连。查看日志可使用 `docker compose logs -f app`。
-
-## 事件接入方式
-
-| 模式 | 适用场景 | 公网 HTTPS | 飞书回调凭据 | 配置值 |
-| --- | --- | --- | --- | --- |
-| 长连接模式（WebSocket，推荐） | 本地、NAS、家庭服务器 | 不需要 | 不需要 Verification Token / Encrypt Key | `websocket` |
-| Webhook | 已有公网入口、反向代理或平台化部署 | 需要 | Verification Token；推荐 Encrypt Key | `webhook` |
-
-切换到 Webhook 时，将 `LARK_LEDGER_EVENT_MODE` 设为 `webhook`，配置 Verification Token，并在飞书开放平台把事件发送到：
-
-```text
-https://你的域名/webhooks/feishu
-```
-
-推荐同时配置 Encrypt Key。服务会校验 `X-Lark-Signature`、解密加密事件并处理 URL verification。Webhook 模式下长连接不会启动；长连接模式下 Webhook 端点返回 404。
-
-两种入口共用同一套 `event_id` 幂等、消息解析、账本操作和回复流程。详细配置、生产部署与安全检查见[环境与部署指南](docs/environment.md)。
+以上截图使用已获准公开的脱敏数据。识别结果以机器人确认回复为准。
 
 ## 安全边界
 
@@ -135,11 +196,11 @@ https://你的域名/webhooks/feishu
                               固定业务动作 → SQLAlchemy → PostgreSQL
 ```
 
-AI 只能返回预定义的记账、修改、撤销、汇总、报告、预算管理或帮助动作。消费建议只接收分类、趋势和收支总额等聚合数据，不接收逐笔备注或用户标识。更多设计细节见[架构说明](docs/architecture.md)。
+AI 不能访问数据库，也不能生成或执行 SQL。更多设计见[架构说明](docs/architecture.md)。
 
 ## 本地开发
 
-需要 Python 3.11+。可使用已有 PostgreSQL，或通过 `compose.dev.yaml` 启动开发数据库：
+需要 Python 3.11+ 与可访问的 PostgreSQL：
 
 ```bash
 python -m venv .venv
@@ -152,7 +213,7 @@ alembic upgrade head
 uvicorn lark_ledger.main:app --reload
 ```
 
-提交前运行：
+提交前：
 
 ```bash
 ruff check .
@@ -160,29 +221,15 @@ mypy src
 pytest --cov
 ```
 
-开发流程和设计原则见[贡献指南](CONTRIBUTING.md)。
-
 ## 文档
 
-- [用户手册](docs/help.md)：消息示例、预算和报告、使用限制、常见问题
-- [环境与部署指南](docs/environment.md)：完整配置、两种事件模式、生产安全检查
-- [架构说明](docs/architecture.md)：组件、数据流、信任边界和当前运行限制
-- [飞书多维表格存储方案提案](docs/bitable-storage-proposal.md)：低门槛存储的适用场景、技术边界和实施路线
-- [贡献指南](CONTRIBUTING.md)：开发环境、质量检查和提交要求
-- [安全策略](SECURITY.md)：漏洞报告和部署安全建议
-- [升级指南](docs/upgrading.md)：版本固定、数据库迁移和回滚前检查
-- [变更日志](CHANGELOG.md)：各版本面向部署者的变化
-- [English README](README.en.md)：英文项目介绍和部署入口
-
-## 当前限制
-
-- 普通文字可在一条消息中新增最多 30 笔账并同时设置最多 10 项预算；单笔支付详情和
-  小票不会按商品拆成多笔记录，支付流水截图可新增最多 30 笔。
-- 修改上一笔、撤销、查询和报告不能混入批量记账消息，需要单独发送。
-- 只能修改或撤销当前用户最近一笔未撤销记录，不能搜索任意历史记录。
-- 后台处理任务运行在 Web 进程内，不是持久队列；高可用或高吞吐部署需另行接入任务队列。
-- 暂不支持用户自定义分类、个人时区/币种、JSON/Excel 导出、共享账本；CSV 导出见用户手册。
-- 外币仅在新增、修改上一笔和设置预算时按最新参考汇率换算；汇总与报告不支持切换展示币种。
+- [用户手册](docs/help.md)：消息示例、预算、报告、限制、FAQ
+- [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
+- [架构说明](docs/architecture.md)
+- [升级指南](docs/upgrading.md)
+- [变更日志](CHANGELOG.md)
+- [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
+- [English README](README.en.md)
 
 ## License
 
