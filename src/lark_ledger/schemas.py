@@ -16,6 +16,9 @@ class Action(StrEnum):
     UNDO_LAST = "undo_last"
     LIST_ENTRIES = "list_entries"
     GET_ENTRY = "get_entry"
+    UPDATE_ENTRY = "update_entry"
+    DELETE_ENTRY = "delete_entry"
+    RESTORE_ENTRY = "restore_entry"
     SUMMARY = "summary"
     REPORT = "report"
     SET_BUDGET = "set_budget"
@@ -79,11 +82,13 @@ class ParsedCommand(BaseModel):
     )
     batch_truncated: bool = False
     budgets_truncated: bool = False
-    # Chat short-ID reference (optional leading #); used by get_entry / list cursor.
+    # Chat short-ID reference (optional leading #); used by get/update/delete/restore.
     entry_ref: str | None = Field(default=None, max_length=16)
     before_entry_ref: str | None = Field(default=None, max_length=16)
     # Upper bound is enforced in LedgerService (cap + user notice), not Schema max.
     limit: int | None = Field(default=None, ge=1, le=100)
+    # Distinguish "note not provided" (False) from explicit clear (True).
+    clear_note: bool = False
 
     @field_validator("currency")
     @classmethod
@@ -172,6 +177,8 @@ class ParsedCommand(BaseModel):
         if self.action is Action.GET_ENTRY:
             if self.entry_ref is None or not str(self.entry_ref).strip():
                 raise ValueError("get_entry requires entry_ref")
+            if self.clear_note:
+                raise ValueError("get_entry does not accept clear_note")
             if any(
                 value is not None
                 for value in (
@@ -190,15 +197,65 @@ class ParsedCommand(BaseModel):
                 )
             ):
                 raise ValueError("get_entry only accepts entry_ref")
+        if self.action is Action.UPDATE_ENTRY:
+            if self.entry_ref is None or not str(self.entry_ref).strip():
+                raise ValueError("update_entry requires entry_ref")
+            changed_fields = (
+                self.amount,
+                self.direction,
+                self.category,
+                self.note,
+                self.occurred_at,
+            )
+            if all(value is None for value in changed_fields) and not self.clear_note:
+                raise ValueError("update_entry requires at least one changed field")
+            if self.range_start is not None or self.range_end is not None:
+                raise ValueError("update_entry does not accept range filters")
+            if self.limit is not None or self.before_entry_ref is not None:
+                raise ValueError("update_entry does not accept list pagination fields")
+            if self.entries is not None or self.budgets is not None:
+                raise ValueError("update_entry does not accept batch fields")
+            if self.clear_note and self.note is not None:
+                raise ValueError("clear_note cannot be combined with note")
+        if self.action in {Action.DELETE_ENTRY, Action.RESTORE_ENTRY}:
+            if self.entry_ref is None or not str(self.entry_ref).strip():
+                raise ValueError(f"{self.action} requires entry_ref")
+            if self.clear_note:
+                raise ValueError(f"{self.action} does not accept clear_note")
+            if any(
+                value is not None
+                for value in (
+                    self.amount,
+                    self.currency,
+                    self.direction,
+                    self.category,
+                    self.note,
+                    self.occurred_at,
+                    self.range_start,
+                    self.range_end,
+                    self.limit,
+                    self.before_entry_ref,
+                    self.entries,
+                    self.budgets,
+                )
+            ):
+                raise ValueError(f"{self.action} only accepts entry_ref")
         if self.action is Action.UPDATE_LAST and all(
             value is None
             for value in (self.amount, self.direction, self.category, self.note, self.occurred_at)
-        ):
+        ) and not self.clear_note:
             raise ValueError("update_last requires at least one changed field")
+        if self.action is Action.UPDATE_LAST and self.clear_note and self.note is not None:
+            raise ValueError("clear_note cannot be combined with note")
         if self.currency is not None:
             if self.amount is None:
                 raise ValueError("currency requires amount")
-            if self.action not in {Action.CREATE, Action.UPDATE_LAST, Action.SET_BUDGET}:
+            if self.action not in {
+                Action.CREATE,
+                Action.UPDATE_LAST,
+                Action.UPDATE_ENTRY,
+                Action.SET_BUDGET,
+            }:
                 raise ValueError(f"currency is not supported for {self.action}")
         if self.action is Action.SET_BUDGET:
             missing = [name for name in ("amount", "category") if getattr(self, name) is None]
@@ -213,11 +270,24 @@ class ParsedCommand(BaseModel):
             raise ValueError("budgets is only supported for set_budgets")
         if self.action is Action.DELETE_BUDGET and self.category is None:
             raise ValueError("delete_budget requires category")
-        if self.action not in {Action.LIST_ENTRIES, Action.GET_ENTRY}:
+        entry_ref_actions = {
+            Action.LIST_ENTRIES,
+            Action.GET_ENTRY,
+            Action.UPDATE_ENTRY,
+            Action.DELETE_ENTRY,
+            Action.RESTORE_ENTRY,
+        }
+        if self.action not in entry_ref_actions:
             if self.entry_ref is not None or self.before_entry_ref is not None:
-                raise ValueError("entry_ref fields are only supported for list/get entry actions")
+                raise ValueError("entry_ref fields are only supported for entry lookup/mutation")
             if self.limit is not None:
                 raise ValueError("limit is only supported for list_entries")
+        elif self.action is not Action.LIST_ENTRIES and self.limit is not None:
+            raise ValueError("limit is only supported for list_entries")
+        elif self.action is not Action.LIST_ENTRIES and self.before_entry_ref is not None:
+            raise ValueError("before_entry_ref is only supported for list_entries")
+        if self.clear_note and self.action not in {Action.UPDATE_LAST, Action.UPDATE_ENTRY}:
+            raise ValueError("clear_note is only supported for update actions")
         return self
 
 

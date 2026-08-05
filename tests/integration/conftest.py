@@ -26,16 +26,16 @@ async def postgres_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE TABLE budget_alerts, category_budgets, ledger_entries, "
-                "processed_events CASCADE"
+                "TRUNCATE TABLE budget_alerts, category_budgets, "
+                "ledger_entry_revisions, ledger_entries, processed_events CASCADE"
             )
         )
     yield engine
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE TABLE budget_alerts, category_budgets, ledger_entries, "
-                "processed_events CASCADE"
+                "TRUNCATE TABLE budget_alerts, category_budgets, "
+                "ledger_entry_revisions, ledger_entries, processed_events CASCADE"
             )
         )
     await engine.dispose()

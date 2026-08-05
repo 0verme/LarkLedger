@@ -11,7 +11,17 @@ from pydantic import ValidationError
 from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from lark_ledger.models import BudgetAlert, CategoryBudget, Direction, LedgerEntry
+from lark_ledger.entry_revisions import (
+    RevisionChangeType,
+    snapshot_ledger_entry,
+)
+from lark_ledger.models import (
+    BudgetAlert,
+    CategoryBudget,
+    Direction,
+    LedgerEntry,
+    LedgerEntryRevision,
+)
 from lark_ledger.schemas import (
     DEFAULT_LIST_LIMIT,
     MAX_BATCH_BUDGETS,
@@ -36,6 +46,8 @@ from lark_ledger.short_id import (
     normalize_entry_ref,
 )
 
+_NOT_FOUND_MSG = "未找到该账目，或该账目不属于当前用户。"
+
 MAX_MONEY = Decimal("999999999999.99")
 logger = logging.getLogger(__name__)
 
@@ -54,10 +66,10 @@ HELP_TEXT = (
     "我可以帮你记账、修改、撤销、查看账单、汇总、设置预算和生成消费报告。试试：\n"
     "• 午饭32\n• 昨天打车38.5\n• 工资到账10000\n"
     "• 早餐12，午饭32，打车45，餐饮预算1000\n"
-    "• 最近10笔\n• 查看 #A83F2\n• 查看 #A83F2 之前的10笔\n"
-    "• 上一笔改成8块\n• 这个月餐饮花了多少\n"
-    "• 撤销刚才那笔\n• 交通预算500，人情往来预算1000\n• 查看预算\n"
-    "• 生成这个月的消费图表"
+    "• 最近10笔\n• 查看 #A83F2\n• 把 #A83F2 改成35元\n"
+    "• 删除 #A83F2\n• 恢复 #A83F2\n• 上一笔改成8块\n"
+    "• 这个月餐饮花了多少\n• 撤销刚才那笔\n"
+    "• 交通预算500，人情往来预算1000\n• 查看预算\n• 生成这个月的消费图表"
 )
 NOTE_PREVIEW_LEN = 20
 
@@ -118,6 +130,12 @@ class LedgerService:
             return await self._list_entries(user_open_id, command)
         if command.action is Action.GET_ENTRY:
             return await self._get_entry(user_open_id, command)
+        if command.action is Action.UPDATE_ENTRY:
+            return await self._update_entry(user_open_id, command)
+        if command.action is Action.DELETE_ENTRY:
+            return await self._delete_entry(user_open_id, command)
+        if command.action is Action.RESTORE_ENTRY:
+            return await self._restore_entry(user_open_id, command)
         if command.action is Action.SUMMARY:
             return await self._summary(user_open_id, command)
         if command.action is Action.REPORT:
@@ -490,39 +508,232 @@ class LedgerService:
     async def _update_last(
         self, user_open_id: str, command: ParsedCommand
     ) -> ExecutionResult:
-        entry = (await self.session.execute(self._latest_query(user_open_id))).scalar_one_or_none()
+        entry = await self._find_latest_for_mutation(user_open_id)
         if entry is None:
             return ExecutionResult(message="还没有可以修改的记录。")
+        return await self._apply_entry_update(user_open_id, entry, command)
+
+    async def _undo_last(self, user_open_id: str) -> ExecutionResult:
+        entry = await self._find_latest_for_mutation(user_open_id)
+        if entry is None:
+            return ExecutionResult(message="还没有可以撤销的记录。")
+        return await self._apply_entry_delete(user_open_id, entry, last_style=True)
+
+    async def _update_entry(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        assert command.entry_ref is not None
+        try:
+            short_id = normalize_entry_ref(command.entry_ref)
+        except ShortIdError:
+            return ExecutionResult(
+                message="短 ID 格式无效。请使用五位编号，例如：把 #A83F2 改成35元"
+            )
+        entry = await self._find_entry_for_mutation(user_open_id, short_id)
+        if entry is None:
+            return ExecutionResult(message=_NOT_FOUND_MSG)
+        if entry.deleted_at is not None:
+            return ExecutionResult(
+                message=(
+                    f"{format_entry_ref(entry.short_id)} 已删除，请先恢复后再修改。"
+                )
+            )
+        return await self._apply_entry_update(user_open_id, entry, command)
+
+    async def _delete_entry(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        assert command.entry_ref is not None
+        try:
+            short_id = normalize_entry_ref(command.entry_ref)
+        except ShortIdError:
+            return ExecutionResult(message="短 ID 格式无效。请使用五位编号，例如：删除 #A83F2")
+        entry = await self._find_entry_for_mutation(user_open_id, short_id)
+        if entry is None:
+            return ExecutionResult(message=_NOT_FOUND_MSG)
+        return await self._apply_entry_delete(user_open_id, entry, last_style=False)
+
+    async def _restore_entry(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        assert command.entry_ref is not None
+        try:
+            short_id = normalize_entry_ref(command.entry_ref)
+        except ShortIdError:
+            return ExecutionResult(message="短 ID 格式无效。请使用五位编号，例如：恢复 #A83F2")
+        entry = await self._find_entry_for_mutation(user_open_id, short_id)
+        if entry is None:
+            return ExecutionResult(message=_NOT_FOUND_MSG)
+        return await self._apply_entry_restore(user_open_id, entry)
+
+    async def _find_latest_for_mutation(self, user_open_id: str) -> LedgerEntry | None:
+        query = self._latest_query(user_open_id)
+        if self._supports_for_update():
+            query = query.with_for_update()
+        return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def _find_entry_for_mutation(
+        self, user_open_id: str, short_id: str
+    ) -> LedgerEntry | None:
+        query = select(LedgerEntry).where(
+            LedgerEntry.user_open_id == user_open_id,
+            LedgerEntry.short_id == short_id,
+        )
+        if self._supports_for_update():
+            query = query.with_for_update()
+        return (await self.session.execute(query.limit(1))).scalar_one_or_none()
+
+    def _supports_for_update(self) -> bool:
+        bind = self.session.get_bind()
+        return bind is not None and bind.dialect.name == "postgresql"
+
+    async def _apply_entry_update(
+        self,
+        user_open_id: str,
+        entry: LedgerEntry,
+        command: ParsedCommand,
+    ) -> ExecutionResult:
+        before = snapshot_ledger_entry(entry)
         converted = (
             await self._convert_command_amount(command) if command.amount is not None else None
         )
-        if converted is not None:
+        changed = False
+        if converted is not None and entry.amount != converted.amount:
             entry.amount = converted.amount
-        for field in ("direction", "category", "note", "occurred_at"):
-            value = getattr(command, field)
-            if value is not None:
-                setattr(entry, field, value)
+            changed = True
+        if command.direction is not None and entry.direction != command.direction:
+            entry.direction = command.direction
+            changed = True
+        if command.category is not None and entry.category != command.category:
+            entry.category = command.category
+            changed = True
+        if command.clear_note:
+            if entry.note != "":
+                entry.note = ""
+                changed = True
+        elif command.note is not None and entry.note != command.note:
+            entry.note = command.note
+            changed = True
+        if command.occurred_at is not None and entry.occurred_at != command.occurred_at:
+            entry.occurred_at = command.occurred_at
+            changed = True
+        if not changed:
+            return ExecutionResult(
+                message=f"{format_entry_ref(entry.short_id)} 没有变化，无需修改。"
+            )
+
         budget_alert = await self._check_budget(entry)
+        await self.session.flush()
+        await self.session.refresh(entry)
+        after = snapshot_ledger_entry(entry)
+        self._add_revision(
+            user_open_id=user_open_id,
+            entry=entry,
+            change_type=RevisionChangeType.UPDATE,
+            before=before,
+            after=after,
+        )
         await self.session.commit()
         conversion = self._conversion_note(converted) if converted is not None else ""
+        sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
+        note = f" · {entry.note}" if entry.note else ""
         return ExecutionResult(
             message=(
-                f"已修改 {format_entry_ref(entry.short_id)}："
-                f"{self._format_money(entry.amount)}{conversion} · {entry.category}"
+                f"已修改 {format_entry_ref(entry.short_id)}：\n"
+                f"{sign} {self._format_money(entry.amount)}{conversion} · "
+                f"{entry.category}{note}"
             ),
             budget_alert=budget_alert,
         )
 
-    async def _undo_last(self, user_open_id: str) -> ExecutionResult:
-        entry = (await self.session.execute(self._latest_query(user_open_id))).scalar_one_or_none()
-        if entry is None:
-            return ExecutionResult(message="还没有可以撤销的记录。")
+    async def _apply_entry_delete(
+        self,
+        user_open_id: str,
+        entry: LedgerEntry,
+        *,
+        last_style: bool,
+    ) -> ExecutionResult:
+        if entry.deleted_at is not None:
+            if last_style:
+                return ExecutionResult(
+                    message=f"{format_entry_ref(entry.short_id)} 已经处于删除状态。"
+                )
+            return ExecutionResult(
+                message=f"{format_entry_ref(entry.short_id)} 已经处于删除状态。"
+            )
+        before = snapshot_ledger_entry(entry)
         entry.deleted_at = datetime.now(UTC)
+        await self.session.flush()
+        await self.session.refresh(entry)
+        after = snapshot_ledger_entry(entry)
+        self._add_revision(
+            user_open_id=user_open_id,
+            entry=entry,
+            change_type=RevisionChangeType.DELETE,
+            before=before,
+            after=after,
+        )
         await self.session.commit()
+        if last_style:
+            return ExecutionResult(
+                message=(
+                    f"已撤销 {format_entry_ref(entry.short_id)}："
+                    f"{self._format_money(entry.amount)} · {entry.category}"
+                )
+            )
         return ExecutionResult(
             message=(
-                f"已撤销 {format_entry_ref(entry.short_id)}："
-                f"{self._format_money(entry.amount)} · {entry.category}"
+                f"已删除 {format_entry_ref(entry.short_id)}。\n"
+                f"如需找回，请发送：恢复 {format_entry_ref(entry.short_id)}"
+            )
+        )
+
+    async def _apply_entry_restore(
+        self, user_open_id: str, entry: LedgerEntry
+    ) -> ExecutionResult:
+        if entry.deleted_at is None:
+            return ExecutionResult(
+                message=f"{format_entry_ref(entry.short_id)} 当前未被删除，无需恢复。"
+            )
+        before = snapshot_ledger_entry(entry)
+        entry.deleted_at = None
+        await self.session.flush()
+        await self.session.refresh(entry)
+        after = snapshot_ledger_entry(entry)
+        self._add_revision(
+            user_open_id=user_open_id,
+            entry=entry,
+            change_type=RevisionChangeType.RESTORE,
+            before=before,
+            after=after,
+        )
+        await self.session.commit()
+        sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
+        note = f" · {entry.note}" if entry.note else ""
+        return ExecutionResult(
+            message=(
+                f"已恢复 {format_entry_ref(entry.short_id)}：\n"
+                f"{sign} {self._format_money(entry.amount)} · {entry.category}{note}"
+            )
+        )
+
+    def _add_revision(
+        self,
+        *,
+        user_open_id: str,
+        entry: LedgerEntry,
+        change_type: RevisionChangeType,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> None:
+        self.session.add(
+            LedgerEntryRevision(
+                entry_id=entry.id,
+                user_open_id=user_open_id,
+                short_id=entry.short_id,
+                change_type=change_type.value,
+                before_json=before,
+                after_json=after,
             )
         )
 

@@ -254,7 +254,7 @@ def test_deterministic_entry_commands() -> None:
 
     multi = try_parse_deterministic_entry_command("查看 #AAAAA 和 #BBBBB")
     assert isinstance(multi, str)
-    assert "一次只能查看一个" in multi
+    assert "一次只能操作一个" in multi
 
     assert try_parse_deterministic_entry_command("最近10笔") is None
 

@@ -54,3 +54,9 @@ PowerShell 使用 `$env:LARK_LEDGER_IMAGE_TAG = "0.1.0"`。
 - **升级：** 为 `ledger_entries` 增加 `short_id`（五位 Crockford Base32），回填存量行，并建立 `UNIQUE (user_open_id, short_id)` 与 `NOT NULL`。UUID 主键与账目金额等业务字段不变。
 - **行为：** 新建账目自动分配用户内唯一短 ID；成功记账/修改上一笔/撤销上一笔的回复会展示 `#XXXXX`。软删除后短 ID 不回收。尚不提供按短 ID 查询或改删命令。
 - **降级数据损失：** 删除 `short_id` 列与唯一约束；聊天中的 `#XXXXX` 引用失效。金额与 UUID 保留。
+
+## 迁移 `20260805_0006`（账目 revision 审计）
+
+- **升级：** 新增 `ledger_entry_revisions` 表，保存按短 ID 或「上一笔」进行的修改/删除/恢复前后快照。
+- **行为：** 修改、软删除、恢复与 revision 同事务提交；无实际变化或幂等删除/恢复不写 revision。
+- **降级数据损失：** 删除 revision 表及全部审计历史；账目本体不变。

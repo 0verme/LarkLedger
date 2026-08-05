@@ -125,3 +125,25 @@ class ProcessedEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class LedgerEntryRevision(Base):
+    """Append-only audit snapshots for entry update/delete/restore."""
+
+    __tablename__ = "ledger_entry_revisions"
+    __table_args__ = (Index("ix_revisions_entry_created", "entry_id", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    entry_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    user_open_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    short_id: Mapped[str] = mapped_column(String(5), nullable=False)
+    change_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    before_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    after_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

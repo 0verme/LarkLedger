@@ -44,7 +44,7 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260805_0005"
+    assert revision == "20260805_0006"
 
 
 async def test_list_keyset_and_get_entry_on_postgres(
@@ -93,6 +93,59 @@ async def test_list_keyset_and_get_entry_on_postgres(
         )
         assert "短 ID：#PG001" in detail.message
         assert "ou_pg" not in detail.message
+
+
+async def test_entry_mutation_and_revision_on_postgres(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from lark_ledger.models import LedgerEntryRevision
+
+    async with postgres_session_factory() as session:
+        session.add(
+            LedgerEntry(
+                user_open_id="ou_mut",
+                short_id="MUT01",
+                amount=Decimal("10.00"),
+                currency="CNY",
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                note="x",
+                occurred_at=datetime(2026, 8, 5, 12, tzinfo=UTC),
+                source_type="text",
+            )
+        )
+        await session.commit()
+        service = LedgerService(session)
+        updated = await service.execute(
+            "ou_mut",
+            ParsedCommand(
+                action=Action.UPDATE_ENTRY,
+                entry_ref="MUT01",
+                amount=Decimal("12.00"),
+            ),
+        )
+        assert "已修改 #MUT01" in updated.message
+        deleted = await service.execute(
+            "ou_mut", ParsedCommand(action=Action.DELETE_ENTRY, entry_ref="MUT01")
+        )
+        assert "已删除 #MUT01" in deleted.message
+        restored = await service.execute(
+            "ou_mut", ParsedCommand(action=Action.RESTORE_ENTRY, entry_ref="MUT01")
+        )
+        assert "已恢复 #MUT01" in restored.message
+        count = await session.scalar(select(func.count()).select_from(LedgerEntryRevision))
+        assert count == 3
+        entry = (
+            await session.execute(
+                select(LedgerEntry).where(
+                    LedgerEntry.user_open_id == "ou_mut",
+                    LedgerEntry.short_id == "MUT01",
+                )
+            )
+        ).scalar_one()
+        assert entry.amount == Decimal("12.00")
+        assert entry.deleted_at is None
+        assert entry.short_id == "MUT01"
 
 
 async def test_short_id_unique_per_user_allows_cross_user_reuse(
