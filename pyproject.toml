@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lark-ledger"
-version = "0.1.0"
+version = "0.2.0"
 description = "Self-hosted AI bookkeeping bot for Feishu/Lark with text, voice and receipt recognition."
 readme = "README.md"
 requires-python = ">=3.11"

@@ -300,23 +300,18 @@ curl http://127.0.0.1:8000/healthz
 
 ### 使用 GHCR 预构建镜像（可选）
 
-`compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}`。
-
-**诚实说明：**
-
-- 包版本与 `__version__` 当前仍为 `0.1.0`
-- **不要假设** `v0.1.0` 或 `v0.2.0` 镜像一定可 pull，除非你已在干净环境验证
-- **v0.2.0 正式 Tag / Release / GHCR 发布不在本工作包范围**（见实施计划 P09）
-
-若你确认某一标签可用：
+`compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}`。当前正式版本为 **0.2.0**：
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=替换为你已验证的标签
+export LARK_LEDGER_IMAGE_TAG=0.2.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.2.0"
+docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
+curl http://127.0.0.1:8000/healthz
 ```
 
-镜像启动**不会**像源码 `compose.yaml` 那样自动跑迁移；升级请显式 `alembic upgrade head`。详见[升级指南](upgrading.md)。
+镜像启动**不会**像源码 `compose.yaml` 那样自动跑迁移；升级请显式 `alembic upgrade head`。生产应固定版本标签，避免长期跟随未固定的 `latest`。详见[升级指南](upgrading.md)。
 
 ### 飞牛 NAS 可选脚本
 

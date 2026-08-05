@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-## 当前能力（main / 未发布 v0.2.0 能力集）
+## 当前能力（v0.2.0）
 
 - **文字记账**，成功回复含用户内唯一五位短 ID（`#XXXXX`）
 - **最近账目 / 单笔详情**（例如 `最近10笔`、`查看 #XXXXX`）
@@ -174,7 +174,7 @@ v0.2.1：可靠投递（状态机 / Worker / Outbox）
 v0.3.0：高风险确认（图片、语音、批量等）
 ```
 
-镜像与版本：仓库代码版本号仍为 `0.1.0`；**v0.2.0 尚未正式 Tag / Release / 保证可 pull 的 GHCR 镜像**。请优先用本仓库源码 `docker compose ... --build` 部署。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.2.0**。预构建镜像：`ghcr.io/0verme/larkledger:0.2.0`（也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -221,13 +221,26 @@ mypy src
 pytest --cov
 ```
 
+## 使用预构建镜像（可选）
+
+```bash
+export LARK_LEDGER_IMAGE_TAG=0.2.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.2.0"
+docker compose -f compose.image.yaml pull
+docker compose -f compose.image.yaml run --rm app alembic upgrade head
+docker compose -f compose.image.yaml up -d
+curl http://127.0.0.1:8000/healthz
+```
+
+镜像不会在 `up` 时自动迁移；请先 `alembic upgrade head`。仍推荐首次用源码 + WebSocket 文字路径完成第一笔账。
+
 ## 文档
 
 - [用户手册](docs/help.md)：消息示例、预算、报告、限制、FAQ
 - [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
 - [架构说明](docs/architecture.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md)
+- [变更日志](CHANGELOG.md) · [v0.2.0 发布说明](.github/release-notes/v0.2.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 

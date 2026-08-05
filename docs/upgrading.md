@@ -1,29 +1,31 @@
 # 升级指南
 
-LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受修复，旧版本不承诺长期维护。生产部署应固定 Git 提交、镜像标签或未来的正式 Release tag，不要长期跟随未固定的 `latest` 或任意提交。
+LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受修复，旧版本不承诺长期维护。生产部署应固定 Git tag 或 `ghcr.io/0verme/larkledger` 镜像标签，不要长期跟随未固定的 `latest` 或任意提交。
 
-## 版本与镜像诚实说明
+## 当前正式版本
 
 | 项 | 事实 |
 | --- | --- |
-| 包版本 / `__version__` | 当前仓库仍为 `0.1.0` |
-| `main` 上的可核对账本能力 | 短 ID、列表/详情、定点改删恢复、CSV 等已合入，对应规划中的 **v0.2.0 能力集**，但**尚未**以 `v0.2.0` Tag / GitHub Release 发布 |
-| GHCR | 不要假设 `ghcr.io/0verme/larkledger:0.1.0` 或 `:0.2.0` 一定可 pull，除非你在干净环境自行验证 |
-| 推荐部署 | 在正式 Release 前优先使用源码 `docker compose ... --build` |
+| 最新正式版本 | **v0.2.0** |
+| 包版本 / `__version__` | `0.2.0` |
+| Git tag | `v0.2.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.2.0`（亦有 `0.2` / `latest` 由发布流水线写入） |
+| Alembic head | `20260805_0006` |
+| 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
 
 1. 阅读 [CHANGELOG](../CHANGELOG.md)，确认配置、行为和迁移影响。
 2. **备份 PostgreSQL**，并验证备份可以恢复。
-3. 记录当前 Git 提交、tag 或镜像标签（若有）。
+3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
 
 ## 使用源码 Compose
 
 ```bash
-git fetch origin
-git checkout <已验证的提交或未来正式 tag>
+git fetch --tags origin
+git checkout v0.2.0
 docker compose run --rm app alembic upgrade head
 docker compose up -d --build
 curl http://127.0.0.1:8000/healthz
@@ -39,25 +41,33 @@ docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 
 ## 使用 GHCR 镜像
 
-仅在你已确认目标标签可 pull 时使用：
-
 ```bash
-export LARK_LEDGER_IMAGE_TAG=替换为已验证标签
+export LARK_LEDGER_IMAGE_TAG=0.2.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
 curl http://127.0.0.1:8000/healthz
 ```
 
-PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "替换为已验证标签"`。
+PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.0"`。
 
 `compose.image.yaml` **不会**在 `up` 时自动迁移；升级必须显式 `alembic upgrade head`。
+
+## 从 v0.1.0 或更早 main 升级到 v0.2.0
+
+1. 备份数据库。
+2. 拉取 `v0.2.0` 代码或镜像。
+3. 执行 `alembic upgrade head`（将依次应用 `20260805_0004`～`0006`，若尚未应用）。
+4. 重启应用并检查 `/healthz`。
+5. 验收：文字记账回复含 `#XXXXX`；`最近10笔`；按短 ID 查看/修改；按需验证 CSV 导出。
+
+新增配置项方面，v0.2.0 **不强制**新增必填环境变量。快速路径仍建议在 `.env` 中显式设置 `LARK_LEDGER_EVENT_MODE=websocket`（代码默认仍为 `webhook`）。
 
 ## 验证与回退
 
 - 验证 `/healthz`、事件模式、**文字记账与短 ID 回复**、（如启用）图片/语音、重复事件去重。
 - 建议按[环境指南](environment.md)做一笔最小验收：`午饭32元` → `最近10笔` → 按短 ID 查看/修改。
-- 应用代码可以退回原 Git 提交或镜像标签；数据库只能在确认对应 Alembic downgrade 安全且已有备份时回退。
+- 应用代码可以退回原 Git tag 或镜像标签；数据库只能在确认对应 Alembic downgrade 安全且已有备份时回退。
 - 不要仅回退容器而保留旧代码无法理解的新数据库结构。
 - 发生迁移失败时保留日志和当前数据库状态，避免反复重跑未知步骤；报告问题时只提供脱敏信息。
 

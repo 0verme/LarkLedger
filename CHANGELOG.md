@@ -4,6 +4,10 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-05
+
+Theme: **auditable ledger** — see entries, edit by short ID, soft-delete/restore, CSV export, formal Release/GHCR.
+
 ### Added
 
 - Claim-time persistence of versioned, normalized Feishu event payloads on `processed_events` (payload envelope, transport, status, received_at) so future workers can replay without relying on in-memory events only.
@@ -11,6 +15,8 @@ All notable changes to LarkLedger are documented in this file. The project follo
 - Bot actions `list_entries` and `get_entry` for recent/filtered ledger lines and single-entry detail by short ID (keyset pagination via `查看 #XXXXX 之前的N笔`).
 - Bot actions `update_entry`, `delete_entry`, and `restore_entry` for targeted short-ID mutations, with `ledger_entry_revisions` audit snapshots (also written by update-last / undo-last).
 - Bot action `export_entries` for user-scoped CSV Schema v1 export (default last 90 days, optional full history / include deleted, 5000-row and 5MB caps, formula-injection hardening, Feishu file message delivery).
+- Alembic migrations `20260805_0004` (event payload), `20260805_0005` (short ID), `20260805_0006` (revisions). Head: `20260805_0006`.
+- WebSocket + text-only + PostgreSQL quickstart path in README / `.env.example` / deployment docs.
 
 ### Changed
 
@@ -21,8 +27,20 @@ All notable changes to LarkLedger are documented in this file. The project follo
 ### Security
 
 - Event payloads may store message text and media resource identifiers; binaries, secrets, and signature headers are not stored. Logs continue to avoid dumping full payload bodies.
+- CSV export hardens formula-injection risk on user-controlled text fields and never embeds `open_id` or internal UUIDs in the file.
 
+### Known limitations (not fixed in 0.2.0)
 
+- Still **claim-first**: failed events are not auto-retried; successful writes with failed replies are not auto-compensated.
+- No pre-write confirmation for image / voice / batch.
+- CSV file send failures are not auto-retried.
+- No web admin UI, no shared ledgers; JSON export is not a formal capability.
+- Planned themes without ship dates: **v0.2.1** reliable delivery; **v0.3.0** high-risk confirmation.
+
+### Support
+
+- Alpha release. Fixes target the latest release and `main`.
+- Review the [upgrade guide](docs/upgrading.md) before changing deployed versions. Back up PostgreSQL before migrations.
 
 ## [0.1.0] - 2026-08-03
 
@@ -46,5 +64,6 @@ All notable changes to LarkLedger are documented in this file. The project follo
 - This is an Alpha release. Security and compatibility fixes are provided only for the latest release and `main`.
 - Review the [upgrade guide](docs/upgrading.md) before changing deployed versions.
 
-[Unreleased]: https://github.com/0verme/LarkLedger/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/0verme/LarkLedger/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/0verme/LarkLedger/releases/tag/v0.2.0
 [0.1.0]: https://github.com/0verme/LarkLedger/releases/tag/v0.1.0
