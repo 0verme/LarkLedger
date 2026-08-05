@@ -37,11 +37,17 @@ def test_adapter_uses_sdk_marshaller_for_typed_event() -> None:
 
 class RecordingEventService:
     def __init__(self) -> None:
-        self.events: list[tuple[str, dict[str, Any]]] = []
+        self.events: list[tuple[str, dict[str, Any], str]] = []
         self.called = asyncio.Event()
 
-    async def handle_safely(self, event_id: str, event: dict[str, Any]) -> None:
-        self.events.append((event_id, event))
+    async def handle_safely(
+        self,
+        event_id: str,
+        event: dict[str, Any],
+        *,
+        transport: str,
+    ) -> None:
+        self.events.append((event_id, event, transport))
         self.called.set()
 
 
@@ -89,6 +95,7 @@ async def test_long_connection_start_callback_and_stop_without_network() -> None
     await receiver.stop()
 
     assert service.events[0][0] == "evt_ws"
+    assert service.events[0][2] == "websocket"
     assert client.connected
     assert client.disconnected
     assert not client._auto_reconnect

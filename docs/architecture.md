@@ -2,7 +2,7 @@
 
 > Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
 
-本文说明 LarkLedger `0.1.x` 的运行组件、消息数据流和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
+本文说明 LarkLedger `0.1.x` / 向 `0.2.x` 演进中的运行组件、消息数据流和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
 ## 组件
 
@@ -39,11 +39,39 @@ Webhook 端点完成来源校验、请求解析和后台任务登记后立即确
 
 飞书 `post` 富文本会先归一化：保留标题、正文、链接文字和备注文字，忽略 `@` 与样式节点，并按出现顺序提取、去重最多 5 个图片 Key。只有文字时走文字模型；包含图片时并行下载全部图片，再把正文和图片作为一次视觉请求处理。超过图片上限或任一下载、格式校验失败时不会执行账本动作。
 
-## 事件幂等
+## 事件幂等与可重放载荷
 
-收到事件后，`EventService` 先尝试把 `event_id` 写入 `processed_events`。主键冲突表示事件已经领取，本次投递不再处理。新账目还会保存飞书 `message_id`，并通过唯一约束避免同一来源消息重复创建。
+收到事件后，`EventService` 在 **T1（领取事务）** 中把 `event_id` 与一份版本化的可重放 JSON 载荷写入 `processed_events` 并提交。主键冲突表示事件已经领取，本次投递不再处理。新账目还会保存飞书 `message_id`，并通过唯一约束避免同一来源消息重复创建。
 
-当前语义是“先领取、后处理”：如果事件领取成功后，AI、数据库操作或回复失败，同一 `event_id` 的重投不会自动重试。这避免重复记账，但也意味着生产环境需要依赖日志监控，并在更高可靠性要求下引入带重试和死信处理的持久任务队列。
+### 事务边界（v0.2.0 / P00）
+
+```text
+T1  claim：insert processed_events(event_id, payload_json, …) → commit
+T2  process：从数据库读回载荷 → 反序列化为业务事件 → 同步 MessageProcessor.process
+```
+
+- T1 成功只表示“事件已被领取且载荷已落库”，**不是**业务成功。
+- T2 仍可能失败（AI、数据库、回复等）。失败时状态可记为 `failed` 并写入有限的 `last_error_code`（异常类型名），但 **不会** 取消 claim。
+- **当前仍是 claim-first**：同一 `event_id` 的重投不会自动重试 T2。
+- **本版本没有** Worker 轮询、lease、自动 retry、死信队列或回复 Outbox；**不**宣称 at-least-once，也**不**解决“已入账但回复失败”。
+- 未来 **v0.2.1** 将基于已持久化的 payload 与状态实现可靠投递与补偿。
+
+### 载荷内容与隐私
+
+载荷由 `event_payload` 模块集中构建与校验，当前 `payload_version = 1`。信封字段包括：`payload_version`、`event_id`、`transport`（`webhook` | `websocket`）、`received_at`，以及归一化后的业务 `event`（`sender.sender_id` 的 open_id/user_id，`message` 的 message_id / message_type / content / 可选 chat_id）。
+
+- **会持久化（重放必需）：** 消息正文 JSON 字符串、图片/文件 **资源标识**（如 `image_key`、`file_key`）、发送者 open_id 等。
+- **不会持久化：** App Secret、Verification Token、Encrypt Key、Authorization、Webhook 签名 Header、完整 HTTP Request、SDK 实例、图片/音频 **二进制**。
+
+因此 PostgreSQL 与其备份应按**敏感财务数据**保护。应用日志只记录 `event_id`、`message_id`、`transport`、异常类型等标识，**不**完整 dump 消息正文或 payload。
+
+### 媒体重取限制
+
+图片与语音处理在运行时通过飞书 `messages/{message_id}/resources/{file_key}` 重新下载。载荷只保存资源标识。飞书侧资源是否长期可下载取决于开放平台保留策略与机器人权限；**P00 不保证**历史媒体在任意时刻仍可取回。未来 Worker 重放媒体事件时可能因资源过期而失败，需要单独运维策略。
+
+### 历史行
+
+升级前仅有 `event_id` / `processed_at` 的行在迁移后标记为 `status=legacy_succeeded` 且 `payload_json IS NULL`，**不可重放**，仅保留去重语义。
 
 ## AI 与数据库边界
 
@@ -65,7 +93,7 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 - `ledger_entries`：账目、用户、金额、币种、分类、备注、发生时间、来源消息、来源项序号和软删除时间；来源消息与项序号组成唯一键。
 - `category_budgets`：每个用户和分类唯一的长期月预算。
 - `budget_alerts`：记录预算在每个自然月已发送的 80% / 100% 阈值提醒。
-- `processed_events`：已领取的飞书事件 ID。
+- `processed_events`：已领取的飞书事件。新事件含版本化 `payload_json`、`payload_version`、`transport`、`status`、`received_at` 与可选 `last_error_code`；历史无载荷行不可重放。
 
 所有日期范围都使用左闭右开语义。账目发生时间以带时区时间保存；相对时间、自然月和预算统计按全局配置的 IANA 时区计算。
 
@@ -74,7 +102,7 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 ## 运行与故障边界
 
 - 应用生命周期负责启动或停止长连接，并在关闭时释放数据库引擎。
-- Webhook 后台任务和长连接消息任务都运行在 Web 进程内，不会跨进程持久化。
+- Webhook 后台任务和长连接消息任务都运行在 Web 进程内；事件载荷已写入 PostgreSQL，但 **v0.2.0 仍无跨进程 Worker 消费这些载荷**。
 - 报告图片渲染或上传失败时会发送不含图片的文字卡片；建议生成失败时使用本地规则生成后备建议。
 - 复杂文字以及单图或多图中的批量账目先逐项严格校验，再用数据库保存点隔离单项写入，最终统一提交并返回成功、失败和收支合计。复杂文字中的预算也逐项隔离处理。所有批量账目共用原始消息的 `message_id` 和逐项索引，沿用来源幂等约束。完整异常只记录到带错误编号和处理阶段的日志中，用户回复仅包含可执行的分类错误。
 - PostgreSQL 不由当前 Compose 文件管理，迁移在应用容器启动 Uvicorn 前执行。

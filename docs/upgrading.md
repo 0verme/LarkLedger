@@ -42,3 +42,9 @@ PowerShell 使用 `$env:LARK_LEDGER_IMAGE_TAG = "0.1.0"`。
 - 应用代码可以退回原 Git tag 或镜像标签；数据库只能在确认对应 Alembic downgrade 安全且已有备份时回退。
 - 不要仅回退容器而保留一个旧代码无法理解的新数据库结构。
 - 发生迁移失败时保留日志和当前数据库状态，避免反复重跑未知步骤；报告问题时只提供脱敏信息。
+
+## 迁移 `20260805_0004`（事件可重放载荷）
+
+- **升级：** 为 `processed_events` 增加 `payload_json`、`payload_version`、`transport`、`status`、`received_at`、`last_error_code`。已有行写入 `status=legacy_succeeded` 且载荷为空，仅保留 `event_id` 去重，**不可**被未来 Worker 重放。
+- **行为：** 新事件在 claim 时持久化归一化业务载荷（可能含消息正文与媒体资源标识）。数据库与备份需按敏感财务数据保护。当前版本仍为 claim-first，**无**自动重试、死信或回复补偿。
+- **降级数据损失：** `alembic downgrade` 删除上述新列及其中全部载荷与状态信息；`event_id` / `processed_at` 保留。降级前请确认不再需要这些恢复元数据，并已完成备份。

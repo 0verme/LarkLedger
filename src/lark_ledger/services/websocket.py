@@ -219,7 +219,11 @@ class LongConnectionReceiver:
         while True:
             event_id, event = await self._queue.get()
             task = asyncio.create_task(
-                self._event_service.handle_safely(event_id, event),
+                self._event_service.handle_safely(
+                    event_id,
+                    event,
+                    transport="websocket",
+                ),
                 name=f"feishu-event-{event_id}",
             )
             self._processing_tasks.add(task)

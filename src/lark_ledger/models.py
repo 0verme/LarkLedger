@@ -2,13 +2,16 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Date,
     DateTime,
     Enum,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     SmallInteger,
     String,
@@ -101,9 +104,22 @@ class BudgetAlert(Base):
 
 
 class ProcessedEvent(Base):
+    """Claimed Feishu events.
+
+    New claims store a versioned JSON payload for future workers. Historical rows
+    may have ``payload_json IS NULL`` and ``status=legacy_succeeded`` and are not
+    replayable.
+    """
+
     __tablename__ = "processed_events"
 
     event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    payload_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    transport: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="received")
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -48,7 +48,11 @@ async def test_webhook_dispatches_message_to_shared_event_service() -> None:
     )
     assert response.status_code == 200
     assert response.json() == {"code": 0}
-    service.handle_safely.assert_awaited_once_with("evt_hook", event)
+    service.handle_safely.assert_awaited_once_with(
+        "evt_hook",
+        event,
+        transport="webhook",
+    )
 
 
 async def test_websocket_mode_does_not_expose_webhook_or_require_verification_token() -> None:

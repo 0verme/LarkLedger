@@ -71,5 +71,10 @@ async def feishu_webhook(
     event = payload.get("event")
     if not isinstance(event, dict):
         raise HTTPException(status_code=400, detail="missing event")
-    background_tasks.add_task(event_service.handle_safely, event_id, event)
+    background_tasks.add_task(
+        event_service.handle_safely,
+        event_id,
+        event,
+        transport="webhook",
+    )
     return {"code": 0}

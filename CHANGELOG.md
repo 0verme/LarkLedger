@@ -4,9 +4,18 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added
+
+- Claim-time persistence of versioned, normalized Feishu event payloads on `processed_events` (payload envelope, transport, status, received_at) so future workers can replay without relying on in-memory events only.
+
 ### Changed
 
-- Nothing yet.
+- `EventService` documents and implements an explicit T1 claim / T2 sync-process boundary; duplicate `event_id` delivery behavior is unchanged (still claim-first, no automatic retry).
+
+### Security
+
+- Event payloads may store message text and media resource identifiers; binaries, secrets, and signature headers are not stored. Logs continue to avoid dumping full payload bodies.
+
 
 ## [0.1.0] - 2026-08-03
 
