@@ -8,9 +8,138 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.config import Settings
 from lark_ledger.models import CategoryBudget, Direction, LedgerEntry
-from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.schemas import Action, EntryCandidate, ParsedCommand
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.ledger import LedgerService
+
+
+async def test_short_id_conflict_retries_then_succeeds(session: AsyncSession) -> None:
+    session.add(
+        LedgerEntry(
+            user_open_id="ou_user",
+            short_id="AAAAA",
+            amount=Decimal("1.00"),
+            currency="CNY",
+            direction=Direction.EXPENSE,
+            category="占位",
+            note="",
+            occurred_at=datetime(2026, 8, 1, tzinfo=UTC),
+            source_type="text",
+        )
+    )
+    await session.commit()
+
+    codes = iter(["AAAAA", "BBBBB"])
+    service = LedgerService(session, short_id_factory=lambda: next(codes))
+    result = await service.execute(
+        "ou_user",
+        ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("32"),
+            direction=Direction.EXPENSE,
+            category="餐饮",
+            note="午饭",
+            occurred_at=datetime(2026, 8, 2, 4, tzinfo=UTC),
+        ),
+        source_message_id="om_retry",
+    )
+    assert "#BBBBB" in result.message
+    rows = (
+        await session.execute(select(LedgerEntry).order_by(LedgerEntry.amount))
+    ).scalars().all()
+    assert [row.short_id for row in rows] == ["AAAAA", "BBBBB"]
+
+
+async def test_short_id_conflict_exhaustion_fails_without_orphan_row(
+    session: AsyncSession,
+) -> None:
+    session.add(
+        LedgerEntry(
+            user_open_id="ou_user",
+            short_id="AAAAA",
+            amount=Decimal("1.00"),
+            currency="CNY",
+            direction=Direction.EXPENSE,
+            category="占位",
+            note="",
+            occurred_at=datetime(2026, 8, 1, tzinfo=UTC),
+            source_type="text",
+        )
+    )
+    await session.commit()
+
+    service = LedgerService(session, short_id_factory=lambda: "AAAAA")
+    with pytest.raises(RuntimeError, match="failed to allocate short_id"):
+        await service.execute(
+            "ou_user",
+            ParsedCommand(
+                action=Action.CREATE,
+                amount=Decimal("32"),
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                occurred_at=datetime(2026, 8, 2, 4, tzinfo=UTC),
+            ),
+            source_message_id="om_exhaust",
+        )
+    await session.rollback()
+    count = await session.scalar(select(func.count()).select_from(LedgerEntry))
+    assert count == 1
+
+
+async def test_batch_assigns_distinct_short_ids_and_isolates_conflict(
+    session: AsyncSession,
+) -> None:
+    session.add(
+        LedgerEntry(
+            user_open_id="ou_user",
+            short_id="AAAAA",
+            amount=Decimal("1.00"),
+            currency="CNY",
+            direction=Direction.EXPENSE,
+            category="占位",
+            note="",
+            occurred_at=datetime(2026, 8, 1, tzinfo=UTC),
+            source_type="text",
+        )
+    )
+    await session.commit()
+
+    # First new entry collides once then succeeds; second entry gets a fresh code.
+    codes = iter(["AAAAA", "BBBBB", "CCCCC"])
+    service = LedgerService(session, short_id_factory=lambda: next(codes))
+    result = await service.execute(
+        "ou_user",
+        ParsedCommand(
+            action=Action.CREATE_ENTRIES,
+            entries=[
+                EntryCandidate(
+                    amount="10",
+                    direction="expense",
+                    category="餐饮",
+                    occurred_at="2026-08-02T12:00:00+00:00",
+                ),
+                EntryCandidate(
+                    amount="20",
+                    direction="expense",
+                    category="交通",
+                    occurred_at="2026-08-02T13:00:00+00:00",
+                ),
+            ],
+        ),
+        source_type="image",
+        source_message_id="om_batch_short",
+    )
+    assert "#BBBBB" in result.message
+    assert "#CCCCC" in result.message
+    assert "成功 2 笔" in result.message
+    rows = (
+        await session.execute(
+            select(LedgerEntry)
+            .where(LedgerEntry.source_message_id == "om_batch_short")
+            .order_by(LedgerEntry.source_item_index)
+        )
+    ).scalars().all()
+    assert [row.short_id for row in rows] == ["BBBBB", "CCCCC"]
 
 
 async def test_create_update_and_undo(session: AsyncSession) -> None:
@@ -28,14 +157,20 @@ async def test_create_update_and_undo(session: AsyncSession) -> None:
         source_message_id="om_1",
     )
     assert "¥32.00" in created.message
+    entry = (await session.execute(select(LedgerEntry))).scalar_one()
+    assert entry.short_id is not None
+    assert len(entry.short_id) == 5
+    assert f"#{entry.short_id}" in created.message
 
     updated = await service.execute(
         "ou_user", ParsedCommand(action=Action.UPDATE_LAST, amount=Decimal("8"))
     )
     assert "¥8.00" in updated.message
+    assert f"#{entry.short_id}" in updated.message
 
     undone = await service.execute("ou_user", ParsedCommand(action=Action.UNDO_LAST))
     assert "已撤销" in undone.message
+    assert f"#{entry.short_id}" in undone.message
     entry = (await session.execute(select(LedgerEntry))).scalar_one()
     assert entry.deleted_at is not None
 

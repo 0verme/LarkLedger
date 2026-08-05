@@ -7,14 +7,17 @@ All notable changes to LarkLedger are documented in this file. The project follo
 ### Added
 
 - Claim-time persistence of versioned, normalized Feishu event payloads on `processed_events` (payload envelope, transport, status, received_at) so future workers can replay without relying on in-memory events only.
+- User-scoped five-character Crockford Base32 ledger `short_id` values (`#XXXXX` in chat replies), with migration backfill and unique constraint per user.
 
 ### Changed
 
 - `EventService` documents and implements an explicit T1 claim / T2 sync-process boundary; duplicate `event_id` delivery behavior is unchanged (still claim-first, no automatic retry).
+- Create / update-last / undo-last success messages include the affected entry short ID.
 
 ### Security
 
 - Event payloads may store message text and media resource identifiers; binaries, secrets, and signature headers are not stored. Logs continue to avoid dumping full payload bodies.
+
 
 
 ## [0.1.0] - 2026-08-03

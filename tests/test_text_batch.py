@@ -226,6 +226,10 @@ async def test_complex_batch_persists_entries_budget_and_totals(session: Any) ->
     assert len(entries) == 20
     assert [item.source_item_index for item in entries] == list(range(20))
     assert all(item.source_message_id == "om_complex" for item in entries)
+    short_ids = [item.short_id for item in entries]
+    assert len(short_ids) == len(set(short_ids))
+    assert all(len(code) == 5 for code in short_ids)
+    assert all(f"#{code}" in result.message for code in short_ids[:3])
     assert sum(item.amount for item in entries if item.direction is Direction.INCOME) == Decimal(
         "19499.50"
     )

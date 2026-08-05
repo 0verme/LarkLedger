@@ -42,7 +42,61 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260805_0004"
+    assert revision == "20260805_0005"
+
+
+async def test_short_id_unique_per_user_allows_cross_user_reuse(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with postgres_session_factory() as session:
+        session.add(
+            LedgerEntry(
+                user_open_id="ou_a",
+                short_id="A83F2",
+                amount=Decimal("1.00"),
+                currency="CNY",
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                note="",
+                occurred_at=datetime(2026, 8, 5, 12, tzinfo=UTC),
+                source_type="text",
+            )
+        )
+        await session.commit()
+
+        session.add(
+            LedgerEntry(
+                user_open_id="ou_a",
+                short_id="A83F2",
+                amount=Decimal("2.00"),
+                currency="CNY",
+                direction=Direction.EXPENSE,
+                category="交通",
+                note="",
+                occurred_at=datetime(2026, 8, 5, 13, tzinfo=UTC),
+                source_type="text",
+            )
+        )
+        with pytest.raises(IntegrityError):
+            await session.commit()
+        await session.rollback()
+
+        session.add(
+            LedgerEntry(
+                user_open_id="ou_b",
+                short_id="A83F2",
+                amount=Decimal("3.00"),
+                currency="CNY",
+                direction=Direction.EXPENSE,
+                category="购物",
+                note="",
+                occurred_at=datetime(2026, 8, 5, 14, tzinfo=UTC),
+                source_type="text",
+            )
+        )
+        await session.commit()
+        count = await session.scalar(select(func.count()).select_from(LedgerEntry))
+        assert count == 2
 
 
 async def test_concurrent_event_claim_is_processed_once(
@@ -71,9 +125,12 @@ async def test_concurrent_event_claim_is_processed_once(
         assert parsed["event"]["message"]["message_id"] == "om_concurrent"
 
 
-def make_entry(source_item_index: int) -> LedgerEntry:
+def make_entry(source_item_index: int, short_id: str | None = None) -> LedgerEntry:
+    # Distinct Crockford codes for integration fixtures (no I/L/O/U).
+    defaults = ("AAAAA", "AAAAB", "AAAAC", "AAAAD", "AAAAE")
     return LedgerEntry(
         user_open_id="ou_integration",
+        short_id=short_id or defaults[source_item_index],
         amount=Decimal("12.34"),
         currency="CNY",
         direction=Direction.EXPENSE,

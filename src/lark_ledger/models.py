@@ -40,10 +40,12 @@ class LedgerEntry(Base):
         UniqueConstraint(
             "source_message_id", "source_item_index", name="uq_entries_source_item"
         ),
+        UniqueConstraint("user_open_id", "short_id", name="uq_entries_user_short_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_open_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    short_id: Mapped[str] = mapped_column(String(5), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")
     direction: Mapped[Direction] = mapped_column(

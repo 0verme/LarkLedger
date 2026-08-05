@@ -284,5 +284,6 @@ async def test_processor_combines_entry_confirmation_and_budget_alert() -> None:
     await engine.dispose()
 
     assert len(feishu.texts) == 1
-    assert "已记录支出 ¥80.00 · 餐饮" in feishu.texts[0]
+    assert "支出 ¥80.00 · 餐饮" in feishu.texts[0]
+    assert "已记录 #" in feishu.texts[0]
     assert "餐饮本月预算快用完了" in feishu.texts[0]

@@ -160,6 +160,14 @@ async def test_batch_persists_valid_items_and_reports_failures(session: Any) -> 
     assert [row.source_item_index for row in rows] == [0, 2]
     assert [row.source_message_id for row in rows] == ["om_batch_image", "om_batch_image"]
     assert [row.amount for row in rows] == [Decimal("25.90"), Decimal("0.01")]
+    assert len({row.short_id for row in rows}) == 2
+    assert all(f"#{row.short_id}" in result.message for row in rows)
+    assert "缺少金额" in result.message
+    # Failed items must not invent a short ID line like "#XXXXX 第 2 笔：缺少金额"
+    assert "第 2 笔：缺少金额" in result.message
+    assert not any(
+        line.startswith("✅ #") and "缺少金额" in line for line in result.message.splitlines()
+    )
 
 
 async def test_database_failure_isolated_to_one_batch_item(session: Any) -> None:

@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -24,6 +25,11 @@ from lark_ledger.schemas import (
     TrendPoint,
 )
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
+from lark_ledger.short_id import (
+    MAX_SHORT_ID_ALLOCATION_ATTEMPTS,
+    format_entry_ref,
+    generate_short_id,
+)
 
 MAX_MONEY = Decimal("999999999999.99")
 logger = logging.getLogger(__name__)
@@ -56,12 +62,14 @@ class LedgerService:
         timezone: str = "Asia/Shanghai",
         now: datetime | None = None,
         exchange_rates: ExchangeRateService | None = None,
+        short_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self.session = session
         self.currency = currency
         self.timezone = ZoneInfo(timezone)
         self.now = now
         self.exchange_rates = exchange_rates
+        self._short_id_factory = short_id_factory or generate_short_id
 
     async def execute(
         self,
@@ -158,6 +166,7 @@ class LedgerService:
         converted = await self._convert_command_amount(command)
         entry = LedgerEntry(
             user_open_id=user_open_id,
+            short_id=await self._allocate_short_id(user_open_id),
             amount=converted.amount,
             currency=self.currency,
             direction=command.direction,
@@ -173,13 +182,48 @@ class LedgerService:
         await self.session.flush()
         return entry, converted, budget_alert
 
+    async def _allocate_short_id(self, user_open_id: str) -> str:
+        """Allocate a user-scoped short_id.
+
+        Avoids collisions with rows already in the database and with other
+        pending ``LedgerEntry`` objects in this session (important for batches).
+        The database unique constraint ``uq_entries_user_short_id`` remains the
+        authoritative guarantee under concurrency.
+        """
+        for _ in range(MAX_SHORT_ID_ALLOCATION_ATTEMPTS):
+            candidate = self._short_id_factory()
+            if await self._short_id_is_taken(user_open_id, candidate):
+                continue
+            return candidate
+        raise RuntimeError(
+            f"failed to allocate short_id after {MAX_SHORT_ID_ALLOCATION_ATTEMPTS} attempts"
+        )
+
+    async def _short_id_is_taken(self, user_open_id: str, short_id: str) -> bool:
+        for obj in self.session.new:
+            if (
+                isinstance(obj, LedgerEntry)
+                and obj.user_open_id == user_open_id
+                and obj.short_id == short_id
+            ):
+                return True
+        existing = await self.session.scalar(
+            select(LedgerEntry.id)
+            .where(
+                LedgerEntry.user_open_id == user_open_id,
+                LedgerEntry.short_id == short_id,
+            )
+            .limit(1)
+        )
+        return existing is not None
+
     def _created_message(self, entry: LedgerEntry, converted: _ConvertedAmount) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f"（{entry.note}）" if entry.note else ""
         conversion = self._conversion_note(converted)
         return (
-            f"已记录{sign} {self._format_money(entry.amount)}{conversion}"
-            f" · {entry.category}{note}"
+            f"已记录 {format_entry_ref(entry.short_id)} {sign} "
+            f"{self._format_money(entry.amount)}{conversion} · {entry.category}{note}"
         )
 
     async def _create_entries(
@@ -361,7 +405,8 @@ class LedgerService:
             note = note[:29] + "…"
         suffix = f" · {note}" if note else ""
         return (
-            f"✅ 第 {index + 1} 笔：{sign} {self._format_money(entry.amount)}"
+            f"✅ {format_entry_ref(entry.short_id)} 第 {index + 1} 笔："
+            f"{sign} {self._format_money(entry.amount)}"
             f"{self._conversion_note(converted)} · {entry.category} · {occurred}{suffix}"
         )
 
@@ -425,7 +470,8 @@ class LedgerService:
         conversion = self._conversion_note(converted) if converted is not None else ""
         return ExecutionResult(
             message=(
-                f"已修改上一笔：{self._format_money(entry.amount)}{conversion} · {entry.category}"
+                f"已修改 {format_entry_ref(entry.short_id)}："
+                f"{self._format_money(entry.amount)}{conversion} · {entry.category}"
             ),
             budget_alert=budget_alert,
         )
@@ -436,7 +482,12 @@ class LedgerService:
             return ExecutionResult(message="还没有可以撤销的记录。")
         entry.deleted_at = datetime.now(UTC)
         await self.session.commit()
-        return ExecutionResult(message=f"已撤销：¥{entry.amount:.2f} · {entry.category}")
+        return ExecutionResult(
+            message=(
+                f"已撤销 {format_entry_ref(entry.short_id)}："
+                f"{self._format_money(entry.amount)} · {entry.category}"
+            )
+        )
 
     async def _set_budget(
         self, user_open_id: str, command: ParsedCommand
