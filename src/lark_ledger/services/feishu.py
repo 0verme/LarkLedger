@@ -15,6 +15,10 @@ from cryptography.hazmat.primitives.padding import PKCS7
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
+from lark_ledger.entry_commands import (
+    bind_entry_refs_from_message,
+    try_parse_deterministic_entry_command,
+)
 from lark_ledger.schemas import (
     MAX_BATCH_BUDGETS,
     MAX_BATCH_ENTRIES,
@@ -244,7 +248,20 @@ class MessageProcessor:
                 )
                 return
             stage = "vision_interpretation" if images else "interpretation"
-            command = await self.interpreter.interpret(text, now=now, images=images)
+            if not images:
+                deterministic = try_parse_deterministic_entry_command(text)
+                if isinstance(deterministic, str):
+                    await self.feishu.reply_text(message_id, deterministic)
+                    return
+                if deterministic is not None:
+                    command = deterministic
+            if command is None:
+                command = await self.interpreter.interpret(text, now=now, images=images)
+                bound = bind_entry_refs_from_message(command, text)
+                if isinstance(bound, str):
+                    await self.feishu.reply_text(message_id, bound)
+                    return
+                command = bound
             stage = "persistence"
             async with self.session_factory() as session:
                 result = await LedgerService(

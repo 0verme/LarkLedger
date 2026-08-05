@@ -4,16 +4,19 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from pydantic import ValidationError
-from sqlalchemy import Select, delete, func, select
+from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.models import BudgetAlert, CategoryBudget, Direction, LedgerEntry
 from lark_ledger.schemas import (
+    DEFAULT_LIST_LIMIT,
     MAX_BATCH_BUDGETS,
     MAX_BATCH_ENTRIES,
+    MAX_LIST_LIMIT,
     SUPPORTED_INPUT_CURRENCIES,
     Action,
     BudgetCandidate,
@@ -27,8 +30,10 @@ from lark_ledger.schemas import (
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.short_id import (
     MAX_SHORT_ID_ALLOCATION_ATTEMPTS,
+    ShortIdError,
     format_entry_ref,
     generate_short_id,
+    normalize_entry_ref,
 )
 
 MAX_MONEY = Decimal("999999999999.99")
@@ -46,12 +51,15 @@ class _ConvertedAmount:
         return self.original_currency != ""
 
 HELP_TEXT = (
-    "我可以帮你记账、修改、撤销、汇总、设置预算和生成消费报告。试试：\n"
+    "我可以帮你记账、修改、撤销、查看账单、汇总、设置预算和生成消费报告。试试：\n"
     "• 午饭32\n• 昨天打车38.5\n• 工资到账10000\n"
     "• 早餐12，午饭32，打车45，餐饮预算1000\n"
-    "• 上一笔改成8块\n• 这个月餐饮花了多少\n• 撤销刚才那笔"
-    "\n• 交通预算500，人情往来预算1000\n• 查看预算\n• 生成这个月的消费图表"
+    "• 最近10笔\n• 查看 #A83F2\n• 查看 #A83F2 之前的10笔\n"
+    "• 上一笔改成8块\n• 这个月餐饮花了多少\n"
+    "• 撤销刚才那笔\n• 交通预算500，人情往来预算1000\n• 查看预算\n"
+    "• 生成这个月的消费图表"
 )
+NOTE_PREVIEW_LEN = 20
 
 
 class LedgerService:
@@ -106,6 +114,10 @@ class LedgerService:
             return await self._update_last(user_open_id, command)
         if command.action is Action.UNDO_LAST:
             return await self._undo_last(user_open_id)
+        if command.action is Action.LIST_ENTRIES:
+            return await self._list_entries(user_open_id, command)
+        if command.action is Action.GET_ENTRY:
+            return await self._get_entry(user_open_id, command)
         if command.action is Action.SUMMARY:
             return await self._summary(user_open_id, command)
         if command.action is Action.REPORT:
@@ -120,12 +132,37 @@ class LedgerService:
             return await self._delete_budget(user_open_id, command)
         return ExecutionResult(message=HELP_TEXT)
 
+    @staticmethod
+    def _entry_order_by() -> tuple[Any, ...]:
+        """Stable newest-first order shared by last-entry and list pagination."""
+        return (
+            LedgerEntry.occurred_at.desc(),
+            LedgerEntry.created_at.desc(),
+            LedgerEntry.id.desc(),
+        )
+
     def _latest_query(self, user_open_id: str) -> Select[tuple[LedgerEntry]]:
         return (
             select(LedgerEntry)
             .where(LedgerEntry.user_open_id == user_open_id, LedgerEntry.deleted_at.is_(None))
-            .order_by(LedgerEntry.occurred_at.desc(), LedgerEntry.created_at.desc())
+            .order_by(*self._entry_order_by())
             .limit(1)
+        )
+
+    @staticmethod
+    def _keyset_before_cursor(cursor: LedgerEntry) -> Any:
+        """Return SQL expression for rows strictly older than the cursor row."""
+        return or_(
+            LedgerEntry.occurred_at < cursor.occurred_at,
+            and_(
+                LedgerEntry.occurred_at == cursor.occurred_at,
+                LedgerEntry.created_at < cursor.created_at,
+            ),
+            and_(
+                LedgerEntry.occurred_at == cursor.occurred_at,
+                LedgerEntry.created_at == cursor.created_at,
+                LedgerEntry.id < cursor.id,
+            ),
         )
 
     async def _create(
@@ -781,6 +818,155 @@ class LedgerService:
     @staticmethod
     def _usage_percent(spent: Decimal, budget: Decimal) -> str:
         return f"{spent / budget * 100:.0f}%"
+
+    async def _list_entries(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        requested = command.limit if command.limit is not None else DEFAULT_LIST_LIMIT
+        capped = requested > MAX_LIST_LIMIT
+        limit = min(max(requested, 1), MAX_LIST_LIMIT)
+        filters: list[Any] = [
+            LedgerEntry.user_open_id == user_open_id,
+            LedgerEntry.deleted_at.is_(None),
+        ]
+        if command.range_start is not None and command.range_end is not None:
+            filters.append(LedgerEntry.occurred_at >= command.range_start)
+            filters.append(LedgerEntry.occurred_at < command.range_end)
+        if command.category:
+            filters.append(LedgerEntry.category == command.category)
+        if command.direction is not None:
+            filters.append(LedgerEntry.direction == command.direction)
+
+        if command.before_entry_ref:
+            try:
+                cursor_code = normalize_entry_ref(command.before_entry_ref)
+            except ShortIdError:
+                return ExecutionResult(
+                    message=(
+                        "分页短 ID 格式无效。请使用："
+                        "查看 #A83F2 之前的10笔"
+                    )
+                )
+            cursor = await self._entry_by_short_id(
+                user_open_id, cursor_code, include_deleted=True
+            )
+            if cursor is None:
+                return ExecutionResult(
+                    message="未找到该账目，或该账目不属于当前用户。"
+                )
+            filters.append(self._keyset_before_cursor(cursor))
+
+        # Fetch one extra row to detect whether another page exists.
+        fetched = (
+            (
+                await self.session.execute(
+                    select(LedgerEntry)
+                    .where(*filters)
+                    .order_by(*self._entry_order_by())
+                    .limit(limit + 1)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        has_more = len(fetched) > limit
+        rows = fetched[:limit]
+        if not rows:
+            return ExecutionResult(message="没有符合条件的账目。")
+
+        lines = [
+            self._entry_list_line(index, entry) for index, entry in enumerate(rows, start=1)
+        ]
+        header = f"最近 {len(rows)} 笔账目（不含已撤销）"
+        parts: list[str] = [header, "", *lines]
+        notes: list[str] = []
+        if capped:
+            notes.append(f"单次最多显示 {MAX_LIST_LIMIT} 笔，已按上限返回。")
+        if has_more:
+            last_ref = format_entry_ref(rows[-1].short_id)
+            notes.append("继续查看更早记录：")
+            notes.append(f"查看 {last_ref} 之前的{limit}笔")
+        if notes:
+            parts.extend(["", *notes])
+        return ExecutionResult(message="\n".join(parts))
+
+    async def _get_entry(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        assert command.entry_ref is not None
+        try:
+            short_id = normalize_entry_ref(command.entry_ref)
+        except ShortIdError:
+            return ExecutionResult(
+                message="短 ID 格式无效。请使用五位编号，例如：查看 #A83F2"
+            )
+        entry = await self._entry_by_short_id(
+            user_open_id, short_id, include_deleted=True
+        )
+        if entry is None:
+            return ExecutionResult(message="未找到该账目，或该账目不属于当前用户。")
+        return ExecutionResult(message=self._entry_detail_message(entry))
+
+    async def _entry_by_short_id(
+        self,
+        user_open_id: str,
+        short_id: str,
+        *,
+        include_deleted: bool,
+    ) -> LedgerEntry | None:
+        filters = [
+            LedgerEntry.user_open_id == user_open_id,
+            LedgerEntry.short_id == short_id,
+        ]
+        if not include_deleted:
+            filters.append(LedgerEntry.deleted_at.is_(None))
+        return (
+            await self.session.execute(select(LedgerEntry).where(*filters).limit(1))
+        ).scalar_one_or_none()
+
+    def _entry_list_line(self, index: int, entry: LedgerEntry) -> str:
+        sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
+        when = self._local_datetime(entry.occurred_at).strftime("%m-%d %H:%M")
+        note = self._note_preview(entry.note)
+        note_part = f" · {note}" if note else ""
+        return (
+            f"{index}. {format_entry_ref(entry.short_id)} · {when}\n"
+            f"   {sign} {self._format_money(entry.amount)} · {entry.category}{note_part}"
+        )
+
+    def _entry_detail_message(self, entry: LedgerEntry) -> str:
+        sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
+        when = self._local_datetime(entry.occurred_at).strftime("%Y-%m-%d %H:%M")
+        created = self._local_datetime(entry.created_at).strftime("%Y-%m-%d %H:%M")
+        updated = self._local_datetime(entry.updated_at).strftime("%Y-%m-%d %H:%M")
+        note = entry.note.strip() or "（无）"
+        if entry.deleted_at is not None:
+            deleted = self._local_datetime(entry.deleted_at).strftime("%Y-%m-%d %H:%M")
+            status_lines = ["状态：已删除", f"删除时间：{deleted}"]
+        else:
+            status_lines = ["状态：有效"]
+        return "\n".join(
+            [
+                f"短 ID：{format_entry_ref(entry.short_id)}",
+                *status_lines,
+                f"发生时间：{when}",
+                f"方向：{sign}",
+                f"金额：{self._format_money(entry.amount)}",
+                f"币种：{entry.currency}",
+                f"分类：{entry.category}",
+                f"备注：{note}",
+                f"来源类型：{entry.source_type}",
+                f"创建时间：{created}",
+                f"更新时间：{updated}",
+            ]
+        )
+
+    @staticmethod
+    def _note_preview(note: str) -> str:
+        text = note.strip()
+        if len(text) > NOTE_PREVIEW_LEN:
+            return text[: NOTE_PREVIEW_LEN - 1] + "…"
+        return text
 
     async def _summary(self, user_open_id: str, command: ParsedCommand) -> ExecutionResult:
         assert command.range_start is not None

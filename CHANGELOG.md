@@ -8,6 +8,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 - Claim-time persistence of versioned, normalized Feishu event payloads on `processed_events` (payload envelope, transport, status, received_at) so future workers can replay without relying on in-memory events only.
 - User-scoped five-character Crockford Base32 ledger `short_id` values (`#XXXXX` in chat replies), with migration backfill and unique constraint per user.
+- Bot actions `list_entries` and `get_entry` for recent/filtered ledger lines and single-entry detail by short ID (text pagination via `更早 #XXXXX`).
 
 ### Changed
 

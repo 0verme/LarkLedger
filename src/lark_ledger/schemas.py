@@ -14,6 +14,8 @@ class Action(StrEnum):
     BATCH = "batch"
     UPDATE_LAST = "update_last"
     UNDO_LAST = "undo_last"
+    LIST_ENTRIES = "list_entries"
+    GET_ENTRY = "get_entry"
     SUMMARY = "summary"
     REPORT = "report"
     SET_BUDGET = "set_budget"
@@ -28,6 +30,8 @@ SUPPORTED_INPUT_CURRENCIES = frozenset(
 )
 MAX_BATCH_ENTRIES = 30
 MAX_BATCH_BUDGETS = 10
+DEFAULT_LIST_LIMIT = 10
+MAX_LIST_LIMIT = 20
 
 
 class BudgetCandidate(BaseModel):
@@ -75,6 +79,11 @@ class ParsedCommand(BaseModel):
     )
     batch_truncated: bool = False
     budgets_truncated: bool = False
+    # Chat short-ID reference (optional leading #); used by get_entry / list cursor.
+    entry_ref: str | None = Field(default=None, max_length=16)
+    before_entry_ref: str | None = Field(default=None, max_length=16)
+    # Upper bound is enforced in LedgerService (cap + user notice), not Schema max.
+    limit: int | None = Field(default=None, ge=1, le=100)
 
     @field_validator("currency")
     @classmethod
@@ -148,6 +157,39 @@ class ParsedCommand(BaseModel):
                 raise ValueError(f"{self.action} requires range_start and range_end")
             if self.range_start >= self.range_end:
                 raise ValueError(f"{self.action} range must be increasing")
+        if self.action is Action.LIST_ENTRIES:
+            if self.range_start is not None and self.range_end is not None:
+                if self.range_start >= self.range_end:
+                    raise ValueError("list_entries range must be increasing")
+            elif self.range_start is not None or self.range_end is not None:
+                raise ValueError("list_entries range requires both range_start and range_end")
+            if self.amount is not None or self.currency is not None or self.note is not None:
+                raise ValueError("list_entries does not accept amount, currency, or note")
+            if self.occurred_at is not None or self.entry_ref is not None:
+                raise ValueError("list_entries does not accept occurred_at or entry_ref")
+            if self.entries is not None or self.budgets is not None:
+                raise ValueError("list_entries does not accept entries or budgets")
+        if self.action is Action.GET_ENTRY:
+            if self.entry_ref is None or not str(self.entry_ref).strip():
+                raise ValueError("get_entry requires entry_ref")
+            if any(
+                value is not None
+                for value in (
+                    self.amount,
+                    self.currency,
+                    self.direction,
+                    self.category,
+                    self.note,
+                    self.occurred_at,
+                    self.range_start,
+                    self.range_end,
+                    self.limit,
+                    self.before_entry_ref,
+                    self.entries,
+                    self.budgets,
+                )
+            ):
+                raise ValueError("get_entry only accepts entry_ref")
         if self.action is Action.UPDATE_LAST and all(
             value is None
             for value in (self.amount, self.direction, self.category, self.note, self.occurred_at)
@@ -171,6 +213,11 @@ class ParsedCommand(BaseModel):
             raise ValueError("budgets is only supported for set_budgets")
         if self.action is Action.DELETE_BUDGET and self.category is None:
             raise ValueError("delete_budget requires category")
+        if self.action not in {Action.LIST_ENTRIES, Action.GET_ENTRY}:
+            if self.entry_ref is not None or self.before_entry_ref is not None:
+                raise ValueError("entry_ref fields are only supported for list/get entry actions")
+            if self.limit is not None:
+                raise ValueError("limit is only supported for list_entries")
         return self
 
 

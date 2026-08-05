@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -13,7 +13,9 @@ from lark_ledger.event_payload import (
     parse_stored_payload,
 )
 from lark_ledger.models import Direction, LedgerEntry, ProcessedEvent
+from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.events import EventService
+from lark_ledger.services.ledger import LedgerService
 
 pytestmark = pytest.mark.postgres
 
@@ -43,6 +45,54 @@ async def test_alembic_schema_is_at_head(
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
     assert revision == "20260805_0005"
+
+
+async def test_list_keyset_and_get_entry_on_postgres(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    when = datetime(2026, 8, 5, 12, tzinfo=UTC)
+    async with postgres_session_factory() as session:
+        for index, code in enumerate(["PG001", "PG002", "PG003"]):
+            entry = LedgerEntry(
+                user_open_id="ou_pg",
+                short_id=code,
+                amount=Decimal(str(index + 1)),
+                currency="CNY",
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                note="",
+                occurred_at=when,
+                source_type="text",
+            )
+            session.add(entry)
+            await session.flush()
+            entry.created_at = when + timedelta(seconds=index)
+            entry.updated_at = entry.created_at
+        await session.commit()
+
+        service = LedgerService(session)
+        page1 = await service.execute(
+            "ou_pg", ParsedCommand(action=Action.LIST_ENTRIES, limit=2)
+        )
+        # Newest by created_at: PG003, PG002
+        assert "1. #PG003" in page1.message
+        assert "2. #PG002" in page1.message
+        assert "查看 #PG002 之前的2笔" in page1.message
+        page2 = await service.execute(
+            "ou_pg",
+            ParsedCommand(
+                action=Action.LIST_ENTRIES,
+                limit=2,
+                before_entry_ref="PG002",
+            ),
+        )
+        assert "最近 1 笔账目" in page2.message
+        assert "#PG001" in page2.message
+        detail = await service.execute(
+            "ou_pg", ParsedCommand(action=Action.GET_ENTRY, entry_ref="PG001")
+        )
+        assert "短 ID：#PG001" in detail.message
+        assert "ou_pg" not in detail.message
 
 
 async def test_short_id_unique_per_user_allows_cross_user_reuse(

@@ -64,3 +64,24 @@ def is_valid_short_id(value: str) -> bool:
     except ShortIdError:
         return False
     return True
+
+
+_EXTRACT_RE: Final[re.Pattern[str]] = re.compile(
+    rf"#?([{CROCKFORD_ALPHABET}{CROCKFORD_ALPHABET.lower()}]{{{SHORT_ID_LENGTH}}})"
+)
+
+
+def extract_entry_refs(text: str) -> list[str]:
+    """Return normalized short IDs found in text, in order of appearance (deduped)."""
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _EXTRACT_RE.finditer(text or ""):
+        raw = match.group(0)
+        try:
+            code = normalize_entry_ref(raw)
+        except ShortIdError:
+            continue
+        if code not in seen:
+            seen.add(code)
+            found.append(code)
+    return found
