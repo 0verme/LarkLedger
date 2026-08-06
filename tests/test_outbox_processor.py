@@ -11,6 +11,7 @@ client; no network, no real sleep, no Feishu credentials.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -626,6 +627,86 @@ async def test_worker_crash_recovery_converges_to_succeeded_not_dead() -> None:
     # business) and completes it — it must converge to succeeded, not dead.
     worker = EventWorker(store, processor, owner_id="w2", jitter=None)
     await worker.run_once(now=T0 + timedelta(hours=1))
+
+    async with factory() as session:
+        row = await session.get(ProcessedEvent, event_id)
+        entries = (await session.execute(select(LedgerEntry))).scalars().all()
+    rows = await _outbox_rows(factory)
+    assert row is not None
+    assert row.status == EventProcessStatus.SUCCEEDED.value
+    assert row.attempt_count == 2
+    assert len(entries) == 1  # business never re-ran
+    assert len(rows) == 1  # outbox never re-inserted
+    assert len(feishu.texts) == 1  # reply sent exactly once
+    await engine.dispose()
+
+
+async def test_cancelled_worker_leaves_row_for_lease_takeover_without_double_business() -> None:
+    """A process killed mid-processing (CancelledError) is the crash window.
+
+    The worker has already committed business + outbox when the process is
+    terminated, so the row stays ``processing`` + leased. After the lease
+    expires another worker reclaims it, the outbox pre-check skips business,
+    and it converges to ``succeeded`` — exactly one bookkeeping and one reply.
+    """
+    engine, factory = await _sqlite_factory()
+    event_id = "evt_killed"
+    payload = serialize_payload(
+        build_stored_payload(
+            event_id,
+            _message_event("om_killed", "午饭32"),
+            transport="webhook",
+            received_at=T0,
+        )
+    )
+    async with factory() as session:
+        session.add(
+            ProcessedEvent(
+                event_id=event_id,
+                payload_json=payload,
+                payload_version=1,
+                transport="webhook",
+                status=EventProcessStatus.RECEIVED.value,
+                received_at=T0,
+            )
+        )
+        await session.commit()
+
+    feishu = RecordingFeishu()
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        FixedInterpreter(_create_command()),
+    )
+    store = EventWorkerStore(factory)
+
+    # The process is killed after business + outbox commit but before the status
+    # update: the processor raises CancelledError, which the worker re-raises and
+    # leaves the row processing + leased for a later takeover. The worker's own
+    # ``run_once`` performs the claim (attempt 1).
+    class KillingProcessor:
+        async def process(self, event: dict[str, Any]) -> None:
+            await processor.process(event)  # commits business + outbox
+            raise asyncio.CancelledError()
+
+    killed_worker = EventWorker(store, KillingProcessor(), owner_id="w1", jitter=None)
+    with pytest.raises(asyncio.CancelledError):
+        await killed_worker.run_once(now=T0)
+
+    async with factory() as session:
+        row = await session.get(ProcessedEvent, event_id)
+        assert row is not None
+        assert row.status == EventProcessStatus.PROCESSING.value  # left for takeover
+        assert row.lease_owner == "w1"
+        assert row.attempt_count == 1
+        row.lease_expires_at = T0 - timedelta(seconds=1)  # lease expires later
+        await session.commit()
+
+    # A new worker reclaims after the lease expires; the outbox pre-check skips
+    # business and the event converges to succeeded with a single bookkeeping.
+    takeover = EventWorker(store, processor, owner_id="w2", jitter=None)
+    await takeover.run_once(now=T0 + timedelta(hours=1))
 
     async with factory() as session:
         row = await session.get(ProcessedEvent, event_id)

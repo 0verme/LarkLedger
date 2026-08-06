@@ -659,6 +659,51 @@ async def test_card_send_retry_reuses_image_key_without_reuploading() -> None:
     await engine.dispose()
 
 
+async def test_temporary_http_500_marks_failed_then_retries_to_sent() -> None:
+    """A genuine Feishu HTTP 500 is a retryable delivery failure.
+
+    The first attempt records ``failed`` on the outbox row with backoff (never
+    the event, never business); a retry after the backoff window succeeds and
+    the same row is marked ``sent`` with the stable Feishu ``uuid`` key.
+    """
+    import httpx
+
+    engine, factory = await _sqlite_factory()
+    row = await _insert(factory, event_id="evt_http500", message_id="om_http500")
+    store = _store(factory)
+    item = await store.claim_by_id(row.id, "w1", T0, lease_seconds=300.0)
+    assert item is not None
+
+    request = httpx.Request("POST", "https://open.feishu.cn/open-apis/reply")
+    feishu = RecordingFeishu(
+        reply_error=httpx.HTTPStatusError(
+            "temporary server error",
+            request=request,
+            response=httpx.Response(500, request=request),
+        )
+    )
+    deliverer = _deliverer(store, feishu)
+    assert await deliverer.process_item(item, T0) == ReplyStatus.FAILED.value
+    reloaded = await _row(factory, row.id)
+    assert reloaded.status == ReplyStatus.FAILED.value
+    assert reloaded.last_error_code == "HTTPStatusError"
+    assert reloaded.next_attempt_at == _naive(T0 + timedelta(seconds=2))  # backoff
+
+    # After the backoff window a healthy retry succeeds on the same row.
+    later = T0 + timedelta(seconds=3)
+    feishu.reply_error = None
+    item2 = await store.claim_by_id(row.id, "w1", later, lease_seconds=300.0)
+    assert item2 is not None
+    assert await deliverer.process_item(item2, T0) == ReplyStatus.SENT.value
+    reloaded2 = await _row(factory, row.id)
+    assert reloaded2.status == ReplyStatus.SENT.value
+    assert reloaded2.sent_at is not None
+    assert reloaded2.lease_owner is None
+    # The Feishu uuid idempotency key stayed stable across both attempts.
+    assert feishu.text_calls == [("om_http500", "hello", row.id.hex)]
+    await engine.dispose()
+
+
 async def test_card_image_upload_failure_degrades_to_text_only_card() -> None:
     engine, factory = await _sqlite_factory()
     png = b"\x89PNG\r\n\x1a\nreport"
