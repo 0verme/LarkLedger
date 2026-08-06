@@ -1,8 +1,10 @@
 import os
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from dotenv import dotenv_values
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -16,6 +18,13 @@ from sqlalchemy.ext.asyncio import (
 def postgres_url() -> str:
     url = os.getenv("TEST_POSTGRES_URL")
     if not url:
+        # Local fallback: read just TEST_POSTGRES_URL from the project .env
+        # instead of exporting it, so Settings(_env_file=None) defaults in unit
+        # tests are never polluted by other LARK_LEDGER_* variables.
+        url = dotenv_values(Path(__file__).resolve().parents[2] / ".env").get(
+            "TEST_POSTGRES_URL"
+        )
+    if not url:
         pytest.skip("TEST_POSTGRES_URL is not configured")
     return url
 
@@ -26,7 +35,7 @@ async def postgres_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE TABLE budget_alerts, category_budgets, "
+                "TRUNCATE TABLE event_replay_audits, budget_alerts, category_budgets, "
                 "ledger_entry_revisions, ledger_entries, reply_outbox, "
                 "processed_events CASCADE"
             )
@@ -35,7 +44,7 @@ async def postgres_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
     async with engine.begin() as connection:
         await connection.execute(
             text(
-                "TRUNCATE TABLE budget_alerts, category_budgets, "
+                "TRUNCATE TABLE event_replay_audits, budget_alerts, category_budgets, "
                 "ledger_entry_revisions, ledger_entries, reply_outbox, "
                 "processed_events CASCADE"
             )

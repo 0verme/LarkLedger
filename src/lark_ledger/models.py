@@ -140,6 +140,13 @@ class ProcessedEvent(Base):
     attempt_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    manual_replay_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    replay_safety_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    business_committed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     next_attempt_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -157,6 +164,36 @@ class ProcessedEvent(Base):
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class EventReplayAudit(Base):
+    """Append-only operator audit for guarded manual event replay.
+
+    ``event_id`` intentionally has no foreign key: terminal event cleanup must
+    not erase the replay audit. Payloads and user financial content are never
+    copied into this table.
+    """
+
+    __tablename__ = "event_replay_audits"
+    __table_args__ = (
+        Index("ix_event_replay_audits_event_created", "event_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    operator: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str] = mapped_column(String(512), nullable=False)
+    previous_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    previous_attempt_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    replay_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False, default="replay_event")
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    resulting_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    replayed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 

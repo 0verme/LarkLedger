@@ -16,6 +16,12 @@ from typing import Any, Final
 
 PAYLOAD_VERSION: Final[int] = 1
 
+# Events claimed with this marker were accepted after the transactional-outbox
+# invariant became part of the supported replay contract. Historical rows are
+# deliberately left unmarked: without that proof, a missing outbox cannot show
+# that an older mutation or budget write never committed.
+REPLAY_SAFETY_VERSION: Final[int] = 1
+
 ALLOWED_TRANSPORTS: Final[frozenset[str]] = frozenset({"webhook", "websocket"})
 
 #: Upper bound for ``processed_events.result_summary`` (safe error summaries).

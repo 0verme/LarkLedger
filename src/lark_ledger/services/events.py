@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.event_payload import (
     MAX_RESULT_SUMMARY_LENGTH,
+    REPLAY_SAFETY_VERSION,
     EventPayloadError,
     EventProcessStatus,
     build_stored_payload,
@@ -108,6 +109,8 @@ class EventService:
                     transport=transport,
                     status=EventProcessStatus.RECEIVED.value,
                     attempt_count=0,
+                    manual_replay_count=0,
+                    replay_safety_version=REPLAY_SAFETY_VERSION,
                     source_message_id=message_id,
                     user_open_id=user_open_id_from_event(event),
                     received_at=received_at,

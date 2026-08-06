@@ -618,6 +618,7 @@ async def test_worker_crash_recovery_converges_to_succeeded_not_dead() -> None:
     async with factory() as session:
         row = await session.get(ProcessedEvent, event_id)
         assert row is not None and row.status == EventProcessStatus.PROCESSING.value
+        assert row.business_committed_at is not None
         row.lease_expires_at = T0 - timedelta(seconds=1)  # lease expires
         await session.commit()
 
@@ -636,6 +637,63 @@ async def test_worker_crash_recovery_converges_to_succeeded_not_dead() -> None:
     assert len(entries) == 1  # business never re-ran
     assert len(rows) == 1  # outbox never re-inserted
     assert len(feishu.texts) == 1  # reply sent exactly once
+    await engine.dispose()
+
+
+async def test_durable_commit_marker_prevents_business_rerun_after_outbox_cleanup() -> None:
+    engine, factory = await _sqlite_factory()
+    event_id = "evt_cleaned_outbox"
+    payload = serialize_payload(
+        build_stored_payload(
+            event_id,
+            _message_event("om_cleaned", "午饭32"),
+            transport="webhook",
+            received_at=T0,
+        )
+    )
+    async with factory() as session:
+        session.add(
+            ProcessedEvent(
+                event_id=event_id,
+                payload_json=payload,
+                payload_version=1,
+                transport="webhook",
+                status=EventProcessStatus.RECEIVED.value,
+                received_at=T0,
+            )
+        )
+        await session.commit()
+
+    feishu = RecordingFeishu()
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        FixedInterpreter(_create_command()),
+    )
+    store = EventWorkerStore(factory)
+    await store.claim_batch("w1", T0, batch_size=1, lease_seconds=300)
+    await processor.process(business_event_from_payload(parse_stored_payload(payload)))
+    async with factory() as session:
+        row = await session.get(ProcessedEvent, event_id)
+        assert row is not None and row.business_committed_at is not None
+        row.lease_expires_at = T0 - timedelta(seconds=1)
+        await session.execute(
+            ReplyOutbox.__table__.delete().where(ReplyOutbox.event_id == event_id)
+        )
+        await session.commit()
+
+    await EventWorker(store, processor, owner_id="w2", jitter=None).run_once(
+        now=T0 + timedelta(hours=1)
+    )
+
+    async with factory() as session:
+        row = await session.get(ProcessedEvent, event_id)
+        entries = (await session.execute(select(LedgerEntry))).scalars().all()
+        outboxes = (await session.execute(select(ReplyOutbox))).scalars().all()
+        assert row is not None and row.status == EventProcessStatus.SUCCEEDED.value
+        assert len(entries) == 1
+        assert outboxes == []
     await engine.dispose()
 
 

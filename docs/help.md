@@ -242,6 +242,24 @@ source_type, created_at, updated_at, deleted_at
 - 文字、图片和音频会发送到部署者配置的 AI 服务，请按该服务的隐私和数据保留政策使用。
 - 处理失败时，机器人回复不会暴露内部异常或上游响应；请把错误编号提供给管理员，由管理员在服务日志中查询完整异常。
 
+## 管理员故障恢复：人工事件重放
+
+这不是普通用户的飞书命令。管理员在服务器终端处理 `dead` / `failed` 事件时，可先运行：
+
+```bash
+python -m lark_ledger.admin replay-event \
+  --event-id <event_id> \
+  --operator <operator> \
+  --reason "temporary upstream outage"
+```
+
+默认只做 dry-run；输出状态、lease、Outbox / 来源账目计数和安全原因码，不输出消息 payload、
+财务正文、operator 或 reason。确认预检为 eligible 后，追加 `--execute` 才会重新排队并写审计。
+
+事件重放会重新执行业务，与只重发已持久化回复的“结果回放”严格不同。存在任何 Outbox 时
+必须拒绝事件重放并改用结果回放；存在来源账目、有效 lease、无 payload、版本不支持、状态不
+安全或历史原子性无法证明时也默认拒绝。模糊事件应先人工取证，不能用重放命令替代数据库备份。
+
 ## 当前不支持 / 已知限制
 
 - 把一张小票拆成多个商品

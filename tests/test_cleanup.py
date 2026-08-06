@@ -20,6 +20,7 @@ from lark_ledger.event_payload import EventProcessStatus
 from lark_ledger.models import (
     Base,
     Direction,
+    EventReplayAudit,
     LedgerEntry,
     LedgerEntryRevision,
     ProcessedEvent,
@@ -308,6 +309,20 @@ async def test_cleanup_never_deletes_ledger_entries_or_revisions() -> None:
             )
         )
         session.add(event_row("cleanup-only", EventProcessStatus.SUCCEEDED, old))
+        session.add(
+            EventReplayAudit(
+                event_id="cleanup-only",
+                operator="operator",
+                reason="audit must outlive terminal event cleanup",
+                previous_status=EventProcessStatus.DEAD.value,
+                previous_attempt_count=3,
+                replay_number=1,
+                action="replay_event",
+                outcome="requeued",
+                resulting_status=EventProcessStatus.RECEIVED.value,
+                replayed_at=old,
+            )
+        )
         await session.commit()
 
     await service(factory).run_once(now=NOW)
@@ -316,6 +331,7 @@ async def test_cleanup_never_deletes_ledger_entries_or_revisions() -> None:
         assert await session.scalar(select(func.count()).select_from(LedgerEntry)) == 1
         assert await session.scalar(select(func.count()).select_from(LedgerEntryRevision)) == 1
         assert await session.get(ProcessedEvent, "cleanup-only") is None
+        assert await session.scalar(select(func.count()).select_from(EventReplayAudit)) == 1
     await engine.dispose()
 
 

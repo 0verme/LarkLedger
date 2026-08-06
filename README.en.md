@@ -133,7 +133,7 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - Failed replies **are** auto-retried by the background **Reply Worker** (P06b): committed outbox intents are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, delivered with a database lease, retried with exponential backoff, and dead-lettered after permanent errors or exhausted attempts. A failed reply never re-runs business, and pending / failed replies are re-delivered after a restart.
 - Each reply carries a stable Feishu `uuid` idempotency key (the outbox row id): within the 1-hour dedup window a re-send after a crash is deduplicated by Feishu. In the extreme case (Feishu sent, local mark lost, and the re-send is more than 1 hour later) a duplicate reply may reach the user — it can **never** cause duplicate business execution or double bookkeeping.
 - A lightweight Cleanup Worker deletes only terminal delivery records in bounded batches: successful events / sent replies default to 30 days, while dead records default to 90 days. Ledger entries and revisions are never deleted. Cleanup is not a database backup; review audit requirements before shortening retention.
-- There is **no** user-visible replay / manual-resend command; `OutboxReplayService` is an internal testable capability. There is no human replay for `dead` events.
+- Operators can use the dry-run-by-default `python -m lark_ledger.admin replay-event` CLI to replay provably safe `dead` / `failed` events; only explicit `--execute` reruns business, and every accepted replay writes an audit. Events with an Outbox, source ledger results, or unproven historical atomicity are refused. Result replay remains internal.
 - Image / voice / batch paths have **no** pre-write confirmation flow yet
 - No web admin UI, no shared ledgers
 - **JSON export is not a formal capability** (CSV only)
@@ -142,7 +142,7 @@ Roadmap themes (no promised ship dates):
 
 ```text
 v0.2.1: reliable delivery (Event / Reply Workers, Transactional Outbox, readiness,
-        and terminal retention cleanup done; result replay is internal)
+        terminal retention cleanup, and guarded event replay done; result replay is internal)
 v0.3.0: high-risk confirmation (image / voice / batch, etc.)
 ```
 

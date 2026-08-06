@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.2.0` |
 | Git tag | `v0.2.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.2.0`（亦有 `0.2` / `latest` 由发布流水线写入） |
-| Alembic head | `20260806_0010`（main；v0.2.0 为 `20260806_0007`） |
+| Alembic head | `20260806_0011`（main；v0.2.0 为 `20260806_0007`） |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -100,9 +100,9 @@ PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.0"`。
 main 分支已加入后台事件 Worker（P05b），**本阶段不新增迁移**，复用 `20260806_0007` 的字段与索引。
 
 - **默认行为变化：** `LARK_LEDGER_WORKER_ENABLED` 默认 `true`。升级后入口（Webhook 后台任务 / WebSocket 回调）只负责领取事件并立即返回，处理由进程内 Worker 完成（领取 → 租约 → 指数退避重试 → dead）。若想保持 v0.2.0 的进程内同步处理，显式设置 `LARK_LEDGER_WORKER_ENABLED=false`。
-- **存量事件：** 升级前已处于 `received` 的事件会被 Worker 自动领取处理；已 `succeeded` / `dead` / `legacy_succeeded` 的事件不会被领取。历史 `failed` 且未设 `next_attempt_at` 的行不会被 Worker 自动捞取（避免重放旧错误），如需处理请人工介入（本版本无重放命令）。
+- **存量事件：** 升级前已处于 `received` 的事件会被 Worker 自动领取处理；已 `succeeded` / `dead` / `legacy_succeeded` 的事件不会被领取。历史 `failed` 且未设 `next_attempt_at` 的行不会被 Worker 自动捞取。P06e 虽提供管理员重放命令，但迁移不会猜测历史事件的原子性标记，因此无法证明安全的存量行仍会拒绝并要求人工取证。
 - **失败处理：** 可重试错误写入 `failed` 并按指数退避重试（默认最多 3 次），永久错误（payload 损坏 / 契约错误 / 重复约束 / 非 429 的 4xx）直接进入 `dead`。崩溃后未完成的事件在租约过期（默认 300 秒）后由其他 Worker 接管。
-- **幂等边界（诚实声明）：** 本版本没有 Transactional Outbox，业务写入与事件状态不是原子提交；重复处理由现有 `(source_message_id, source_item_index)` 唯一约束阻止重复入账，但**不**宣称"绝不重复记账"。没有回复自动补偿、没有人工重放 `dead`。
+- **该历史阶段的幂等边界：** P05b 当时尚无 Transactional Outbox，业务写入与事件状态不是原子提交；重复处理仅由 `(source_message_id, source_item_index)` 唯一约束兜底，也尚无回复补偿或 `dead` 人工重放。后续 `0008` 与 `0011` 分别补上原子 Outbox 与受控重放，但 `0011` 不会把这批历史事件误标为安全。
 - **回退：** 代码回退到 `v0.2.0` tag 即可关闭 Worker 行为；数据库结构不变，无需降级。
 
 ## 迁移 `20260806_0008`（Transactional Outbox / 回复 Outbox）
@@ -157,8 +157,25 @@ Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 
   dead Outbox 保留 90 天，每小时按每类最多 500 行的短事务清理。保留期必须至少 1 天；
   需要关闭时显式设置 `CLEANUP_ENABLED=false`。
 - **安全边界：** 只删除终态投递记录，不删除账本、revision、非终态、有效 lease 或仍有关联
-  Outbox 的 Event。清理不是备份；调整期限前评估审计需求。当前仍无人工事件重放。
+  Outbox 的 Event。清理不是备份；调整期限前评估审计需求。
 - **回退：** `alembic downgrade 20260806_0009` 只删除 4 个清理索引，不恢复已经按配置过期
   并由应用清理的数据。若要回退代码并停止后续清理，应先设置 `CLEANUP_ENABLED=false` 并备份。
 
-当前 Alembic head：`20260806_0010`。
+## 迁移 `20260806_0011`（受控事件重放）
+
+- **升级：** 为 `processed_events` 增加 `manual_replay_count`、可空 `replay_safety_version`
+  与可空 `business_committed_at`，并新建不保存 payload 的 `event_replay_audits` 审计表。
+- **历史安全边界：** 存量事件的 `replay_safety_version` 保持 NULL；迁移无法证明旧业务写入
+  是否与 Outbox 原子提交，因此不会把历史失败事件自动标记为可重放。升级后新接收事件由应用写入
+  当前安全版本。迁移只对「存在关联 Outbox」的存量事件回填 `business_committed_at`，其余存量行
+  保持 NULL 且不猜测——该证据与业务、Outbox 同事务写入，在 Outbox 被终态清理删除后仍可拒绝
+  自动 Worker 与人工重放重复执行业务。
+- **操作：** `python -m lark_ledger.admin replay-event ...` 默认 dry-run；只有 `--execute`
+  会在 `FOR UPDATE` 后再次预检，并把审计与 `received` 状态重置放在同一事务。任何已有 Outbox
+  或来源账目结果都会拒绝重新执行业务。
+- **尝试语义：** `attempt_count` 是当前自动重试窗口，人工重放时归零；历史值保存在审计，
+  `manual_replay_count` 累计重放次数。Worker 领取后从第 1 次开始，仍受原最大尝试数约束。
+- **回退：** `alembic downgrade 20260806_0010` 会删除重放审计与两个重放元数据列，但不修改
+  账本、Outbox 或事件 payload。需要保留审计时不得执行该 downgrade。
+
+当前 Alembic head：`20260806_0011`。

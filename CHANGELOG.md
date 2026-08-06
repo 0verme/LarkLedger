@@ -4,6 +4,15 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (v0.2.1 — guarded manual event replay; P06e)
+
+- `python -m lark_ledger.admin replay-event` provides a controlled operator path for event replay. It is dry-run by default and requires non-empty, length-bounded `--operator` and `--reason`; `--execute` is the only way to change state.
+- A locked execute-time preflight permits only `dead`, `failed`, or expired-lease `processing` events with a supported payload, consistent source message, no outbox, no source ledger result, and a replay-safety marker proving the current transactional-outbox contract. Ambiguous historical rows are refused instead of guessed.
+- Accepted replay atomically writes an append-only `event_replay_audits` row and resets the event to `received`. `attempt_count` starts a new bounded automatic retry window at zero; `manual_replay_count` and the audit's previous attempt count preserve history.
+- Any existing Outbox refuses business replay and directs the operator to result replay. Existing source ledger rows refuse replay with a duplicate-business-risk outcome. CLI output and logs contain only safe statuses, counts, and error codes—not payload, operator reason, user financial text, or identifiers from the stored message.
+- `business_committed_at` is written atomically with business + outbox and outlives outbox retention: even after cleanup deletes the outbox, the automatic crash-window pre-check and manual replay both refuse to re-run business from this durable marker. Migration `20260806_0011` backfills it only for historical events that have an outbox.
+- Migration `20260806_0011` adds replay metadata and the audit table. Historical events intentionally keep an unproven safety marker and therefore require investigation rather than automatic requeue.
+
 ### Added (v0.2.1 — terminal retention cleanup; P06d)
 
 - A lifespan-managed Cleanup Worker deletes only terminal delivery records in bounded, short transactions: `processed_events` in `succeeded` / `legacy_succeeded` / `dead`, and `reply_outbox` in `sent` / `dead`. Non-terminal rows, active leases, ledger entries, and ledger revisions are never selected.
@@ -59,7 +68,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Changed
 
-- Head migration is now `20260806_0010` (P06d adds terminal cleanup indexes; P06b added reply delivery metadata at `20260806_0009`).
+- Head migration is now `20260806_0011` (P06e adds guarded event replay audit state; P06d added terminal cleanup indexes at `20260806_0010`).
 - `ReplyOutboxStore` gains P06b claim / lease primitives: `claim_batch` (worker, `FOR UPDATE SKIP LOCKED` + per-event ordering), `claim_by_id` (synchronous path), lease-guarded `mark_sent` / `record_failure` (both guarded by `status='sending' AND lease_owner=<owner>`), and `persist_file_key` / `persist_image_key`. `attempt_count` is incremented at claim (entering `sending`), not on failure; the old unguarded `mark_failed` is replaced by `record_failure`. The compatible single send and the Reply Worker share the same `ReplyDeliverer`.
 - `FeishuClient.reply_text` / `reply_card` / `reply_file` now accept a `uuid` idempotency key and return the remote reply `message_id`.
 - `MessageProcessor` takes `reply_worker_enabled` and an optional `wakeup`; with the worker enabled it only signals delivery after the outbox commit, otherwise it drives the synchronous claim / send loop.
@@ -75,7 +84,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 ### Known limitations (v0.2.1 is not finished)
 
 - **Transactional Outbox (P06a) + Reply Worker (P06b) are provided:** business changes and reply intents commit atomically, a crashed event converges to `succeeded` without re-running business, and committed replies are delivered by the background reply worker with a lease, exponential-backoff retry, and reply `dead` handling.
-- **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal), `dead`-event human replay, and a web admin UI / outbox visualization. Readiness and terminal retention cleanup are now available.
+- **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal) and a web admin UI / outbox visualization. Guarded operator event replay is CLI-only; readiness and terminal retention cleanup are available.
 - **Pre-business error / notice replies** (e.g. "图片识别功能尚未配置", stage error prompts) are still sent directly and are **not** persisted to the outbox.
 - **Extreme duplicate-reply window (disclosed):** if Feishu sends successfully but the local `sent` mark is lost and the re-send is more than 1 hour later (past the Feishu `uuid` dedup window), a duplicate reply may reach the user — it can never cause duplicate business execution or double bookkeeping.
 - The release must not claim "never double-bookkeeps"; the `(source_message_id, source_item_index)` unique constraint remains the fallback guard.

@@ -14,6 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from lark_ledger.event_payload import (
     MAX_RESULT_SUMMARY_LENGTH,
+    REPLAY_SAFETY_VERSION,
     TERMINAL_STATUSES,
     WORKER_CLAIMABLE_STATUSES,
     EventProcessStatus,
@@ -76,6 +77,8 @@ async def test_new_claim_records_state_fields() -> None:
     row = await _fresh_row(factory, "evt_new")
     assert row.status == EventProcessStatus.SUCCEEDED.value
     assert row.attempt_count == 1  # one processing attempt was started
+    assert row.manual_replay_count == 0
+    assert row.replay_safety_version == REPLAY_SAFETY_VERSION
     assert row.source_message_id == "om_text"
     assert row.user_open_id == "ou_user"
     assert row.next_attempt_at is None

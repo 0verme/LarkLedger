@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
@@ -22,7 +23,7 @@ from lark_ledger.entry_commands import (
     bind_entry_refs_from_message,
     try_parse_deterministic_entry_command,
 )
-from lark_ledger.models import ReplyOutbox
+from lark_ledger.models import ProcessedEvent, ReplyOutbox
 from lark_ledger.outbox import (
     OUTBOX_PAYLOAD_VERSION,
     ReplyStatus,
@@ -327,7 +328,10 @@ class MessageProcessor:
         # re-delivered after a crash between that commit and the event status
         # update, skip business entirely (no duplicate entries / outbox rows)
         # and let the worker converge the event to ``succeeded``.
-        if event_id is not None and await self.outbox_store.has_outbox(event_id):
+        if event_id is not None and (
+            await self.outbox_store.has_outbox(event_id)
+            or await self._business_result_committed(event_id)
+        ):
             logger.info(
                 "event already processed; skipping business event_id=%s message_id=%s",
                 event_id,
@@ -595,8 +599,25 @@ class MessageProcessor:
                 action=command.action,
             )
             session.add_all(rows)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    # Durable proof independent of outbox retention. This write
+                    # commits atomically with every business result and reply
+                    # intent, so future worker/manual replay never relies on a
+                    # possibly-cleaned outbox row to avoid duplicate business.
+                    parent.business_committed_at = datetime.now(UTC)
             await session.commit()
         return rows
+
+    async def _business_result_committed(self, event_id: str) -> bool:
+        async with self.session_factory() as session:
+            committed_at = await session.scalar(
+                select(ProcessedEvent.business_committed_at).where(
+                    ProcessedEvent.event_id == event_id
+                )
+            )
+            return committed_at is not None
 
     async def _build_outbox_rows(
         self,

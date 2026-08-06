@@ -122,7 +122,7 @@ async def test_cleanup_index_migration_upgrade_downgrade_roundtrip(
         monkeypatch.setenv("LARK_LEDGER_DATABASE_URL", scratch_dsn)
         get_settings.cache_clear()
         await asyncio.to_thread(migrate, "20260806_0009")
-        await asyncio.to_thread(migrate, "head")
+        await asyncio.to_thread(migrate, "20260806_0010")
 
         expected = {
             "ix_events_cleanup_processed",

@@ -101,7 +101,7 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 - **attempt 语义：** 每次进入 `processing`（含租约接管）`attempt_count + 1`；最大尝试次数包含首次处理；达到上限后失败进入 `dead`。
 - **重试分类：** 永久错误（payload 无法解析 / 版本不支持 / `ValueError`/`TypeError` 契约错误 / 重复约束 `IntegrityError` / 非 408/429 的 4xx）直接进入 `dead`；其余默认视为可重试（网络、超时、429、5xx、数据库临时故障），写入 `failed` 并按指数退避安排 `next_attempt_at`。分类策略保守且可解释，文档见代码注释。
 - **退避：** `min(base × 2^(attempt-1), max)`，默认 base 2 秒、max 3600 秒，并带约 10% 随机抖动避免多个事件同时重试。测试使用可注入时钟，不真实等待。
-- **dead：** 永久错误、payload 缺失 / 损坏 / 版本不支持，或达到最大尝试次数时写入 `dead`，清空租约与 `next_attempt_at`，保留脱敏错误摘要；不再自动领取。**本版本不提供人工重放 dead**（属后续工作包）。
+- **dead：** 永久错误、payload 缺失 / 损坏 / 版本不支持，或达到最大尝试次数时写入 `dead`，清空租约与 `next_attempt_at`，保留脱敏错误摘要；不再自动领取。P06e 提供仅管理员使用的受控 CLI 重放，且默认 dry-run。
 
 **幂等与重复记账边界（P06a）：** 业务写入与回复意图通过 Transactional Outbox 在同一事务提交，因此业务成功 ⟹ 一定有 Outbox 记录。崩溃窗口重试时，处理器先检查 Outbox（有 ⟹ 业务已提交）从而跳过业务，事件收敛为 `succeeded`，**不再**以 `IntegrityError→dead` 作为正常恢复路径。`(source_message_id, source_item_index)` 唯一约束仍是**兜底**保障（例如同一飞书消息被以不同 `event_id` 重新投递时），此时 `IntegrityError` 仍会把事件移入 `dead` 以阻止重复入账；改、删、恢复动作对已应用的结果是幂等的（重复执行会返回"没有变化 / 已删除"）。**不**宣称"绝不重复记账"，发布文案不得使用 at-least-once 之外更强的主张。
 
@@ -135,7 +135,16 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 - 每类清理在独立短事务中按时间索引选取至多 `batch_size` 个主键并使用 `FOR UPDATE SKIP LOCKED`，再按主键删除。顺序固定为 Outbox 后 Event；Event 只有在关联 Outbox 已全部按自身期限清除后才可删除，不依赖 CASCADE 提前丢失审计记录。多实例可并发运行且重复执行幂等。
 - Cleanup Worker 随 lifespan 启停，单轮失败只记录清理类型、截止时间、耗时和安全错误码，下轮继续。它不属于核心承接硬门禁：异常退出时 `/readyz` 的 `cleanup_worker` 为 `warning`，整体仍可 ready；`/healthz` 不受影响。
 
-**尚未实现（后续版本）：** 事件人工重放、dead 事件重新执行业务、Web 管理后台 / Outbox 可视化、对用户可见的回放命令。
+### 受控人工事件重放（v0.2.1 / P06e）
+
+- **事件重放不同于结果回放：** 事件重放会重新执行业务；结果回放只重发已持久化的 Outbox 内容。任何关联 Outbox（无论 sent / pending / failed / dead）都会拒绝事件重放，并指示使用结果回放。
+- 新接收事件写入 `replay_safety_version=1`，证明其业务写入遵守 Transactional Outbox 原子边界。迁移不会为历史事件猜测该标记；无法证明原子性的存量行默认拒绝。预检同时校验状态、payload 版本、事件 / 来源消息一致性、lease、Outbox 和按 `source_message_id/source_item_index` 查询到的账目结果。
+- 业务成功时 `business_committed_at` 与业务结果、Outbox 在同一事务写入，作为**独立于 Outbox 保留期**的持久证据：即使 Outbox 已被终态清理删除，自动 Worker 的崩溃窗口预检与人工重放都会据此拒绝再次执行业务。迁移仅对「存在关联 Outbox」的存量事件回填该证据，绝不猜测其余存量行。
+- 只有无 Outbox、无来源账目结果且 payload 完整的 `dead` / `failed`，或 lease 明确过期的 `processing` 可候选重放。执行事务使用 `FOR UPDATE` 重新预检；状态重置为 `received`，清空调度、租约和错误字段。
+- `attempt_count` 表示当前自动尝试窗口，人工重放时重置为 0，使 Worker 获得新的有限重试窗口；`manual_replay_count` 累计人工重放次数，`event_replay_audits.previous_attempt_count` 保存旧窗口计数。两名操作员并发时只有持锁者能成功重放，旧 Worker 的 lease-guarded 更新不能覆盖新状态。
+- 每次执行尝试写入独立 `event_replay_audits`；成功审计与状态重置同事务。审计不复制 payload，终态 Event 清理也不级联删除审计。CLI 默认 dry-run，只有显式 `--execute` 修改数据，且输出不包含 payload、财务正文、operator 或 reason。
+
+**尚未实现（后续版本）：** Web 管理后台 / Outbox 可视化、对用户可见的结果回放命令。
 
 ### 载荷内容与隐私
 
@@ -176,7 +185,8 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 - `ledger_entry_revisions`：账目修改/删除/恢复的 append-only 快照（`before_json` / `after_json`，含 `snapshot_version`）；与账目变更同事务写入。
 - `category_budgets`：每个用户和分类唯一的长期月预算。
 - `budget_alerts`：记录预算在每个自然月已发送的 80% / 100% 阈值提醒。
-- `processed_events`：已领取的飞书事件。新事件含版本化 `payload_json`、`payload_version`、`transport`、`status`、`received_at`、`processed_at` 与可选 `last_error_code`。可靠投递状态（P05a）另含 `attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`result_summary`、`updated_at`，以及为人工定位去规范化的 `source_message_id` / `user_open_id`；历史无载荷行保持 `legacy_succeeded` 且不可重放。
+- `processed_events`：已领取的飞书事件。新事件含版本化 `payload_json`、`payload_version`、`transport`、`status`、`received_at`、`processed_at` 与可选 `last_error_code`。可靠投递状态（P05a）另含 `attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`result_summary`、`updated_at`，以及为人工定位去规范化的 `source_message_id` / `user_open_id`；P06e 增加 `manual_replay_count` 与仅对新事件写入的 `replay_safety_version`。历史无载荷行保持 `legacy_succeeded` 且不可重放。
+- `event_replay_audits`：人工事件重放审计，保存 operator、reason、前后状态、旧尝试数、重放序号、结果与安全错误码；不保存 payload 副本，也不外键级联到可能被保留策略清理的 Event。
 - `reply_outbox`：**Transactional Outbox（P06a）+ Reply Worker 状态（P06b）**——自包含的飞书回复意图，与业务变更同事务提交。字段包括 `event_id`（关联源事件）、`message_id`（回复目标）、`reply_type`、`sequence`、`transport`、`payload_version`、`payload_json`（内容信封）、`payload_blob`（CSV / 报告图片字节，附 `size` / `sha256`）、`status`、`attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`sent_at`、`last_error_code`、`result_summary`，以及 P06b 投递元数据 `remote_message_id`（远端回复消息 ID）、`remote_file_key` / `remote_image_key`（上传资源键，重试复用不重复上传）。唯一约束 `(event_id, reply_type)` 保证幂等；索引 `(status, next_attempt_at)`、`lease_expires_at` 支撑领取，`(event_id, sequence)` 支撑同一事件内的顺序领取。
 
 所有日期范围都使用左闭右开语义。账目发生时间以带时区时间保存；相对时间、自然月和预算统计按全局配置的 IANA 时区计算。
@@ -192,4 +202,4 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 - CSV 导出上传或发送失败时回复可理解错误；Reply Worker 模式下失败行按退避自动重试直至 `dead`，同步模式下保留 v0.2.0 的直接失败提示。临时导出文件在上传结束或失败后删除。
 - 复杂文字以及单图或多图中的批量账目先逐项严格校验，再用数据库保存点隔离单项写入，最终统一提交并返回成功、失败和收支合计。复杂文字中的预算也逐项隔离处理。所有批量账目共用原始消息的 `message_id` 和逐项索引，沿用来源幂等约束。完整异常只记录到带错误编号和处理阶段的日志中，用户回复仅包含可执行的分类错误。
 - 基础 `compose.yaml` 只启动应用；`compose.dev.yaml` 可叠加本地 PostgreSQL 16。源码 Compose 在启动 Uvicorn 前执行 `alembic upgrade head`。
-- 高可用部署仍需自行设计备份与凭据轮换。事件重试、租约接管和 dead 由事件 Worker 自动完成；回复发送、重试、租约接管和 dead 由 Reply Worker 自动完成（P06b）。**已具备** Transactional Outbox 与 readiness：业务变更与回复意图同事务提交，崩溃窗口重试不会重复执行业务；回复失败绝不重新执行业务；进程重启后继续投递 `pending` / `failed` 回复；结果回放只重发已持久化载荷；`/readyz` 能发现数据库 / migration / 后台任务异常。**仍未具备**：事件人工重放、Web 管理后台 / Outbox 可视化、终态自动清理、AI 写入前确认、对所有外部 API 都能绝对避免重复回复（飞书已发送但本地未标记 `sent` 时崩溃，1 小时内由 `uuid` 幂等去重，1 小时外存在极小的重复回复窗口；该窗口不会导致重复执行业务或重复记账）。`(source_message_id, source_item_index)` 唯一约束仍是重复入账的兜底保障。**不**宣称"绝不重复记账"。
+- 高可用部署仍需自行设计备份与凭据轮换。事件重试、租约接管和 dead 由事件 Worker 自动完成；回复发送、重试、租约接管和 dead 由 Reply Worker 自动完成（P06b）。**已具备** Transactional Outbox、readiness、终态清理与受控 CLI 事件重放：业务变更与回复意图同事务提交，崩溃窗口重试不会重复执行业务；回复失败绝不重新执行业务；进程重启后继续投递 `pending` / `failed` 回复；结果回放只重发已持久化载荷；`/readyz` 能发现数据库 / migration / 后台任务异常。**仍未具备**：Web 管理后台 / Outbox 可视化、用户可见结果回放、AI 写入前确认、对所有外部 API 都能绝对避免重复回复（飞书已发送但本地未标记 `sent` 时崩溃，1 小时内由 `uuid` 幂等去重，1 小时外存在极小的重复回复窗口；该窗口不会导致重复执行业务或重复记账）。`(source_message_id, source_item_index)` 唯一约束仍是重复入账的兜底保障。**不**宣称"绝不重复记账"。

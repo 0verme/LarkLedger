@@ -362,7 +362,31 @@ HTTP 503；探针不会自动迁移数据库，也不会访问飞书、AI、DNS 
 Cleanup Worker 默认每小时执行终态小批量清理。成功 Event / sent Outbox 默认保留 30 天，
 dead Event / dead Outbox 默认保留 90 天；非终态、有有效 lease、仍有关联 Outbox 的 Event
 不会删除，账本与 revision 永不删除。清理日志不记录 payload、回复、用户或消息标识。清理
-不等于数据库备份；缩短保留期前应先确认审计需求。当前仍没有人工事件重放命令。
+不等于数据库备份；缩短保留期前应先确认审计需求。
+
+### 管理员人工事件重放
+
+人工事件重放是服务器管理员命令，不是飞书聊天命令，也不同于只重发 Outbox 的结果回放：
+
+```bash
+# 默认 dry-run：只输出脱敏预检，不修改数据库
+python -m lark_ledger.admin replay-event \
+  --event-id <event_id> \
+  --operator <operator> \
+  --reason "temporary upstream outage"
+
+# 只有显式 --execute 才会锁定、重新预检并排回 received
+python -m lark_ledger.admin replay-event \
+  --event-id <event_id> \
+  --operator <operator> \
+  --reason "temporary upstream outage" \
+  --execute
+```
+
+`operator` 与 `reason` 必填并有长度上限；完整值只写入审计表，不回显到 CLI JSON 或日志。
+有 Outbox 时应走结果回放，不能重新执行业务；已有来源账目、payload 不完整、active lease、
+状态不合法或历史原子性无法证明时默认拒绝。执行成功会在同一事务写审计并将自动尝试计数
+开启一个新的有限窗口。该命令不能替代数据库备份，也不能替代对模糊事件的人工取证。
 
 健康检查**不会**回显凭据、完整异常、事件或回复内容。排查时不要在工单中粘贴 App
 Secret、AI Key、数据库密码、完整消息正文。
@@ -418,7 +442,7 @@ uvicorn lark_ledger.main:app --reload
 
 - 事件处理失败会由事件 Worker 自动重试（指数退避）并最终进入 `dead`；业务变更与回复意图通过 **Transactional Outbox**（P06a）同一事务提交，崩溃重试不会重复执行业务，但仍不宣称"绝不重复记账"，来源唯一约束为兜底
 - 回复发送失败（P06b）由后台 Reply Worker 自动重试（指数退避）并最终进入回复 `dead`；发送失败**绝不**重新执行业务。进程重启后继续投递 `pending` / `failed` 回复
-- 没有用户可见的结果回放 / 人工重发命令（`OutboxReplayService` 是内部可测试能力）；没有 `dead` 事件人工重放
+- 没有用户可见的结果回放 / 人工重发命令（`OutboxReplayService` 是内部可测试能力）；`dead` 事件重放仅提供受控管理员 CLI，没有 Web 管理界面
 - 极端窗口下（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过飞书 `uuid` 幂等的 1 小时窗口）用户可能收到重复回复；该窗口**不会**导致重复执行业务或重复记账
 - 图片 / 语音 / 批量尚无写入前确认
 - 无 Web 管理页面、无共享账本

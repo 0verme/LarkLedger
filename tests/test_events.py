@@ -3,7 +3,11 @@ from typing import Any
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
-from lark_ledger.event_payload import EventProcessStatus, parse_stored_payload
+from lark_ledger.event_payload import (
+    REPLAY_SAFETY_VERSION,
+    EventProcessStatus,
+    parse_stored_payload,
+)
 from lark_ledger.models import Base, ProcessedEvent
 from lark_ledger.services.events import EventService
 
@@ -51,6 +55,8 @@ async def test_webhook_and_websocket_share_event_id_idempotency() -> None:
         assert row.status == EventProcessStatus.SUCCEEDED.value
         assert row.transport == "webhook"
         assert row.payload_json is not None
+        assert row.replay_safety_version == REPLAY_SAFETY_VERSION
+        assert row.manual_replay_count == 0
         parsed = parse_stored_payload(row.payload_json)
         assert parsed["transport"] == "webhook"
 
