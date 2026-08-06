@@ -34,6 +34,19 @@ class Settings(BaseSettings):
     event_retry_base_seconds: float = Field(default=2.0, gt=0, le=86400)
     event_retry_max_seconds: float = Field(default=3600.0, gt=0, le=86400)
 
+    # Reply worker (P06b): background delivery of committed ``reply_outbox``
+    # intents with lease, retry, and dead-lettering. When enabled, the
+    # processor only writes the outbox and the worker sends; when disabled, the
+    # compatible synchronous path claims and sends inline using the same
+    # lease-guarded primitives. The two modes never run at once.
+    reply_worker_enabled: bool = True
+    reply_worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=3600)
+    reply_worker_batch_size: int = Field(default=10, ge=1, le=100)
+    reply_max_attempts: int = Field(default=3, ge=1, le=100)
+    reply_lease_seconds: float = Field(default=300.0, gt=0, le=86400)
+    reply_retry_base_seconds: float = Field(default=2.0, gt=0, le=86400)
+    reply_retry_max_seconds: float = Field(default=3600.0, gt=0, le=86400)
+
     lark_app_id: str = ""
     lark_app_secret: str = ""
     lark_verification_token: str = ""

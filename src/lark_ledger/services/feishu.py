@@ -6,7 +6,8 @@ import json
 import logging
 import tempfile
 import uuid
-from datetime import datetime, timedelta
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -41,8 +42,10 @@ from lark_ledger.schemas import (
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.ledger import LedgerService
-from lark_ledger.services.outbox import ReplyOutboxStore, record_failure_summary
+from lark_ledger.services.outbox import ReplyOutboxStore
+from lark_ledger.services.reply_worker import ReplyDeliverer
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
+from lark_ledger.services.worker import generate_owner_id
 
 logger = logging.getLogger(__name__)
 
@@ -120,28 +123,57 @@ class FeishuClient:
             self._token_expires_at = loop.time() + int(payload.get("expire", 7200)) - 60
             return self._token
 
-    async def reply_text(self, message_id: str, text: str) -> None:
-        await self._reply_message(message_id, "text", {"text": text})
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> str | None:
+        return await self._reply_message(message_id, "text", {"text": text}, uuid=uuid)
 
-    async def reply_card(self, message_id: str, card: dict[str, Any]) -> None:
-        await self._reply_message(message_id, "interactive", card)
+    async def reply_card(
+        self, message_id: str, card: dict[str, Any], *, uuid: str | None = None
+    ) -> str | None:
+        return await self._reply_message(message_id, "interactive", card, uuid=uuid)
+
+    async def reply_file(
+        self, message_id: str, file_key: str, *, uuid: str | None = None
+    ) -> str | None:
+        return await self._reply_message(
+            message_id, "file", {"file_key": file_key}, uuid=uuid
+        )
 
     async def _reply_message(
-        self, message_id: str, message_type: str, content: dict[str, Any]
-    ) -> None:
+        self,
+        message_id: str,
+        message_type: str,
+        content: dict[str, Any],
+        *,
+        uuid: str | None = None,
+    ) -> str | None:
+        """Reply to a message and return the remote reply ``message_id``.
+
+        The reply API supports a client-supplied ``uuid`` idempotency key
+        (≤50 chars): within one hour the same uuid is delivered at most once and
+        a repeat call returns the already-created ``message_id``. The Reply
+        Worker passes the outbox row id (32-hex) so a retry after a "sent but
+        not marked" crash is deduplicated instead of reaching the user twice.
+        """
+        body: dict[str, Any] = {
+            "msg_type": message_type,
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        if uuid:
+            body["uuid"] = uuid
         token = await self.tenant_token()
         response = await self._request(
             "POST",
             f"/open-apis/im/v1/messages/{message_id}/reply",
             headers={"Authorization": f"Bearer {token}"},
-            json={
-                "msg_type": message_type,
-                "content": json.dumps(content, ensure_ascii=False),
-            },
+            json=body,
         )
         payload = response.json()
         if payload.get("code") != 0:
             raise RuntimeError(f"回复飞书消息失败：{payload.get('msg', 'unknown')}")
+        remote_id = (payload.get("data") or {}).get("message_id")
+        return str(remote_id) if isinstance(remote_id, str) and remote_id else None
 
     async def upload_image(self, png: bytes) -> str:
         if not png:
@@ -203,9 +235,6 @@ class FeishuClient:
                         safe_name,
                     )
 
-    async def reply_file(self, message_id: str, file_key: str) -> None:
-        await self._reply_message(message_id, "file", {"file_key": file_key})
-
     async def download_resource(self, message_id: str, file_key: str, kind: str) -> bytes:
         token = await self.tenant_token()
         response = await self._request(
@@ -248,7 +277,18 @@ class MessageProcessor:
         renderer: ReportRenderer | None = None,
         exchange_rates: ExchangeRateService | None = None,
         outbox_store: ReplyOutboxStore | None = None,
+        reply_deliverer: ReplyDeliverer | None = None,
+        reply_worker_enabled: bool = False,
+        wakeup: Callable[[], None] | None = None,
     ) -> None:
+        """``reply_worker_enabled=True``: after committing business + outbox the
+        processor only signals the background Reply Worker (``wakeup``) and
+        returns; delivery belongs to the worker. ``False`` (the default, and the
+        value used by every unit test): the processor runs the compatible
+        synchronous path — claim each freshly committed row with the same
+        lease-guarded primitives the worker uses, deliver, and mark — so no
+        send path bypasses the outbox guards.
+        """
         self.settings = settings
         self.session_factory = session_factory
         self.feishu = feishu
@@ -256,6 +296,18 @@ class MessageProcessor:
         self.renderer = renderer or ReportRenderer(settings.report_font_path)
         self.exchange_rates = exchange_rates or ExchangeRateService(settings)
         self.outbox_store = outbox_store or ReplyOutboxStore(session_factory)
+        self._reply_worker_enabled = reply_worker_enabled
+        self._wakeup = wakeup
+        self._sync_owner = generate_owner_id()
+        self._reply_deliverer = reply_deliverer or ReplyDeliverer(
+            self.outbox_store,
+            feishu,
+            owner_id=self._sync_owner,
+            max_attempts=settings.reply_max_attempts,
+            retry_base_seconds=settings.reply_retry_base_seconds,
+            retry_max_seconds=settings.reply_retry_max_seconds,
+            jitter=None,
+        )
 
     async def process(self, event: dict[str, Any]) -> None:
         message = event["message"]
@@ -378,7 +430,13 @@ class MessageProcessor:
             # From here the business + outbox are already committed; a post-commit
             # bookkeeping failure must not send a misleading "save failed" reply.
             stage = "reply"
-            await self._send_outbox_rows(outbox_rows)
+            if self._reply_worker_enabled:
+                # The background Reply Worker owns delivery: signal it and let
+                # the DB lease coordinate. A lost wakeup only delays one poll.
+                if self._wakeup is not None:
+                    self._wakeup()
+            else:
+                await self._sync_deliver_rows(outbox_rows)
         except CommandInterpretationError:
             error_id = self._log_processing_error(stage, message_id, message_type)
             if is_visual_message:
@@ -681,40 +739,36 @@ class MessageProcessor:
             attempt_count=0,
         )
 
-    async def _send_outbox_rows(self, rows: list[ReplyOutbox]) -> None:
-        """T3: one compatible send of the committed intents (never a worker).
+    async def _sync_deliver_rows(self, rows: list[ReplyOutbox]) -> None:
+        """T3 compatible send: claim + deliver the committed intents inline.
 
-        Rows are delivered in sequence order. A delivery failure marks the row
-        ``failed`` for a P06b worker and never re-runs business; the event is
-        not affected. A failed file delivery keeps the v0.2.0 UX of a direct
-        fallback notice and stops later rows (file before its confirmation
-        text).
+        Runs only when the background Reply Worker is disabled. Every row is
+        claimed with the same lease-guarded primitives the worker uses
+        (``claim_by_id`` → ``ReplyDeliverer`` → outcome update), so the
+        synchronous path never bypasses the outbox state guards. Rows are
+        delivered in sequence order; an earlier row that is neither ``sent``
+        nor ``dead`` stops later rows (file before its confirmation text), and
+        a failed file delivery keeps the v0.2.0 direct fallback notice. A
+        delivery failure marks the row ``failed`` / ``dead`` and never re-runs
+        business and never fails the event.
         """
         if not rows:
             return
-        committed = await self.outbox_store.load_by_ids([row.id for row in rows])
-        committed.sort(key=lambda row: row.sequence)
-        for row in committed:
-            try:
-                await self._deliver(row)
-            except Exception as exc:
-                error_code, summary = record_failure_summary(exc)
-                await self.outbox_store.mark_failed(
-                    row.id, error_code=error_code, summary=summary
-                )
-                logger.warning(
-                    "outbox compatible send failed outbox_id=%s event_id=%s "
-                    "reply_type=%s error_code=%s",
-                    row.id,
-                    row.event_id,
-                    row.reply_type,
-                    error_code,
-                )
-                if row.reply_type == ReplyType.FILE.value:
-                    await self._notify_export_send_failed(row.message_id)
+        now = datetime.now(UTC)
+        ordered = sorted(rows, key=lambda row: row.sequence)
+        for row in ordered:
+            item = await self.outbox_store.claim_by_id(
+                row.id, self._sync_owner, now, lease_seconds=self.settings.reply_lease_seconds
+            )
+            if item is None:
                 return
-            else:
-                await self.outbox_store.mark_sent(row.id, result_summary="delivered")
+            outcome = await self._reply_deliverer.process_item(item, now)
+            if outcome == ReplyStatus.FAILED.value and item.reply_type == ReplyType.FILE.value:
+                await self._notify_export_send_failed(item.message_id)
+            if outcome != ReplyStatus.SENT.value:
+                # failed / dead / lease-lost: an earlier reply that is not
+                # ``sent`` stops later rows, matching the worker's ordering rule.
+                return
 
     async def _notify_export_send_failed(self, message_id: str) -> None:
         """Best-effort direct notice outside the outbox (v0.2.0 UX)."""
@@ -726,73 +780,3 @@ class MessageProcessor:
             logger.exception(
                 "failed to send export failure notice message_id=%s", message_id
             )
-
-    async def _deliver(self, row: ReplyOutbox) -> None:
-        """Deliver one committed outbox row via Feishu.
-
-        Consumes only data persisted on the row (no AI, no ledger re-query, no
-        temporary file): text is sent verbatim, file bytes are uploaded from
-        ``payload_blob``, and a card either carries its pre-rendered PNG or is
-        sent text-only. A card whose image upload fails degrades to the
-        text-only card already stored on the row.
-        """
-        payload = row.payload_json
-        if row.reply_type == ReplyType.TEXT.value:
-            await self.feishu.reply_text(row.message_id, payload["text"])
-            return
-        if row.reply_type == ReplyType.FILE.value:
-            if row.payload_blob is None:
-                raise ValueError("file outbox row is missing payload_blob")
-            file_meta = payload["file"]
-            file_key = await self.feishu.upload_file(
-                row.payload_blob, file_meta["filename"]
-            )
-            await self.feishu.reply_file(row.message_id, file_key)
-            return
-        if row.reply_type == ReplyType.CARD.value:
-            card = dict(payload["card"])
-            if row.payload_blob is not None:
-                try:
-                    image_key = await self.feishu.upload_image(row.payload_blob)
-                except Exception:
-                    logger.exception(
-                        "report image upload failed; sending text-only card "
-                        "message_id=%s",
-                        row.message_id,
-                    )
-                    image_key = None
-                if image_key:
-                    image_meta = payload.get("image") or {}
-                    card = self._card_with_image(
-                        card, image_key, str(image_meta.get("alt") or "")
-                    )
-            await self.feishu.reply_card(row.message_id, card)
-            return
-        raise RuntimeError(f"unsupported reply_type: {row.reply_type}")
-
-    @staticmethod
-    def _card_with_image(
-        card: dict[str, Any], image_key: str, alt: str
-    ) -> dict[str, Any]:
-        """Return the stored card with its pre-rendered image element injected.
-
-        The stored card body is the text-only variant (message + advice); at
-        send time the advice element is replaced by the uploaded image so the
-        delivered card carries exactly the chart the sender rendered.
-        """
-        elements = card.get("body", {}).get("elements", [])
-        message_element = elements[0] if elements else {"tag": "markdown", "content": ""}
-        body = dict(card.get("body") or {})
-        body["elements"] = [
-            message_element,
-            {
-                "tag": "img",
-                "img_key": image_key,
-                "alt": {"tag": "plain_text", "content": alt},
-                "scale_type": "fit_horizontal",
-                "preview": True,
-            },
-        ]
-        rebuilt = dict(card)
-        rebuilt["body"] = body
-        return rebuilt

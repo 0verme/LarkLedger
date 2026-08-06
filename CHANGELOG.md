@@ -4,6 +4,20 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (v0.2.1 — reply delivery worker; P06b)
+
+- **Reply delivery worker** (`ReplyWorker`): a background asyncio task started and stopped by the FastAPI lifespan. It claims committed `reply_outbox` rows in one transaction with `SELECT ... FOR UPDATE SKIP LOCKED`, writes `sending` / `lease_owner` / `lease_expires_at`, increments `attempt_count` (each entry into `sending` counts one attempt), commits, then uploads / sends via `ReplyDeliverer` and records lease-guarded outcomes. The database is the only queue; no Redis / Celery / RQ / Kafka / RabbitMQ. A lost wakeup only delays delivery by one poll interval.
+- **Mode switch:** `LARK_LEDGER_REPLY_WORKER_ENABLED` (default `true`) makes the processor commit business + outbox and signal the worker instead of sending directly. `false` restores the compatible synchronous path, which claims each freshly committed row with the **same** lease-guarded primitives (`claim_by_id` → `ReplyDeliverer`) — no send path bypasses the outbox guards. The two modes never run at once.
+- **Outbox lease semantics:** only the current `lease_owner` may write an outcome (guarded by `status='sending' AND lease_owner=<owner>`); an expired lease lets another worker reclaim the row (`attempt_count` increments again) and a stale worker can never overwrite the new owner's state. Outcome updates clear the lease. Default 300 s; no renewal in this version.
+- **Reply retry with exponential backoff:** transient failures (network / timeout / 408 / 429 / 5xx / transient upload failures) are recorded as `failed` with `next_attempt_at = now + min(base × 2^(attempt-1), max)` (defaults 2 s / 3600 s) plus ~10% jitter. Unknown errors are conservatively retried up to `reply_max_attempts`.
+- **Reply dead-lettering:** permanent errors (unsupported `payload_version`, unknown `reply_type`, missing routing field, `payload_json` contract corruption, missing blob, size / checksum mismatch, non-408/429 4xx) or an exhausted attempt budget move the row to `dead` (default `reply_max_attempts=3`, first attempt counts as 1), clearing the lease and retaining the redacted error summary. A single bad row never kills the worker sweep.
+- **Per-event reply ordering:** replies within one event are delivered in `sequence` order — a later reply waits while an earlier one is pending / retrying / in flight (enforced by a `NOT EXISTS` claim predicate, including under concurrency), and an earlier `dead` row allows later replies to proceed independently instead of blocking forever. `(event_id, sequence)` index added.
+- **Staged upload + send:** a file upload persists its `remote_file_key` and a report-image upload its `remote_image_key` while the worker still holds the lease, so a retry after a message-send failure reuses the upload instead of re-uploading. A report-card image upload failure degrades to the stored text-only card.
+- **Feishu `uuid` idempotency:** every reply carries the outbox row id as the Feishu reply API's `uuid` idempotency key (≤50 chars). Within the 1-hour window a re-send after a "sent but not marked" crash is deduplicated by Feishu and the existing remote `message_id` is returned; it is also persisted to `remote_message_id`. Beyond 1 hour an extreme duplicate-reply window remains (disclosed) — it can never cause duplicate business execution or double bookkeeping.
+- **Result replay (internal):** `OutboxReplayService` resets `failed` / `dead` rows back to `pending` (clearing backoff, lease, and error summary) so the worker re-sends the exact persisted payload. It never re-calls AI, never re-runs a business command, never regenerates CSV, and never re-renders a report. This is an internal, testable capability; no user-facing command is exposed yet.
+- **New settings:** `LARK_LEDGER_REPLY_WORKER_ENABLED`, `REPLY_WORKER_POLL_INTERVAL_SECONDS` (1.0), `REPLY_WORKER_BATCH_SIZE` (10), `REPLY_MAX_ATTEMPTS` (3), `REPLY_LEASE_SECONDS` (300), `REPLY_RETRY_BASE_SECONDS` (2.0), `REPLY_RETRY_MAX_SECONDS` (3600).
+- **Migration `20260806_0009`:** adds `reply_outbox.remote_message_id`, `remote_file_key`, `remote_image_key` (all nullable, no backfill) and the `ix_outbox_event_sequence` index. Downgrade drops them (audit/keys lost; undelivered intents are not lost).
+
 ### Added (v0.2.1 — transactional reply outbox; P06a)
 
 - **Transactional Outbox:** new `reply_outbox` table (migration `20260806_0008`) stores durable, self-contained Feishu reply intents written in the **same transaction** as the ledger change they confirm. A successful business commit now guarantees a reply intent exists for later delivery or compensation.
@@ -31,7 +45,10 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Changed
 
-- Head migration is now `20260806_0008` (P06a adds the `reply_outbox` table).
+- Head migration is now `20260806_0009` (P06b adds reply delivery metadata and the sequence index; P06a added the `reply_outbox` table at `20260806_0008`).
+- `ReplyOutboxStore` gains P06b claim / lease primitives: `claim_batch` (worker, `FOR UPDATE SKIP LOCKED` + per-event ordering), `claim_by_id` (synchronous path), lease-guarded `mark_sent` / `record_failure` (both guarded by `status='sending' AND lease_owner=<owner>`), and `persist_file_key` / `persist_image_key`. `attempt_count` is incremented at claim (entering `sending`), not on failure; the old unguarded `mark_failed` is replaced by `record_failure`. The compatible single send and the Reply Worker share the same `ReplyDeliverer`.
+- `FeishuClient.reply_text` / `reply_card` / `reply_file` now accept a `uuid` idempotency key and return the remote reply `message_id`.
+- `MessageProcessor` takes `reply_worker_enabled` and an optional `wakeup`; with the worker enabled it only signals delivery after the outbox commit, otherwise it drives the synchronous claim / send loop.
 - `LedgerService` gains `commit_changes: bool = True`; internal methods no longer commit, `execute()` commits once when enabled, and the batch-budget path uses savepoints. The Transactional Outbox path constructs the service with `commit_changes=False` so the processor owns the transaction.
 - `EventService` gains a `claim()` (T1-only) path and routes `handle_safely` by worker mode; the synchronous `handle()` is retained for `WORKER_ENABLED=false` and tests. The `succeeded` status now means "business handled + reply intents written to the outbox".
 

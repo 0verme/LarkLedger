@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.2.0` |
 | Git tag | `v0.2.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.2.0`（亦有 `0.2` / `latest` 由发布流水线写入） |
-| Alembic head | `20260806_0007` |
+| Alembic head | `20260806_0009`（main；v0.2.0 为 `20260806_0007`） |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -121,4 +121,20 @@ main 分支在 P05b 之上加入了 Transactional Outbox（P06a），新增迁�
 - **兼容单次发送：** 提交后从已提交的 Outbox 同步发送一次：成功标记 `sent`，失败标记 `failed`；无后台回复 Worker、无自动重试、无 Outbox lease（P06b 范围）。
 - **回退：** 代码回退到 `v0.2.0` tag 即可关闭 Worker 与 Outbox 行为；若已运行 `0008`，数据库需显式 `alembic downgrade 20260806_0007`（会丢弃待发送回复意图），或先备份后处理。
 
-当前 Alembic head：`20260806_0008`。
+## 迁移 `20260806_0009`（回复投递元数据 + 顺序索引）
+
+- **升级：** 为 `reply_outbox` 增加可空列 `remote_message_id`（远端回复消息 ID，`sent` 时写入）、`remote_file_key` / `remote_image_key`（上传资源键，上传成功后写入，重试时复用不重复上传），并新增 `(event_id, sequence)` 索引支撑同一事件内按 `sequence` 顺序领取。唯一约束 `(event_id, reply_type)` 不变，已支持全部真实回复组合。历史 `pending` / `sent` / `failed` 行不受影响，无需回填。
+- **行为：** 详见下文「开发中 main（P06b Reply Worker）」。
+- **降级数据损失：** `alembic downgrade` 删除上述三列与顺序索引；已记录的远端消息 ID 与上传资源键丢失（后续投递会重新上传字节，安全但重复），`sent` 消息审计信息减少。待发送意图不丢失。
+
+## 开发中 main（P06b Reply Worker）
+
+main 分支在 P06a 之上加入后台回复 Worker（P06b），新增迁移 `20260806_0009`。
+
+- **默认行为变化：** `LARK_LEDGER_REPLY_WORKER_ENABLED` 默认 `true`。T2 提交后处理器只唤醒后台 `ReplyWorker`，不再直接发送；Worker 用 `FOR UPDATE SKIP LOCKED` 领取已提交的 Outbox 行、写入租约与 `attempt_count`、上传 / 发送、按租约守卫标记 `sent` / `failed` / `dead`。若想保持提交后同步发送，显式设置 `LARK_LEDGER_REPLY_WORKER_ENABLED=false`（同步路径仍走同一套 claim / 租约 / 结果守卫原语，不会绕过状态守卫）。两种模式不会同时运行。
+- **存量 Outbox：** 升级前 `pending` 行会被 Worker 自动投递；P06a 已 `failed`（`attempt_count=1`）的行到期后被 Worker 领取并计为第 2 次尝试；已 `sent` 行不会被重发。
+- **回复重试与 dead：** 临时错误按指数退避重试（默认最多 3 次），永久错误（payload 版本 / 类型不支持、契约损坏、blob 缺失或 checksum 不一致、非 408/429 的 4xx）或重试耗尽写入 `dead`。发送失败**绝不**重新执行业务。进程重启后继续投递 `pending` / `failed`。
+- **幂等（诚实声明）：** 每次回复携带飞书回复 API 的 `uuid` 幂等键（Outbox 行 ID），1 小时内重发由飞书去重；极端情况下（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过 1 小时）用户可能收到重复回复，但**绝不会**重复执行业务或重复记账。
+- **回退：** 代码回退到含 `0008` 的提交即可关闭 Reply Worker（若 `REPLY_WORKER_ENABLED=false` 不启用）与 `0009` 新增列的行为；若已运行 `0009`，数据库需显式 `alembic downgrade 20260806_0008`（丢弃投递元数据，意图不丢失），或先备份后处理。
+
+当前 Alembic head：`20260806_0009`。

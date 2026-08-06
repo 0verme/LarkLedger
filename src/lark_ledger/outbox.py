@@ -31,6 +31,17 @@ class ReplyType(StrEnum):
     CARD = "card"
 
 
+class ReplyPayloadError(ValueError):
+    """An outbox row cannot be delivered as stored (permanent, no retry).
+
+    Raised when a row's ``payload_version`` is unsupported, its ``reply_type``
+    is unknown, a required routing field (``message_id``) is missing, the JSON
+    envelope violates its contract, or a persisted blob fails its checksum /
+    size check. The same row would fail identically on every attempt, so the
+    reply worker dead-letters it instead of retrying.
+    """
+
+
 class ReplyStatus(StrEnum):
     """Outbox delivery lifecycle.
 
@@ -53,6 +64,28 @@ def _sha256_hex(data: bytes) -> str:
     import hashlib
 
     return hashlib.sha256(data).hexdigest()
+
+
+def verify_blob_checksum(blob: bytes | None, meta: dict[str, Any] | None) -> None:
+    """Raise ``ReplyPayloadError`` when the persisted blob mismatches metadata.
+
+    ``meta`` is the ``file`` / ``image`` object written by the envelope builders
+    (``size`` and ``sha256``). A missing blob that the metadata requires, a
+    stray blob with no metadata, a size mismatch, or a checksum mismatch all
+    mean the row cannot be delivered as stored.
+    """
+    if meta is None:
+        if blob is not None:
+            raise ReplyPayloadError("row has payload_blob but no checksum metadata")
+        return
+    if blob is None:
+        raise ReplyPayloadError("row is missing payload_blob required by metadata")
+    expected_size = meta.get("size")
+    if isinstance(expected_size, int) and len(blob) != expected_size:
+        raise ReplyPayloadError("payload_blob size does not match metadata")
+    expected_sha = meta.get("sha256")
+    if isinstance(expected_sha, str) and expected_sha and _sha256_hex(blob) != expected_sha:
+        raise ReplyPayloadError("payload_blob checksum mismatch")
 
 
 def build_text_payload(text: str) -> dict[str, Any]:

@@ -7,6 +7,7 @@ same primitives against real storage.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -26,7 +27,16 @@ from lark_ledger.outbox import (
     build_file_payload,
     build_text_payload,
 )
-from lark_ledger.services.outbox import ReplyOutboxStore, record_failure_summary
+from lark_ledger.services.outbox import ClaimedReply, ReplyOutboxStore, record_failure_summary
+
+T0 = datetime(2026, 8, 6, 0, 0, tzinfo=UTC)
+
+
+def _naive(value: datetime) -> datetime:
+    """SQLite returns stored datetimes as naive; drop tz for comparisons."""
+    if value.tzinfo is not None:
+        return value.replace(tzinfo=None)
+    return value
 
 
 @pytest_asyncio.fixture
@@ -135,17 +145,31 @@ async def store_load(factory: async_sessionmaker[Any], ids: list[Any]) -> list[R
     return await ReplyOutboxStore(factory).load_by_ids(ids)
 
 
+async def _claim(
+    store: ReplyOutboxStore, row: ReplyOutbox, *, owner: str = "w1"
+) -> ClaimedReply | None:
+    """Claim one row the way the synchronous path does (P06b unified claim)."""
+    return await store.claim_by_id(row.id, owner, T0, lease_seconds=300.0)
+
+
 async def test_mark_sent_transitions_pending_to_sent(factory: async_sessionmaker[Any]) -> None:
     row = await _insert_row(factory, event_id="evt_sent", message_id="om_sent")
     store = ReplyOutboxStore(factory)
-    assert await store.mark_sent(row.id, result_summary="delivered") is True
+    item = await _claim(store, row)
+    assert item is not None and item.attempt_count == 1
+    assert (
+        await store.mark_sent(row.id, "w1", now=T0, remote_message_id="om_reply") is True
+    )
 
     async with factory() as session:
         reloaded = await session.get(ReplyOutbox, row.id)
     assert reloaded is not None
     assert reloaded.status == ReplyStatus.SENT.value
-    assert reloaded.sent_at is not None
+    assert reloaded.sent_at == _naive(T0)
     assert reloaded.last_error_code is None
+    assert reloaded.lease_owner is None
+    assert reloaded.lease_expires_at is None
+    assert reloaded.remote_message_id == "om_reply"
 
 
 async def test_mark_sent_is_idempotent_for_sent_row(factory: async_sessionmaker[Any]) -> None:
@@ -153,36 +177,61 @@ async def test_mark_sent_is_idempotent_for_sent_row(factory: async_sessionmaker[
         factory, event_id="evt_sent2", message_id="om_sent2", status=ReplyStatus.SENT.value
     )
     store = ReplyOutboxStore(factory)
-    # A sent row is never re-marked (and therefore never re-sent).
-    assert await store.mark_sent(row.id, result_summary="again") is False
-    assert await store.mark_failed(row.id, error_code="X", summary="nope") is False
+    # A sent row is never claimed and never re-marked (and therefore never re-sent).
+    assert await store.claim_by_id(row.id, "w1", T0, lease_seconds=300.0) is None
+    assert await store.mark_sent(row.id, "w1", now=T0) is False
+    assert (
+        await store.record_failure(
+            row.id, "w1", status="failed", next_attempt_at=None,
+            error_code="X", summary="nope", now=T0,
+        )
+        is False
+    )
 
 
-async def test_mark_failed_records_redacted_summary_and_attempt(
+async def test_mark_failed_records_redacted_summary(
     factory: async_sessionmaker[Any],
 ) -> None:
     row = await _insert_row(factory, event_id="evt_fail", message_id="om_fail")
     store = ReplyOutboxStore(factory)
+    item = await _claim(store, row)
+    assert item is not None
     boom = RuntimeError("http://user:sekret@host/path and Bearer abc123XYZ")
     error_code, summary = record_failure_summary(boom)
-    assert await store.mark_failed(row.id, error_code=error_code, summary=summary) is True
+    assert (
+        await store.record_failure(
+            row.id, "w1", status=ReplyStatus.FAILED.value,
+            next_attempt_at=T0 + timedelta(seconds=2),
+            error_code=error_code, summary=summary, now=T0,
+        )
+        is True
+    )
 
     async with factory() as session:
         reloaded = await session.get(ReplyOutbox, row.id)
     assert reloaded is not None
     assert reloaded.status == ReplyStatus.FAILED.value
-    assert reloaded.attempt_count == 1
+    assert reloaded.attempt_count == 1  # incremented at claim, not at failure
     assert reloaded.last_error_code == "RuntimeError"
     assert "sekret" not in (reloaded.result_summary or "")
     assert "abc123XYZ" not in (reloaded.result_summary or "")
     assert "http://user:***@host/path" in (reloaded.result_summary or "")
+    assert reloaded.lease_owner is None
+    assert reloaded.lease_expires_at is None
 
 
-async def test_mark_failed_truncates_long_summary(factory: async_sessionmaker[Any]) -> None:
+async def test_record_failure_truncates_long_summary(factory: async_sessionmaker[Any]) -> None:
     row = await _insert_row(factory, event_id="evt_trunc", message_id="om_trunc")
     store = ReplyOutboxStore(factory)
+    await _claim(store, row)
     long_message = "x" * (MAX_RESULT_SUMMARY_LENGTH + 200)
-    assert await store.mark_failed(row.id, error_code="E", summary=long_message) is True
+    assert (
+        await store.record_failure(
+            row.id, "w1", status=ReplyStatus.FAILED.value,
+            next_attempt_at=None, error_code="E", summary=long_message, now=T0,
+        )
+        is True
+    )
 
     async with factory() as session:
         reloaded = await session.get(ReplyOutbox, row.id)

@@ -124,10 +124,10 @@ Webhook URL: `https://your-domain/webhooks/feishu`. Webhook remains a supported 
 Do **not** describe this as "never loses messages / never double-bookkeeps":
 
 - Failed events **are** automatically retried (exponential backoff, default max 3 attempts) and move to `dead` when exhausted or permanently broken; business writes and reply intents commit atomically through the **Transactional Outbox** (P06a), so a crash retry never re-runs business. We still do **not** claim "never double-bookkeeps"; the source-message uniqueness constraint remains the fallback guard.
-- A failed reply is **not** auto-retried yet: the processor sends each committed intent once synchronously after commit; failures are recorded on the outbox (`failed`). A background reply worker / auto-retry / outbox lease belongs to P06b.
-- There is **no** human replay command for `dead` events, no result replay, no manual resend
+- Failed replies **are** auto-retried by the background **Reply Worker** (P06b): committed outbox intents are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, delivered with a database lease, retried with exponential backoff, and dead-lettered after permanent errors or exhausted attempts. A failed reply never re-runs business, and pending / failed replies are re-delivered after a restart.
+- Each reply carries a stable Feishu `uuid` idempotency key (the outbox row id): within the 1-hour dedup window a re-send after a crash is deduplicated by Feishu. In the extreme case (Feishu sent, local mark lost, and the re-send is more than 1 hour later) a duplicate reply may reach the user — it can **never** cause duplicate business execution or double bookkeeping.
+- There is **no** user-visible replay / manual-resend command; `OutboxReplayService` is an internal testable capability. There is no human replay for `dead` events.
 - Image / voice / batch paths have **no** pre-write confirmation flow yet
-- Failed CSV file delivery is **not** auto-retried
 - No web admin UI, no shared ledgers
 - **JSON export is not a formal capability** (CSV only)
 
@@ -135,7 +135,7 @@ Roadmap themes (no promised ship dates):
 
 ```text
 v0.2.1: reliable delivery (event worker / lease / retry / dead done; transactional outbox done;
-        background reply worker / reply compensation still missing)
+        reply worker / reply lease / reply retry / reply dead done; result replay is internal)
 v0.3.0: high-risk confirmation (image / voice / batch, etc.)
 ```
 

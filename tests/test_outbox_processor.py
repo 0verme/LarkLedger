@@ -155,13 +155,19 @@ class RecordingFeishu:
         self.files: list[str] = []
         self.images_uploaded: list[bytes] = []
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> None:
         self.texts.append(text)
 
-    async def reply_card(self, message_id: str, card: dict[str, Any]) -> None:
+    async def reply_card(
+        self, message_id: str, card: dict[str, Any], *, uuid: str | None = None
+    ) -> None:
         self.cards.append(card)
 
-    async def reply_file(self, message_id: str, file_key: str) -> None:
+    async def reply_file(
+        self, message_id: str, file_key: str, *, uuid: str | None = None
+    ) -> None:
         self.files.append(file_key)
 
     async def upload_file(self, content: bytes, filename: str) -> str:
@@ -178,7 +184,9 @@ class FailingReplyFeishu(RecordingFeishu):
         super().__init__()
         self.exc = exc
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> None:
         raise self.exc
 
 
@@ -189,7 +197,9 @@ class CommittedCheckFeishu(RecordingFeishu):
         super().__init__()
         self.factory = factory
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> None:
         async with self.factory() as session:
             entry = await session.scalar(select(LedgerEntry))
             outbox = await session.scalar(select(ReplyOutbox))
@@ -768,4 +778,81 @@ async def test_csv_file_and_text_are_both_delivered_synchronously() -> None:
     assert feishu.files == ["file_key"]
     assert feishu.uploads and feishu.uploads[0][1].endswith(".csv")
     assert any("已导出" in text for text in feishu.texts)
+    await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Event / Reply worker decoupling (P06b)
+# ---------------------------------------------------------------------------
+
+
+async def test_reply_worker_enabled_writes_outbox_and_skips_direct_send() -> None:
+    engine, factory = await _sqlite_factory()
+    wakeups: list[str] = []
+    feishu = RecordingFeishu()
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        FixedInterpreter(_create_command()),
+        reply_worker_enabled=True,
+        wakeup=lambda: wakeups.append("woken"),
+    )
+    await processor.process(_message_event("om_ws", "午饭32", event_id="evt_ws"))
+
+    # The processor only commits the intent and signals the worker; the Reply
+    # Worker owns delivery, so nothing was sent directly.
+    assert feishu.texts == []
+    assert wakeups == ["woken"]
+    rows = await _outbox_rows(factory)
+    assert len(rows) == 1
+    assert rows[0].status == ReplyStatus.PENDING.value
+    await engine.dispose()
+
+
+async def test_outbox_send_failure_never_fails_event_with_worker_on() -> None:
+    """P06b: a send failure (or a dead reply) never re-runs business and never
+    fails the event; the outbox row carries the delivery outcome."""
+    engine, factory = await _sqlite_factory()
+    event_id = "evt_dead_reply"
+    payload = serialize_payload(
+        build_stored_payload(
+            event_id,
+            _message_event("om_dr", "午饭32"),
+            transport="webhook",
+            received_at=T0,
+        )
+    )
+    async with factory() as session:
+        session.add(
+            ProcessedEvent(
+                event_id=event_id,
+                payload_json=payload,
+                payload_version=1,
+                transport="webhook",
+                status=EventProcessStatus.RECEIVED.value,
+                received_at=T0,
+            )
+        )
+        await session.commit()
+
+    feishu = RecordingFeishu()
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        FixedInterpreter(_create_command()),
+    )
+    worker = EventWorker(EventWorkerStore(factory), processor, owner_id="w1", jitter=None)
+    await worker.run_once(now=T0)
+
+    async with factory() as session:
+        row = await session.get(ProcessedEvent, event_id)
+        entries = (await session.execute(select(LedgerEntry))).scalars().all()
+    rows = await _outbox_rows(factory)
+    assert row is not None and row.status == EventProcessStatus.SUCCEEDED.value
+    assert len(entries) == 1  # business ran once
+    assert len(rows) == 1
+    assert rows[0].status == ReplyStatus.SENT.value
+    assert len(feishu.texts) == 1
     await engine.dispose()

@@ -97,12 +97,16 @@ class RecordingFeishu:
     def __init__(self) -> None:
         self.texts: list[str] = []
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> None:
         self.texts.append(text)
 
 
 class FailingReplyFeishu(RecordingFeishu):
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> None:
         raise RuntimeError("feishu reply timeout")
 
 
@@ -293,7 +297,7 @@ async def test_outbox_migration_roundtrip_0008(
         monkeypatch.setenv("LARK_LEDGER_DATABASE_URL", scratch_dsn)
         get_settings.cache_clear()
         await asyncio.to_thread(_run_migrations, "20260806_0007")
-        await asyncio.to_thread(_run_migrations, "head")
+        await asyncio.to_thread(_run_migrations, "20260806_0008")
 
         async with scratch_engine.connect() as conn:
             revision = await conn.scalar(text("SELECT version_num FROM alembic_version"))

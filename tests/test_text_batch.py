@@ -368,7 +368,7 @@ class RecordingFeishu:
     def __init__(self) -> None:
         self.texts: list[str] = []
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(self, message_id: str, text: str, *, uuid: str | None = None) -> None:
         self.texts.append(text)
 
 

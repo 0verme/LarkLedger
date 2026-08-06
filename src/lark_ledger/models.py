@@ -183,6 +183,7 @@ class ReplyOutbox(Base):
         UniqueConstraint("event_id", "reply_type", name="uq_outbox_event_type"),
         Index("ix_outbox_status_next_attempt", "status", "next_attempt_at"),
         Index("ix_outbox_lease_expires", "lease_expires_at"),
+        Index("ix_outbox_event_sequence", "event_id", "sequence"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -212,6 +213,12 @@ class ReplyOutbox(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result_summary: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # P06b remote delivery metadata: the Feishu message_id of the delivered
+    # reply and the resource keys obtained from uploads, persisted so a retry
+    # reuses an already-uploaded file / image instead of uploading again.
+    remote_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    remote_file_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    remote_image_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

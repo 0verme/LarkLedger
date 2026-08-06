@@ -108,10 +108,14 @@ class RecordingFeishu:
             raise RuntimeError("upload unavailable")
         return "img_report"
 
-    async def reply_card(self, message_id: str, card: dict[str, object]) -> None:
+    async def reply_card(
+        self, message_id: str, card: dict[str, object], *, uuid: str | None = None
+    ) -> None:
         self.cards.append(card)
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> None:
         self.texts.append(text)
 
 

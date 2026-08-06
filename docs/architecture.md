@@ -12,6 +12,7 @@
 | Webhook / 长连接接收器 | 接收飞书事件并转换为统一事件结构 |
 | `EventService` | 按 `event_id` 抢占并去重事件；Worker 模式下只领取，同步模式下调用消息处理器 |
 | `EventWorker` | 后台事件 Worker（P05b）：`FOR UPDATE SKIP LOCKED` 领取、数据库租约、指数退避重试与 dead 处理 |
+| `ReplyWorker` | 后台回复 Worker（P06b）：领取已提交的 `reply_outbox`，租约、重试、指数退避、dead，与事件 Worker 职责解耦 |
 | `MessageProcessor` | 归一化文字、图片、音频和富文本消息，下载媒体、调用 AI、执行业务动作并回复飞书 |
 | `AIInterpreter` | 按独立配置路由文字、单图/多图和语音服务，解析单笔、复杂文字批量或最多 30 笔图片流水，并生成聚合消费建议 |
 | `ExchangeRateService` | 获取并缓存外币到默认账本币种的最新参考汇率 |
@@ -45,27 +46,32 @@ Webhook 端点完成来源校验、请求解析和后台任务登记后立即确
 
 收到事件后，`EventService` 在 **T1（领取事务）** 中把 `event_id` 与一份版本化的可重放 JSON 载荷写入 `processed_events` 并提交。主键冲突表示事件已经领取，本次投递不再处理。新账目还会保存飞书 `message_id`，并通过唯一约束避免同一来源消息重复创建。
 
-### 事务边界（v0.2.0 / P00 + v0.2.1 / P05b + P06a Transactional Outbox）
+### 事务边界（v0.2.0 / P00 + v0.2.1 / P05b + P06a/P06b Outbox）
 
 ```text
 T1  claim：insert processed_events(event_id, payload_json, …) → commit
 T2  process：从数据库读回载荷 → 反序列化为业务事件 → 业务写入/查询（flush）
              → 生成稳定的回复意图 → insert reply_outbox → commit（业务 + Outbox 原子）
-T3  compatible send：从已提交的 Outbox 读取回复意图 → 同步发送一次
-             → 成功标记 sent，失败标记 failed（不重跑业务）
+T3  deliver：从已提交的 Outbox 领取回复意图 → 发送
+             → 成功标记 sent，失败标记 failed（可重试）或 dead（永久）
 T4  event status：只要 T2 已提交，事件即可标记 succeeded（飞书发送失败不影响事件）
 ```
 
-两种执行模式（由 `LARK_LEDGER_WORKER_ENABLED` 选择，生产默认开启）：
+事件处理两种执行模式（由 `LARK_LEDGER_WORKER_ENABLED` 选择，生产默认开启）：
 
-- **Worker 模式（默认）**：入口（Webhook 后台任务 / WebSocket 回调）只执行 T1，把事件写入 `received` 后立即返回，**不等待** AI、飞书或账本处理。后台 `EventWorker` 用 `SELECT … FOR UPDATE SKIP LOCKED` 原子领取 `received`、已到期重试或租约过期的行，写入 `processing`、`lease_owner`、`lease_expires_at` 并 `attempt_count+1` 后提交，再加载 payload 执行 T2（含 T3 的一次同步发送）。重复 `event_id` 仍立即返回去重结果。
-- **同步模式（`WORKER_ENABLED=false`）**：保留 v0.2.0 的 claim-first 路径，T2（含 T3）在领取后立即执行。供单元测试与关闭 Worker 的部署使用。
+- **Worker 模式（默认）**：入口（Webhook 后台任务 / WebSocket 回调）只执行 T1，把事件写入 `received` 后立即返回，**不等待** AI、飞书或账本处理。后台 `EventWorker` 用 `SELECT … FOR UPDATE SKIP LOCKED` 原子领取 `received`、已到期重试或租约过期的行，写入 `processing`、`lease_owner`、`lease_expires_at` 并 `attempt_count+1` 后提交，再加载 payload 执行 T2。重复 `event_id` 仍立即返回去重结果。
+- **同步模式（`WORKER_ENABLED=false`）**：保留 v0.2.0 的 claim-first 路径，T2 在领取后立即执行。供单元测试与关闭 Worker 的部署使用。
 
-两种模式互斥：同一进程只会启用其中一种，不存在”同步处理一次、Worker 又处理一次”的竞争。
+两种事件模式互斥：同一进程只会启用其中一种，不存在”同步处理一次、Worker 又处理一次”的竞争。
+
+回复投递两种模式（由 `LARK_LEDGER_REPLY_WORKER_ENABLED` 选择，生产默认开启），使用**同一套** Outbox claim / lease / 结果守卫原语，不会同时运行：
+
+- **Reply Worker 模式（默认）**：T2 提交后处理器只**唤醒**后台 `ReplyWorker` 并返回。`ReplyWorker` 用 `SELECT … FOR UPDATE SKIP LOCKED` 领取已提交的 `reply_outbox` 行（`pending`；`failed` 且 `next_attempt_at` 到期；`sending` 且租约过期），写入 `sending`、租约并 `attempt_count+1` 后提交，再上传 / 发送，最后按租约守卫写入 `sent` / `failed` / `dead`。数据库仍是唯一事实来源，进程内唤醒丢失只推迟一个轮询周期。
+- **兼容同步模式（`REPLY_WORKER_ENABLED=false`）**：T2 提交后处理器对刚提交的行逐个 `claim_by_id` → 用同一个 `ReplyDeliverer` 发送 → 按守卫标记结果。文件发送失败时保留 v0.2.0 的直接失败提示；报告图片上传失败时降级为文字卡片。
 
 - T1 成功只表示”事件已被领取且载荷已落库”，**不是**业务成功。
 - T2 中 `LedgerService` 以 `commit_changes=False` 构建（只 flush），回复意图与业务变更在同一 session、同一 commit 内落库。T2 失败时：Worker 模式按错误分类写入 `failed`（带指数退避的 `next_attempt_at`）或 `dead`（永久错误或达到最大尝试次数）；同步模式写入 `failed` 与脱敏的 `result_summary`，**不会**取消 claim。
-- T3 是提交后的一次**兼容性同步发送**，消费的是已提交的 Outbox 行，不是内存对象。发送失败把 Outbox 标记为 `failed`（待 P06b 后台发送/重试），**不会**重新执行业务，也**不会**令事件进入业务重试。
+- T3 消费的是**已提交**的 Outbox 行，不是内存对象。回复发送失败（`failed` 或 `dead`）**不会**重新执行业务，也**不会**令事件进入业务重试——事件与回复状态完全解耦。
 - `succeeded` 语义（P06a）：**业务已处理且回复意图已可靠写入 `reply_outbox`**，不再表示”飞书已收到回复”。
 - **提交后崩溃窗口**：若 T2 已提交而事件尚未标记 `succeeded`，事件被重新领取时，处理器先检查该事件是否已有 Outbox 行（有 ⟹ 业务已提交），从而**跳过业务**，直接收敛事件为 `succeeded`。不会重复入账、重复修改/删除/恢复，也不会重复插入 Outbox 行。
 
@@ -99,19 +105,24 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 
 **幂等与重复记账边界（P06a）：** 业务写入与回复意图通过 Transactional Outbox 在同一事务提交，因此业务成功 ⟹ 一定有 Outbox 记录。崩溃窗口重试时，处理器先检查 Outbox（有 ⟹ 业务已提交）从而跳过业务，事件收敛为 `succeeded`，**不再**以 `IntegrityError→dead` 作为正常恢复路径。`(source_message_id, source_item_index)` 唯一约束仍是**兜底**保障（例如同一飞书消息被以不同 `event_id` 重新投递时），此时 `IntegrityError` 仍会把事件移入 `dead` 以阻止重复入账；改、删、恢复动作对已应用的结果是幂等的（重复执行会返回"没有变化 / 已删除"）。**不**宣称"绝不重复记账"，发布文案不得使用 at-least-once 之外更强的主张。
 
-### 回复 Outbox（v0.2.1 / P06a Transactional Outbox）
+### 回复 Outbox（v0.2.1 / P06a Transactional Outbox + P06b Reply Worker）
 
 业务变更与待发送回复记录放入**同一个数据库事务**：业务成功提交时，一定存在可供后续发送或补偿的 `reply_outbox` 记录。所有成功路径的回复（记账确认、列表/详情/汇总/预算/帮助、CSV 导出、消费报告卡片）都通过该表落库并发送；`错误提示 / 预业务通知`（如"图片识别功能尚未配置"）仍直接同步发送，**未**进入 Outbox（本版本如实声明）。
 
-**表结构要点：** `reply_outbox` 每行是一条自包含的回复意图——回复目标 `message_id`、`reply_type`（`text` / `file` / `card`）、版本化 `payload_json` 信封，以及文件/报告图片的原始字节 `payload_blob`（附 `size` 与 `sha256`）。因此 P06b 发送时不需要当前进程内存对象、原始 HTTP 请求、已关闭的 session、临时文件路径，也不需重新调用 AI 或重新查询账本。`(event_id, reply_type)` 唯一约束保证同一事件不会重复插入同一回复；`sequence` 稳定排序（如 CSV 导出先发文件再发确认文字）。
+**表结构要点：** `reply_outbox` 每行是一条自包含的回复意图——回复目标 `message_id`、`reply_type`（`text` / `file` / `card`）、版本化 `payload_json` 信封，以及文件/报告图片的原始字节 `payload_blob`（附 `size` 与 `sha256`）。因此发送时不需要当前进程内存对象、原始 HTTP 请求、已关闭的 session、临时文件路径，也不需重新调用 AI 或重新查询账本。`(event_id, reply_type)` 唯一约束保证同一事件不会重复插入同一回复；`sequence` 稳定排序（如 CSV 导出先发文件再发确认文字），并配 `(event_id, sequence)` 索引支撑顺序领取。
 
-**状态语义：** `status` 取值集中定义于 `ReplyStatus` 枚举（`pending` / `sending` / `sent` / `failed` / `dead`）。P06a 只写入 `pending` → `sent` | `failed`；`sending`、`dead` 为 P06b 后台发送/死信预留。发送结果更新带条件（仅 `pending/sending/failed` 可被改写），已 `sent` 的记录不会被重复发送。
+**状态语义：** `status` 取值集中定义于 `ReplyStatus` 枚举（`pending` / `sending` / `sent` / `failed` / `dead`）。`attempt_count` 在每次进入 `sending` 时加一（包含首次发送与租约接管）；发送失败不再额外累加。发送结果更新带租约守卫（`status='sending' AND lease_owner=<owner>`），已 `sent` / `dead` 的记录不会被改写，旧 Worker 租约失效后不能覆盖新 Worker 结果。
 
-**P06a 的兼容性单次发送：** T2 提交后立即从**已提交**的 Outbox 读取并尝试发送一次：成功标记 `sent`，失败标记 `failed`（保留 `error_code` 与脱敏 `result_summary`），**不**重跑业务、**无**后台自动重试。文件发送失败时仍按 v0.2.0 行为直接回复"账单已生成，但发送文件失败"（该提示本身不进入 Outbox）。报告图片上传失败时降级为发送文字卡片。
+**Reply Worker（P06b）：** 后台 asyncio 任务随 FastAPI lifespan 启停；数据库是唯一队列与协调存储。领取在单事务内 `SELECT … FOR UPDATE SKIP LOCKED`，写入 `sending`、`lease_owner`、`lease_expires_at`、`attempt_count+1` 并提交后才调用飞书 API。同一事件内按 `sequence` 升序投递：更小 `sequence` 尚未 `sent` / `dead` 时，后一条不会被领取（含并发下）；前一条 `failed` 等待重试时后一条等待；前一条 `dead` 后允许后一条独立发送，避免整条回复链永久卡死。
 
-**崩溃恢复：** 若业务 + Outbox 已提交而事件状态未更新（进程崩溃），事件重新被 Worker 领取时，处理器先检查该事件是否已有 Outbox 行；有则跳过业务、不重复插入，直接收敛事件为 `succeeded`。这是 P06a 的核心验收项，与旧的 `IntegrityError→dead` 兜底不同。
+- **重试与 dead：** 临时错误（网络、超时、HTTP 408/429/5xx、上传临时失败）写入 `failed` 并按 `min(base × 2^(attempt-1), max)` 退避；永久错误（`payload_version` 不支持、未知 `reply_type`、路由字段缺失、`payload_json` 契约损坏、`payload_blob` 缺失 / 大小或 checksum 不一致、非 408/429 的 4xx）或重试耗尽直接写入 `dead`，清空租约与 `next_attempt_at`，不再自动领取。单条回复失败不会终止 Worker 循环。
+- **上传与发送分阶段：** 文件上传成功、发送失败后重试时复用已持久化的 `remote_file_key`，不重复上传；报告图片同理复用 `remote_image_key`。上传仍失败时文件行按临时错误重试，卡片行降级为文字卡片（图片是可选项）。
+- **幂等：** 每次回复都携带飞书回复 API 的 `uuid` 幂等键（取 Outbox 行 ID，稳定、≤50 字符）。同一行在 1 小时内重发时飞书直接返回已创建的 `message_id` 而不重复投递，极大缩小“发送成功但未标 `sent` 就崩溃”的重复窗口；发送成功还把远端 `message_id` 写入 `remote_message_id`。
+- **结果回放（内部能力）：** `OutboxReplayService` 只把 `failed` / `dead` 行重新置为 `pending`（清退避、清租约、清错误摘要），由 Worker 再次发送**完全相同**的已持久化载荷；**不**重新调用 AI、**不**重新执行业务、**不**重新生成 CSV / 渲染报告。当前是内部可测试能力，**未**暴露用户命令入口。
 
-**尚未实现（P06b 范围，本版本明确排除）：** 后台回复 Worker、Outbox 轮询、`FOR UPDATE SKIP LOCKED` 领取循环、Outbox lease、回复自动重试与指数退避、回复 `dead` 自动流转、用户结果回放、人工重发。
+**崩溃恢复：** 若业务 + Outbox 已提交而事件状态未更新（进程崩溃），事件重新被 Worker 领取时，处理器先检查该事件是否已有 Outbox 行；有则跳过业务、不重复插入，直接收敛事件为 `succeeded`。这是 P06a 的核心验收项，与旧的 `IntegrityError→dead` 兜底不同。回复发送本身在 `sent` 标记前崩溃时，Outbox 行留在 `sending`，租约过期后被重新领取并重发——1 小时内的重发由飞书 `uuid` 幂等去重，1 小时外的极端窗口可能重复一条回复，但**绝不会**重复执行业务或重复记账。
+
+**尚未实现（后续版本）：** 事件人工重放、dead 事件重新执行业务、Web 管理后台 / Outbox 可视化、完整 readiness、终态自动清理、对用户可见的回放命令。
 
 ### 载荷内容与隐私
 
@@ -153,7 +164,7 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 - `category_budgets`：每个用户和分类唯一的长期月预算。
 - `budget_alerts`：记录预算在每个自然月已发送的 80% / 100% 阈值提醒。
 - `processed_events`：已领取的飞书事件。新事件含版本化 `payload_json`、`payload_version`、`transport`、`status`、`received_at`、`processed_at` 与可选 `last_error_code`。可靠投递状态（P05a）另含 `attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`result_summary`、`updated_at`，以及为人工定位去规范化的 `source_message_id` / `user_open_id`；历史无载荷行保持 `legacy_succeeded` 且不可重放。
-- `reply_outbox`：**Transactional Outbox（P06a）**——自包含的飞书回复意图，与业务变更同事务提交。字段包括 `event_id`（关联源事件）、`message_id`（回复目标）、`reply_type`、`sequence`、`transport`、`payload_version`、`payload_json`（内容信封）、`payload_blob`（CSV / 报告图片字节，附 `size` / `sha256`）、`status`、`attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`（P06b 预留）、`sent_at`、`last_error_code`、`result_summary`。唯一约束 `(event_id, reply_type)` 保证幂等；索引 `(status, next_attempt_at)` 与 `lease_expires_at` 为 P06b Worker 铺好基础。
+- `reply_outbox`：**Transactional Outbox（P06a）+ Reply Worker 状态（P06b）**——自包含的飞书回复意图，与业务变更同事务提交。字段包括 `event_id`（关联源事件）、`message_id`（回复目标）、`reply_type`、`sequence`、`transport`、`payload_version`、`payload_json`（内容信封）、`payload_blob`（CSV / 报告图片字节，附 `size` / `sha256`）、`status`、`attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`sent_at`、`last_error_code`、`result_summary`，以及 P06b 投递元数据 `remote_message_id`（远端回复消息 ID）、`remote_file_key` / `remote_image_key`（上传资源键，重试复用不重复上传）。唯一约束 `(event_id, reply_type)` 保证幂等；索引 `(status, next_attempt_at)`、`lease_expires_at` 支撑领取，`(event_id, sequence)` 支撑同一事件内的顺序领取。
 
 所有日期范围都使用左闭右开语义。账目发生时间以带时区时间保存；相对时间、自然月和预算统计按全局配置的 IANA 时区计算。
 
@@ -161,10 +172,11 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 
 ## 运行与故障边界
 
-- 应用生命周期负责启动或停止长连接与事件 Worker，并在关闭时释放数据库引擎。Worker 关闭时会请求停止、取消任务并等待结束，不悬挂后台任务。
-- 默认（`WORKER_ENABLED=true`）下，Webhook 后台任务和长连接消息任务只负责领取事件；业务处理由进程内事件 Worker 执行。`WORKER_ENABLED=false` 时回到 v0.2.0 的进程内同步处理路径。多进程 / 多副本部署时每个进程都是 Worker，靠数据库租约与 `SKIP LOCKED` 保证并发安全。
-- 报告图片渲染或上传失败时会发送不含图片的文字卡片；建议生成失败时使用本地规则生成后备建议。
-- CSV 导出上传或发送失败时回复可理解错误；**不会**自动重试（回复补偿属后续工作包）。临时导出文件在上传结束或失败后删除。
+- 应用生命周期负责启动或停止长连接、事件 Worker 与回复 Worker，并在关闭时释放数据库引擎。关闭顺序：先停接收新事件，再请求事件 Worker 停止，再请求回复 Worker 停止（不再领取新 Outbox），最后取消并等待任务、释放引擎；不悬挂后台任务。未送达的 Outbox 行持久在库，下次启动继续投递。
+- 默认（`WORKER_ENABLED=true`）下，Webhook 后台任务和长连接消息任务只负责领取事件；业务处理由进程内事件 Worker 执行。`WORKER_ENABLED=false` 时回到 v0.2.0 的进程内同步处理路径。多进程 / 多副本部署时每个进程都是事件 Worker 与回复 Worker，靠数据库租约与 `SKIP LOCKED` 保证并发安全。
+- 默认（`REPLY_WORKER_ENABLED=true`）下，回复由后台 Reply Worker 投递；`false` 时使用同一套 claim / 租约 / 结果守卫原语的兼容同步路径。两者不会同时运行。
+- 报告图片渲染或上传失败时：同步模式会发送不含图片的文字卡片；Reply Worker 模式下上传仍失败的文件行会按临时错误重试、卡片行降级为文字卡片；建议生成失败时使用本地规则生成后备建议。
+- CSV 导出上传或发送失败时回复可理解错误；Reply Worker 模式下失败行按退避自动重试直至 `dead`，同步模式下保留 v0.2.0 的直接失败提示。临时导出文件在上传结束或失败后删除。
 - 复杂文字以及单图或多图中的批量账目先逐项严格校验，再用数据库保存点隔离单项写入，最终统一提交并返回成功、失败和收支合计。复杂文字中的预算也逐项隔离处理。所有批量账目共用原始消息的 `message_id` 和逐项索引，沿用来源幂等约束。完整异常只记录到带错误编号和处理阶段的日志中，用户回复仅包含可执行的分类错误。
 - 基础 `compose.yaml` 只启动应用；`compose.dev.yaml` 可叠加本地 PostgreSQL 16。源码 Compose 在启动 Uvicorn 前执行 `alembic upgrade head`。
-- 高可用部署仍需自行设计备份与凭据轮换。事件重试、租约接管和 dead 由 Worker 自动完成。**P06a 已提供** Transactional Outbox：业务变更与回复意图同事务提交，崩溃窗口重试不会重复执行业务。**P06b 之前尚未实现**：后台回复 Worker、回复自动重试、Outbox lease、回复 dead、用户结果回放与人工重发；当前仅在提交后同步发送一次，发送失败会保留在 Outbox（`failed`）等待后续机制处理。`(source_message_id, source_item_index)` 唯一约束仍是重复入账的兜底保障。**不**宣称"绝不重复记账"。
+- 高可用部署仍需自行设计备份与凭据轮换。事件重试、租约接管和 dead 由事件 Worker 自动完成；回复发送、重试、租约接管和 dead 由 Reply Worker 自动完成（P06b）。**已具备** Transactional Outbox：业务变更与回复意图同事务提交，崩溃窗口重试不会重复执行业务；回复失败绝不重新执行业务；进程重启后继续投递 `pending` / `failed` 回复；结果回放只重发已持久化载荷。**仍未具备**：事件人工重放、Web 管理后台 / Outbox 可视化、完整 readiness、终态自动清理、AI 写入前确认、对所有外部 API 都能绝对避免重复回复（飞书已发送但本地未标记 `sent` 时崩溃，1 小时内由 `uuid` 幂等去重，1 小时外存在极小的重复回复窗口；该窗口不会导致重复执行业务或重复记账）。`(source_message_id, source_item_index)` 唯一约束仍是重复入账的兜底保障。**不**宣称"绝不重复记账"。

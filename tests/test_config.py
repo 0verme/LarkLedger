@@ -64,3 +64,29 @@ def test_invalid_currency_is_rejected() -> None:
 def test_invalid_exchange_rate_cache_ttl_is_rejected(ttl: int) -> None:
     with pytest.raises(ValidationError):
         Settings(_env_file=None, exchange_rate_cache_ttl_seconds=ttl)
+
+
+def test_reply_worker_config_defaults() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.reply_worker_enabled is True
+    assert settings.reply_worker_poll_interval_seconds == 1.0
+    assert settings.reply_worker_batch_size == 10
+    assert settings.reply_max_attempts == 3
+    assert settings.reply_lease_seconds == 300.0
+    assert settings.reply_retry_base_seconds == 2.0
+    assert settings.reply_retry_max_seconds == 3600.0
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"reply_worker_poll_interval_seconds": 0},
+        {"reply_worker_batch_size": 0},
+        {"reply_max_attempts": 0},
+        {"reply_lease_seconds": 0},
+        {"reply_retry_base_seconds": 0},
+    ],
+)
+def test_reply_worker_config_rejects_invalid_values(kwargs: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **kwargs)

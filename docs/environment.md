@@ -135,6 +135,13 @@ docker compose -f compose.yaml -f compose.dev.yaml down -v
 | 事件租约秒 `EVENT_LEASE_SECONDS` | `300` | `300` | 有默认（崩溃事件在租约过期后被接管） |
 | 重试退避基数秒 `EVENT_RETRY_BASE_SECONDS` | `2.0` | `2.0` | 有默认 |
 | 重试退避上限秒 `EVENT_RETRY_MAX_SECONDS` | `3600` | `3600` | 有默认 |
+| 回复 Worker 开关 `REPLY_WORKER_ENABLED` | `true` | `true` | 有默认（生产默认开启；关闭则回到兼容同步发送路径） |
+| 回复 Worker 轮询间隔秒 `REPLY_WORKER_POLL_INTERVAL_SECONDS` | `1.0` | `1.0` | 有默认 |
+| 回复 Worker 批量大小 `REPLY_WORKER_BATCH_SIZE` | `10` | `10` | 有默认 |
+| 回复最大尝试 `REPLY_MAX_ATTEMPTS` | `3` | `3` | 有默认（首次发送计 1 次） |
+| 回复租约秒 `REPLY_LEASE_SECONDS` | `300` | `300` | 有默认（崩溃/慢 Worker 的回复在租约过期后被接管） |
+| 回复退避基数秒 `REPLY_RETRY_BASE_SECONDS` | `2.0` | `2.0` | 有默认 |
+| 回复退避上限秒 `REPLY_RETRY_MAX_SECONDS` | `3600` | `3600` | 有默认 |
 | 日志级别 | **无此配置项** | — | — |
 | Webhook 监听 | 进程内 `0.0.0.0:8000`（Compose 映射 `8000:8000`） | — | WebSocket 仅用于 healthz 时可内网访问 |
 | Compose 应用服务名 | `app` | — | — |
@@ -215,7 +222,7 @@ docker compose up -d --build
 - 上传文件资源（代码调用 `POST /open-apis/im/v1/files`）
 - 以**文件消息**回复当前会话（`msg_type=file`）
 
-导出失败时用户会看到发送失败类提示；**v0.2.0 能力集不会自动重试文件投递**。需在真实飞书租户确认文件上传与文件消息权限是否齐全。
+导出失败时用户会看到发送失败类提示；**v0.2.1（P06b）起文件投递由后台 Reply Worker 按指数退避自动重试**，重试复用已上传的 `file_key`。需在真实飞书租户确认文件上传与文件消息权限是否齐全。
 
 ### 图片 / 语音扩展额外需要
 
@@ -388,11 +395,11 @@ uvicorn lark_ledger.main:app --reload
 
 与产品手册一致，部署文档也不使用「可靠投递」「永不丢消息」等措辞：
 
-- 事件处理失败会由 Worker 自动重试（指数退避）并最终进入 `dead`；业务变更与回复意图通过 **Transactional Outbox**（P06a）同一事务提交，崩溃重试不会重复执行业务，但仍不宣称"绝不重复记账"，来源唯一约束为兜底
-- 回复发送失败**不会**自动重试：提交后只同步发送一次，失败记录在 Outbox（`failed`）；后台回复 Worker / 自动重试 / Outbox lease 属 P06b
-- 没有人工重放 `dead` 事件、没有用户结果回放、没有人工重发命令
+- 事件处理失败会由事件 Worker 自动重试（指数退避）并最终进入 `dead`；业务变更与回复意图通过 **Transactional Outbox**（P06a）同一事务提交，崩溃重试不会重复执行业务，但仍不宣称"绝不重复记账"，来源唯一约束为兜底
+- 回复发送失败（P06b）由后台 Reply Worker 自动重试（指数退避）并最终进入回复 `dead`；发送失败**绝不**重新执行业务。进程重启后继续投递 `pending` / `failed` 回复
+- 没有用户可见的结果回放 / 人工重发命令（`OutboxReplayService` 是内部可测试能力）；没有 `dead` 事件人工重放
+- 极端窗口下（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过飞书 `uuid` 幂等的 1 小时窗口）用户可能收到重复回复；该窗口**不会**导致重复执行业务或重复记账
 - 图片 / 语音 / 批量尚无写入前确认
-- CSV 文件发送失败不会自动重试
 - 无 Web 管理页面、无共享账本
 - JSON 导出不是正式能力
 
@@ -400,7 +407,7 @@ uvicorn lark_ledger.main:app --reload
 
 ```text
 v0.2.1：可靠投递（事件 Worker / 租约 / 重试 / dead 已完成；Transactional Outbox 已完成；
-        后台回复 Worker / 回复补偿仍缺）
+        后台回复 Worker / 回复租约 / 回复重试 / 回复 dead 已完成；结果回放为内部能力）
 v0.3.0：高风险确认
 ```
 

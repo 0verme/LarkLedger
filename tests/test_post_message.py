@@ -65,7 +65,7 @@ class RecordingFeishu:
             return b"\xff\xd8\xffcontent"
         return b"\x89PNG\r\n\x1a\ncontent"
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(self, message_id: str, text: str, *, uuid: str | None = None) -> None:
         self.texts.append(text)
 
 

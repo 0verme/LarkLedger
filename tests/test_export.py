@@ -668,12 +668,16 @@ class RecordingExportFeishu:
         self.uploads.append((content, filename))
         return "file_export"
 
-    async def reply_file(self, message_id: str, file_key: str) -> None:
+    async def reply_file(
+        self, message_id: str, file_key: str, *, uuid: str | None = None
+    ) -> None:
         if self.send_error:
             raise self.send_error
         self.files.append(file_key)
 
-    async def reply_text(self, message_id: str, text: str) -> None:
+    async def reply_text(
+        self, message_id: str, text: str, *, uuid: str | None = None
+    ) -> None:
         self.texts.append(text)
 
 
