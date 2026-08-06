@@ -10,14 +10,14 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works in v0.2.1
+## What works in v0.3.0
 
-- **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies
+- **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies; simple single text entries still write straight through
 - **Recent list / single-entry detail** (`最近10笔`, `查看 #XXXXX`)
 - **Targeted update, soft-delete, and restore** by short ID (plus last-entry shortcuts)
 - **CSV export** of the current user's ledger (Feishu file message; needs extra scopes)
 - Summaries, monthly category budgets, consumption report cards
-- Image / voice bookkeeping as **optional extensions** (not required for first success)
+- **High-risk confirmation**: image / voice / batch / likely-duplicate writes first create a pending confirmation (`#C-XXXXX`) — confirm or cancel by text or card button; confirmation always uses the frozen parse result, never re-calls AI
 - User isolation by Feishu `open_id` and claim-first `event_id` idempotency
 - **Reliable delivery**: background Event / Reply Workers, transactional reply outbox, PostgreSQL lease and exponential-backoff retry, readiness probes, terminal retention cleanup, and guarded manual event replay
 - Self-hosted stack: FastAPI, PostgreSQL, Docker Compose
@@ -135,15 +135,11 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - Each reply carries a stable Feishu `uuid` idempotency key (the outbox row id): within the 1-hour dedup window a re-send after a crash is deduplicated by Feishu. In the extreme case (Feishu sent, local mark lost, and the re-send is more than 1 hour later) a duplicate reply may reach the user — it can **never** cause duplicate business execution or double bookkeeping.
 - A lightweight Cleanup Worker deletes only terminal delivery records in bounded batches: successful events / sent replies default to 30 days, while dead records default to 90 days. Ledger entries and revisions are never deleted. Cleanup is not a database backup; review audit requirements before shortening retention.
 - Operators can use the dry-run-by-default `python -m lark_ledger.admin replay-event` CLI to replay provably safe `dead` / `failed` events; only explicit `--execute` reruns business, and every accepted replay writes an audit. Events with an Outbox, source ledger results, or unproven historical atomicity are refused. Result replay remains internal.
-- Image / voice / batch paths have **no** pre-write confirmation flow yet
+- **High-risk confirmation (v0.3.0)**: image / voice / batch / likely-duplicate writes wait for a user `确认 #C-XXXXX` (or a card button) before writing. Confirmations expire (default 24h) and are per-user only; no multi-level approval or shared confirmation.
 - No web admin UI, no shared ledgers
 - **JSON export is not a formal capability** (CSV only)
 
-Roadmap themes (no promised ship dates):
-
-```text
-v0.3.0: high-risk confirmation (image / voice / batch, etc.)
-```
+Roadmap themes (no promised ship dates): `v0.3.x` maintenance and increments (shared ledgers / web admin are not currently promised).
 
 Current release: **v0.2.1**. Prebuilt image: `ghcr.io/0verme/larkledger:0.2.1` (also `0.2` / `latest`). You can also build from source with `docker compose ... --build`.
 

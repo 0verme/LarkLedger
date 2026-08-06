@@ -146,6 +146,18 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 
 **尚未实现（后续版本）：** Web 管理后台 / Outbox 可视化、对用户可见的结果回放命令。
 
+### 高风险确认（v0.3.0 / P07）
+
+`risky_only` 策略把写入分为三类：**简单单笔文字直写**、**高风险进确认**、**缺失/无法判定则拒绝或追问**。风险路由插入在命令冻结后、执行 `LedgerService` 前（`MessageProcessor.process`），判定依据为来源类型（image / audio / post 带图）、批量 action（BATCH / CREATE_ENTRIES / SET_BUDGETS）以及新写的疑似重复查重。
+
+- **pending_commands 表**（迁移 `20260806_0012`）保存**冻结**的结构化命令（`payload_json`）与冻结的用户预览（`preview_json`）。确认只反序列化 `payload_json` 交给 `LedgerService`，绝不重新调用 AI 或重新识别媒体。`confirmation_code`（`CA83F2`，展示 `#C-A83F2`）用户内唯一、不复用、大小写不敏感、正则解析。
+- **创建原子性：** 高风险消息在**同一事务**写入 pending 行 + 预览 CARD Outbox + 事件的 `business_committed_at`，事件收敛为 `succeeded`；崩溃重投时 Outbox 预检命中，跳过业务且不产生第二条 pending。
+- **确认执行原子性：** `confirm_and_execute` 以 `SELECT FOR UPDATE` 锁行 → 校验 user_open_id / status=pending / 未过期 → `executing` → 用 `LedgerService(commit_changes=False)` 执行冻结命令 → 写确认结果文本 Outbox → 置 `executed`，单事务提交。两个并发确认只执行一次；确认与取消并发只有一个成功；旧卡片重复点击走幂等分支。确认是**新事件**（文本指令或 `card.action.trigger`），与可靠投递同一套 Worker / Outbox 基础。
+- **卡片交互：** 预览卡片带确认/取消按钮，`value` 含 `k=larkledger_pending` 标记与确认码；`card.action.trigger` 回调（webhook 分支 + 长连接注册）核验 operator 用户、code 与状态，重复点击幂等。文本 `确认 / 取消 / 查看待确认 #C-XXXXX` 是始终可用的兜底。
+- **过期与保留：** 到期 `pending` 由 Cleanup Worker 置为 `expired`；`executed / cancelled / expired / failed` 终态行按 `pending_retention_days`（默认 7 天）清理。
+- **疑似重复：** 同用户 + 方向 + 金额 + 币种 + `occurred_at` 在 `pending_duplicate_window_minutes` 窗口内 +（分类相同或来源相同），Python 层备注相似度终判；命中进确认并在预览中展示现有短 ID，**不直接拒绝**。
+- **隐私：** 预览与日志只包含结构化聚合（金额、分类、时间、截断备注），绝不写入 OCR 全文或语音转写；操作员 CLI 只输出安全聚合。
+
 ### 载荷内容与隐私
 
 载荷由 `event_payload` 模块集中构建与校验，当前 `payload_version = 1`。信封字段包括：`payload_version`、`event_id`、`transport`（`webhook` | `websocket`）、`received_at`，以及归一化后的业务 `event`（`sender.sender_id` 的 open_id/user_id，`message` 的 message_id / message_type / content / 可选 chat_id）。

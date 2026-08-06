@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.2.1` |
 | Git tag | `v0.2.1` |
 | GHCR | `ghcr.io/0verme/larkledger:0.2.1`（亦有 `0.2` / `latest` 由发布流水线写入） |
-| Alembic head | `20260806_0011`（v0.2.0 为 `20260806_0007`） |
+| Alembic head | `20260806_0012`（main / v0.3.0 开发；v0.2.1 为 `20260806_0011`，v0.2.0 为 `20260806_0007`） |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -192,4 +192,10 @@ Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 
 - **回退：** `alembic downgrade 20260806_0010` 会删除重放审计与两个重放元数据列，但不修改
   账本、Outbox 或事件 payload。需要保留审计时不得执行该 downgrade。
 
-当前 Alembic head：`20260806_0011`。
+## 迁移 `20260806_0012`（高风险确认 pending_commands）
+
+- **升级：** 新增 `pending_commands` 表，保存**冻结**的高风险命令（图片 / 语音 / 批量 / 疑似重复）等待用户确认。`payload_json` 是冻结的 `ParsedCommand`（确认绝不重新调用 AI）；`preview_json` 是冻结的用户预览聚合。确认单编号存储为 `CA83F2`（展示 `#C-A83F2`），用户内唯一、不复用。`source_event_id` 无外键，事件清理不会级联删除待确认单。
+- **行为变化（v0.3.0 开发中 main）：** `LARK_LEDGER_PENDING_ENABLED` 默认 `true`，图片 / 语音 / 批量 / 疑似重复写入先进入待确认；简单单笔文字仍直写。确认 / 取消可用文本命令 `确认 #C-XXXXX` / `取消 #C-XXXXX` 或预览卡片按钮。确认单默认 24 小时过期，终态确认单默认保留 7 天后由 Cleanup Worker 清理。
+- **回退：** `alembic downgrade 20260806_0011` 删除 `pending_commands` 表及全部待确认单（已确认执行写入的账目不受影响）。需要保留待确认数据时不得执行该 downgrade。
+
+当前 Alembic head：`20260806_0012`。

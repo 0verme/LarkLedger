@@ -149,6 +149,11 @@ docker compose -f compose.yaml -f compose.dev.yaml down -v
 | dead Event 保留天数 `EVENT_DEAD_RETENTION_DAYS` | `90` | `90` | 默认长于成功记录 |
 | sent Outbox 保留天数 `OUTBOX_SENT_RETENTION_DAYS` | `30` | `30` | 按 sent_at |
 | dead Outbox 保留天数 `OUTBOX_DEAD_RETENTION_DAYS` | `90` | `90` | 按 updated_at；默认更长 |
+| 高风险确认开关 `PENDING_ENABLED` | `true` | `true` | 图片/语音/批量/疑似重复先进待确认；显式设 `false` 恢复直写 |
+| 确认单有效期秒 `PENDING_EXPIRES_SECONDS` | `86400` | `86400` | 24 小时；过期后无法确认/取消 |
+| 终态确认单保留天数 `PENDING_RETENTION_DAYS` | `7` | `7` | executed/cancelled/expired/failed 按 updated_at 清理 |
+| 疑似重复时间窗分钟 `PENDING_DUPLICATE_WINDOW_MINUTES` | `60` | `60` | 相同方向/金额/币种在此窗口内检查分类与来源 |
+| 待确认列表上限 `PENDING_MAX_LIST` | `10` | `10` | `查看待确认` 最多展示条数 |
 | 日志级别 | **无此配置项** | — | — |
 | Webhook 监听 | 进程内 `0.0.0.0:8000`（Compose 映射 `8000:8000`） | — | WebSocket 仅用于 healthz 时可内网访问 |
 | Compose 应用服务名 | `app` | — | — |

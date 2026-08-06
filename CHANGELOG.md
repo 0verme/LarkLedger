@@ -2,6 +2,35 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [Unreleased]
+
+### Added (v0.3.0 — high-risk command confirmation; P07)
+
+- **Risk routing (`risky_only`)** decides per write: simple, unambiguous single-entry text writes go straight to the ledger; image / voice / batch / likely-duplicate writes first create a **pending confirmation** and wait for the user. Read, query, and short-ID mutation commands are never confirmed.
+- **`pending_commands`** table (migration `20260806_0012`) stores a **frozen** `ParsedCommand` (`payload_json`) plus a frozen user preview (`preview_json`) — confirming never re-calls AI or re-recognizes media. `confirmation_code` is user-unique, never reused, case-insensitive, and parsed by regex only.
+- **Confirmation IDs** `#C-A83F2` (a `C`-prefixed five-character Crockford code) are distinct from ledger short IDs `#XXXXX` and never confused by parsing.
+- **Text confirmation commands**: `确认 #C-A83F2`, `取消 #C-A83F2`, `查看待确认` are parsed deterministically before the AI interpreter and are the always-available fallback.
+- **Card confirmation buttons**: the preview card carries 确认 / 取消 buttons; a new `card.action.trigger` callback (webhook branch + long-connection registration) verifies the operator's user, the confirmation code, and current status. Double clicks are idempotent (row lock + status check).
+- **Confirmation execution** runs the frozen command through `LedgerService` + reply outbox **in one transaction** under `SELECT FOR UPDATE`: two concurrent confirms execute exactly once, confirm vs cancel has one winner, expired pendings never execute, and a crash between commit and event status converges without re-running business.
+- **Duplicate detection**: same user + direction + amount + currency + near `occurred_at` + (same category or source type) with a note-similarity check flags a likely duplicate; the preview shows the existing short ID and the user decides.
+- **Expiry and retention** reuse the P06d Cleanup Worker: due `pending` rows become `expired`; terminal rows (executed / cancelled / expired / failed) are deleted after `pending_retention_days` (default 7).
+- **Operator CLI**: `python -m lark_ledger.admin list-pending` and `expire-pending` show safe aggregates and run the expiry sweep.
+
+### Changed
+
+- Event `succeeded` for a high-risk message now means "pending confirmation created and preview outbox written", not "ledger written"; the confirmation itself is a later event.
+- `MessageProcessor` gains risk routing and a pending confirmation store; both `WORKER_ENABLED` modes share the same outbox delivery primitives.
+
+### Security
+
+- Pending payloads and previews are treated like ledger data; logs and the operator CLI output only the confirmation code, status, risk reason, and aggregate counts — never the frozen payload, OCR text, transcripts, or `open_id`.
+
+### Known limitations (v0.3.0 is not finished)
+
+- Confirmation codes are not security credentials: they only select the requesting user's own pendings, and every action re-verifies `user_open_id`.
+- No multi-level approval, no shared/multi-user confirmation, no web admin; v0.3.0 is not a full finance approval system.
+- Card action callbacks require the Feishu interactive-card capability; text commands are the guaranteed fallback.
+
 ## [0.2.1] - 2026-08-06
 
 ### Added (v0.2.1 — guarded manual event replay; P06e)
