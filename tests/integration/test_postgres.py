@@ -625,8 +625,9 @@ async def test_event_state_migration_roundtrip(
     finally:
         monkeypatch.undo()
         get_settings.cache_clear()
+        # Close pooled connections to the scratch database before dropping it.
+        await scratch_engine.dispose()
         async with maint_engine.connect() as conn:
             autocommit = await conn.execution_options(isolation_level="AUTOCOMMIT")
             await autocommit.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
-        await scratch_engine.dispose()
         await maint_engine.dispose()
