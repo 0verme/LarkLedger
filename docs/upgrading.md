@@ -137,4 +137,15 @@ main 分支在 P06a 之上加入后台回复 Worker（P06b），新增迁移 `20
 - **幂等（诚实声明）：** 每次回复携带飞书回复 API 的 `uuid` 幂等键（Outbox 行 ID），1 小时内重发由飞书去重；极端情况下（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过 1 小时）用户可能收到重复回复，但**绝不会**重复执行业务或重复记账。
 - **回退：** 代码回退到含 `0008` 的提交即可关闭 Reply Worker（若 `REPLY_WORKER_ENABLED=false` 不启用）与 `0009` 新增列的行为；若已运行 `0009`，数据库需显式 `alembic downgrade 20260806_0008`（丢弃投递元数据，意图不丢失），或先备份后处理。
 
+## 开发中 main（P06c Readiness）
+
+P06c 不新增迁移，Alembic head 仍为 `20260806_0009`。升级代码并重启后可使用
+`GET /readyz` 检查 PostgreSQL、数据库 revision、已启用的 Event / Reply Worker，以及
+WebSocket 模式下的接收器。数据库未初始化、revision 落后或领先、代码存在多个 head、
+Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 HTTP 503。
+
+`GET /healthz` 保持原响应格式与 liveness 语义，不访问数据库。`/readyz` 只做本地轻量
+检查，不自动运行 migration，也不探测飞书或 AI。升级脚本仍需先显式执行
+`alembic upgrade head`；readiness 不能替代迁移步骤。
+
 当前 Alembic head：`20260806_0009`。

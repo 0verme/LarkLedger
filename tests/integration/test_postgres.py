@@ -12,11 +12,13 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from lark_ledger.config import Settings
 from lark_ledger.event_payload import (
     EventProcessStatus,
     parse_stored_payload,
 )
 from lark_ledger.models import Direction, LedgerEntry, ProcessedEvent
+from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.events import EventService
 from lark_ledger.services.ledger import LedgerService
@@ -52,6 +54,31 @@ async def test_alembic_schema_is_at_head(
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
     assert revision == "20260806_0009"
+
+
+async def test_readiness_uses_real_postgres_and_current_alembic_revision(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        event_mode="webhook",
+        worker_enabled=False,
+        reply_worker_enabled=False,
+    )
+    service = ReadinessService(settings, postgres_session_factory)
+
+    class State:
+        shutting_down = False
+
+    result = await service.check(State())  # type: ignore[arg-type]
+
+    assert result["status"] == "ready"
+    assert result["checks"]["database"] == {"status": "ok"}
+    assert result["checks"]["migration"] == {
+        "status": "ok",
+        "current": "20260806_0009",
+        "expected": "20260806_0009",
+    }
 
 
 async def test_list_keyset_and_get_entry_on_postgres(

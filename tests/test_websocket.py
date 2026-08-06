@@ -89,6 +89,7 @@ async def test_long_connection_start_callback_and_stop_without_network() -> None
     )
     await receiver.start()
     assert receiver.status == "connected"
+    assert receiver.health_snapshot()["running"] is True
     assert callback is not None
     callback(message_payload("evt_ws"))
     await asyncio.wait_for(service.called.wait(), timeout=1)
@@ -100,3 +101,7 @@ async def test_long_connection_start_callback_and_stop_without_network() -> None
     assert client.disconnected
     assert not client._auto_reconnect
     assert receiver.status == "stopped"
+    health = receiver.health_snapshot()
+    assert health["running"] is False
+    assert health["stopping"] is True
+    assert health["task_exception"] is False

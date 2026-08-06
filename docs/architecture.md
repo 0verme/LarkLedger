@@ -8,7 +8,7 @@
 
 | 组件 | 职责 |
 | --- | --- |
-| FastAPI 应用 | 管理生命周期，提供 `GET /healthz` 和 Webhook 入口 |
+| FastAPI 应用 | 管理生命周期，提供 `GET /healthz`、`GET /readyz` 和 Webhook 入口 |
 | Webhook / 长连接接收器 | 接收飞书事件并转换为统一事件结构 |
 | `EventService` | 按 `event_id` 抢占并去重事件；Worker 模式下只领取，同步模式下调用消息处理器 |
 | `EventWorker` | 后台事件 Worker（P05b）：`FOR UPDATE SKIP LOCKED` 领取、数据库租约、指数退避重试与 dead 处理 |
@@ -122,7 +122,13 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 
 **崩溃恢复：** 若业务 + Outbox 已提交而事件状态未更新（进程崩溃），事件重新被 Worker 领取时，处理器先检查该事件是否已有 Outbox 行；有则跳过业务、不重复插入，直接收敛事件为 `succeeded`。这是 P06a 的核心验收项，与旧的 `IntegrityError→dead` 兜底不同。回复发送本身在 `sent` 标记前崩溃时，Outbox 行留在 `sending`，租约过期后被重新领取并重发——1 小时内的重发由飞书 `uuid` 幂等去重，1 小时外的极端窗口可能重复一条回复，但**绝不会**重复执行业务或重复记账。
 
-**尚未实现（后续版本）：** 事件人工重放、dead 事件重新执行业务、Web 管理后台 / Outbox 可视化、完整 readiness、终态自动清理、对用户可见的回放命令。
+### Liveness 与 readiness（v0.2.1 / P06c）
+
+- `GET /healthz` 只读取进程内事件模式与长连接状态，不打开数据库连接、不探测飞书或 AI；数据库故障、少量失败 / dead / 积压不会把存活进程误判为死亡。
+- `GET /readyz` 对 PostgreSQL 执行轻量 `SELECT 1`，从 Alembic 配置解析代码唯一 head 并与数据库 `alembic_version` 比对，再读取应用 shutdown、Event Worker、Reply Worker 和 WebSocket receiver 的只读任务快照。Webhook 模式不要求 receiver；显式关闭 Worker 是合法兼容模式。
+- Worker / receiver task 的完成回调会主动取回异常，只保留异常类型作为安全错误码，避免 `Task exception was never retrieved`。异常退出、未启动、迁移不一致或 shutdown 都返回 HTTP 503；探针不执行 migration、不扫描业务表、不返回数据库 URL、凭据、用户标识、payload、回复内容或完整 nonce。
+
+**尚未实现（后续版本）：** 事件人工重放、dead 事件重新执行业务、Web 管理后台 / Outbox 可视化、终态自动清理、对用户可见的回放命令。
 
 ### 载荷内容与隐私
 
@@ -179,4 +185,4 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 - CSV 导出上传或发送失败时回复可理解错误；Reply Worker 模式下失败行按退避自动重试直至 `dead`，同步模式下保留 v0.2.0 的直接失败提示。临时导出文件在上传结束或失败后删除。
 - 复杂文字以及单图或多图中的批量账目先逐项严格校验，再用数据库保存点隔离单项写入，最终统一提交并返回成功、失败和收支合计。复杂文字中的预算也逐项隔离处理。所有批量账目共用原始消息的 `message_id` 和逐项索引，沿用来源幂等约束。完整异常只记录到带错误编号和处理阶段的日志中，用户回复仅包含可执行的分类错误。
 - 基础 `compose.yaml` 只启动应用；`compose.dev.yaml` 可叠加本地 PostgreSQL 16。源码 Compose 在启动 Uvicorn 前执行 `alembic upgrade head`。
-- 高可用部署仍需自行设计备份与凭据轮换。事件重试、租约接管和 dead 由事件 Worker 自动完成；回复发送、重试、租约接管和 dead 由 Reply Worker 自动完成（P06b）。**已具备** Transactional Outbox：业务变更与回复意图同事务提交，崩溃窗口重试不会重复执行业务；回复失败绝不重新执行业务；进程重启后继续投递 `pending` / `failed` 回复；结果回放只重发已持久化载荷。**仍未具备**：事件人工重放、Web 管理后台 / Outbox 可视化、完整 readiness、终态自动清理、AI 写入前确认、对所有外部 API 都能绝对避免重复回复（飞书已发送但本地未标记 `sent` 时崩溃，1 小时内由 `uuid` 幂等去重，1 小时外存在极小的重复回复窗口；该窗口不会导致重复执行业务或重复记账）。`(source_message_id, source_item_index)` 唯一约束仍是重复入账的兜底保障。**不**宣称"绝不重复记账"。
+- 高可用部署仍需自行设计备份与凭据轮换。事件重试、租约接管和 dead 由事件 Worker 自动完成；回复发送、重试、租约接管和 dead 由 Reply Worker 自动完成（P06b）。**已具备** Transactional Outbox 与 readiness：业务变更与回复意图同事务提交，崩溃窗口重试不会重复执行业务；回复失败绝不重新执行业务；进程重启后继续投递 `pending` / `failed` 回复；结果回放只重发已持久化载荷；`/readyz` 能发现数据库 / migration / 后台任务异常。**仍未具备**：事件人工重放、Web 管理后台 / Outbox 可视化、终态自动清理、AI 写入前确认、对所有外部 API 都能绝对避免重复回复（飞书已发送但本地未标记 `sent` 时崩溃，1 小时内由 `uuid` 幂等去重，1 小时外存在极小的重复回复窗口；该窗口不会导致重复执行业务或重复记账）。`(source_message_id, source_item_index)` 唯一约束仍是重复入账的兜底保障。**不**宣称"绝不重复记账"。

@@ -2,8 +2,10 @@ import json
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from lark_ledger.config import EventMode, Settings, get_settings
+from lark_ledger.readiness import ReadinessService, startup_incomplete_response
 from lark_ledger.services.events import EventService
 from lark_ledger.services.feishu import decrypt_event, verify_signature
 
@@ -16,7 +18,7 @@ def get_event_service(request: Request) -> EventService:
 
 @router.get("/healthz")
 async def health(request: Request) -> dict[str, str]:
-    settings = get_settings()
+    settings = getattr(request.app.state, "settings", None) or get_settings()
     receiver = getattr(request.app.state, "long_connection", None)
     connection_status = receiver.status if receiver is not None else "disabled"
     return {
@@ -24,6 +26,23 @@ async def health(request: Request) -> dict[str, str]:
         "event_mode": settings.event_mode.value,
         "long_connection": connection_status,
     }
+
+
+@router.get("/readyz")
+async def readiness(request: Request) -> JSONResponse:
+    service = cast(ReadinessService | None, getattr(request.app.state, "readiness", None))
+    if service is None:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=startup_incomplete_response(),
+        )
+    payload = await service.check(request.app.state)
+    response_status = (
+        status.HTTP_200_OK
+        if payload["status"] == "ready"
+        else status.HTTP_503_SERVICE_UNAVAILABLE
+    )
+    return JSONResponse(status_code=response_status, content=payload)
 
 
 @router.post("/webhooks/feishu")

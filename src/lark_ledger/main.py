@@ -8,6 +8,7 @@ from lark_ledger import __version__
 from lark_ledger.api import router
 from lark_ledger.config import EventMode, get_settings
 from lark_ledger.db import SessionFactory, engine
+from lark_ledger.readiness import ReadinessService
 from lark_ledger.services.ai import AIInterpreter
 from lark_ledger.services.events import EventService
 from lark_ledger.services.exchange import ExchangeRateService
@@ -21,6 +22,9 @@ from lark_ledger.services.worker import EventWorker, EventWorkerStore, generate_
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
+    app.state.settings = settings
+    app.state.shutting_down = False
+    app.state.readiness = ReadinessService(settings, SessionFactory)
     if settings.event_mode is EventMode.WEBSOCKET and (
         not settings.lark_app_id or not settings.lark_app_secret
     ):
@@ -87,6 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await receiver.start()
         yield
     finally:
+        app.state.shutting_down = True
         # Stop accepting new events first, then the event worker (so in-flight
         # business commits finish or are left for a later reclaim), then the
         # reply worker (so no new outbox rows are claimed mid-shutdown), and

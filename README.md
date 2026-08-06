@@ -119,6 +119,7 @@ CSV 导出、图片、语音所需权限见[环境与部署指南 · 飞书权�
 docker compose -f compose.yaml -f compose.dev.yaml ps
 docker compose -f compose.yaml -f compose.dev.yaml logs -f app
 curl http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8000/readyz
 ```
 
 仅使用 `compose.yaml` 时，去掉 `-f compose.dev.yaml` 即可。服务名是 `app`，宿主机端口默认 **8000**。
@@ -132,6 +133,10 @@ curl http://127.0.0.1:8000/healthz
 ```
 
 `connecting` / `reconnecting` 表示尚未就绪或正在重连。
+
+`/healthz` 只表示 HTTP 进程存活，不访问数据库。`/readyz` 还会轻量检查
+PostgreSQL、当前 Alembic revision、已启用的 Event / Reply Worker，以及 WebSocket
+模式下的接收器；不具备承接条件时返回 HTTP 503，且不会探测飞书或 AI。
 
 ### 6. 第一笔账验收
 

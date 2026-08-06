@@ -4,6 +4,12 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (v0.2.1 — readiness and worker health; P06c)
+
+- `GET /readyz` returns HTTP 200 only when PostgreSQL accepts `SELECT 1`, the database revision matches the single Alembic code head, the application is not shutting down, enabled Event / Reply Workers are running, and the WebSocket receiver is active when WebSocket mode is selected. Webhook mode and explicitly disabled workers remain valid configurations.
+- `GET /healthz` keeps its compatible, database-independent liveness response. Neither probe calls Feishu, AI, external DNS, or the internet, and readiness never runs migrations or scans ledger / delivery tables.
+- Event Worker, Reply Worker, and WebSocket consumer tasks now expose redacted lifecycle snapshots. Completion callbacks retrieve unexpected task exceptions (preventing unobserved-task warnings), log only safe error types, and make readiness fail without exposing stack traces, credentials, payloads, user IDs, message IDs, reply contents, or worker nonces.
+
 ### Added (v0.2.1 — reply delivery worker; P06b)
 
 - **Reply delivery worker** (`ReplyWorker`): a background asyncio task started and stopped by the FastAPI lifespan. It claims committed `reply_outbox` rows in one transaction with `SELECT ... FOR UPDATE SKIP LOCKED`, writes `sending` / `lease_owner` / `lease_expires_at`, increments `attempt_count` (each entry into `sending` counts one attempt), commits, then uploads / sends via `ReplyDeliverer` and records lease-guarded outcomes. The database is the only queue; no Redis / Celery / RQ / Kafka / RabbitMQ. A lost wakeup only delays delivery by one poll interval.
@@ -61,7 +67,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 ### Known limitations (v0.2.1 is not finished)
 
 - **Transactional Outbox (P06a) + Reply Worker (P06b) are provided:** business changes and reply intents commit atomically, a crashed event converges to `succeeded` without re-running business, and committed replies are delivered by the background reply worker with a lease, exponential-backoff retry, and reply `dead` handling.
-- **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal), `dead`-event human replay, a web admin UI / outbox visualization, a complete readiness API, and terminal-state auto-cleanup.
+- **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal), `dead`-event human replay, a web admin UI / outbox visualization, and terminal-state auto-cleanup. Readiness is now available at `/readyz`.
 - **Pre-business error / notice replies** (e.g. "图片识别功能尚未配置", stage error prompts) are still sent directly and are **not** persisted to the outbox.
 - **Extreme duplicate-reply window (disclosed):** if Feishu sends successfully but the local `sent` mark is lost and the re-send is more than 1 hour later (past the Feishu `uuid` dedup window), a duplicate reply may reach the user — it can never cause duplicate business execution or double bookkeeping.
 - The release must not claim "never double-bookkeeps"; the `(source_message_id, source_item_index)` unique constraint remains the fallback guard.

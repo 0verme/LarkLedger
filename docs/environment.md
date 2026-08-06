@@ -342,9 +342,17 @@ docker compose -f compose.yaml -f compose.dev.yaml ps
 
 docker compose logs -f app
 curl http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8000/readyz
 ```
 
-健康检查**不会**回显凭据。排查时不要在工单中粘贴 App Secret、AI Key、数据库密码、完整消息正文。
+`/healthz` 是 liveness，只确认 HTTP 进程能够响应，不访问数据库、飞书或 AI；即使
+PostgreSQL 不可用也仍返回 200。`/readyz` 是 readiness，会执行 `SELECT 1`、核对数据库
+revision 与代码唯一 Alembic head，并读取已启用 Event / Reply Worker 和 WebSocket receiver
+的任务状态。Webhook 模式不要求 receiver，显式关闭的 Worker 是合法兼容模式。未就绪返回
+HTTP 503；探针不会自动迁移数据库，也不会访问飞书、AI、DNS 或其他外部网络。
+
+健康检查**不会**回显凭据、完整异常、事件或回复内容。排查时不要在工单中粘贴 App
+Secret、AI Key、数据库密码、完整消息正文。
 
 ### 常见问题区分
 
@@ -353,7 +361,7 @@ curl http://127.0.0.1:8000/healthz
 | 容器未启动 / 反复退出 | `docker compose ps`、`logs`；构建错误或启动命令失败 |
 | PostgreSQL 无法连接 | URL 主机是否容器可达、账号密码、库是否存在、dev 库是否 healthy |
 | Alembic 迁移失败 | 权限、网络、是否连错库、日志中的 migration 错误（升级前应有备份） |
-| WebSocket 未建立 | `EVENT_MODE=websocket`、App ID/Secret、出站网络、healthz 的 `long_connection` |
+| WebSocket 未建立 | `EVENT_MODE=websocket`、App ID/Secret、出站网络、healthz 的 `long_connection`、readyz 的 `receiver` |
 | 飞书权限不足 | 是否发布版本、机器人是否在会话中、是否订阅消息事件 |
 | AI API 鉴权失败 | Key、Base URL、模型名是否匹配供应商 |
 | AI 返回格式错误 | 模型是否支持 JSON / 结构化输出；超时是否过短 |
@@ -419,7 +427,7 @@ v0.3.0：高风险确认
 - [ ] `.env` 不在 Git 跟踪列表，权限仅服务账号可读
 - [ ] `LARK_LEDGER_EVENT_MODE=websocket`（或你明确选择的 webhook）
 - [ ] 飞书文字-only 权限与 `im.message.receive_v1` 已配置并发布版本
-- [ ] `GET /healthz` 为 `status: ok`，长连接为 `connected`（WebSocket）
+- [ ] `GET /healthz` 为 `status: ok`；`GET /readyz` 返回 200，长连接为 `connected`（WebSocket）
 - [ ] `午饭32元` 可记账且回复含 `#XXXXX`；`最近10笔` 可核对
 - [ ] （可选）CSV 导出在真实飞书确认文件权限后可用
 - [ ] （可选）图片 / 语音 Key 与资源权限仅在需要时配置并验证

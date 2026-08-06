@@ -364,30 +364,63 @@ class EventWorker:
         self._jitter = jitter
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self._started = False
+        self._task_done = False
+        self._task_exception_code: str | None = None
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
+    def health_snapshot(self) -> dict[str, bool | str | None]:
+        """Return a redacted, read-only task state for readiness."""
+        return {
+            "started": self._started,
+            "running": self.running,
+            "stopping": self._stop.is_set(),
+            "task_done": self._task_done,
+            "task_exception": self._task_exception_code is not None,
+            "last_error_code": self._task_exception_code,
+        }
+
     def start(self) -> None:
         if self._task is not None and not self._task.done():
             raise RuntimeError("event worker already started")
         self._stop.clear()
+        self._started = True
+        self._task_done = False
+        self._task_exception_code = None
         self._task = asyncio.create_task(self._run_loop(), name="lark-ledger-event-worker")
+        self._task.add_done_callback(self._consume_task_result)
+
+    def _consume_task_result(self, task: asyncio.Task[None]) -> None:
+        self._task_done = True
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            self._task_exception_code = type(exc).__name__
+            logger.error(
+                "event worker task exited unexpectedly error_code=%s owner=%s",
+                self._task_exception_code,
+                safe_owner_id(self._owner_id),
+            )
 
     async def stop(self) -> None:
         self._stop.set()
         task = self._task
-        self._task = None
-        if task is None or task.done():
+        if task is None:
             return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("event worker task raised during shutdown")
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("event worker task raised during shutdown")
+        self._task = None
 
     async def _run_loop(self) -> None:
         logger.info(

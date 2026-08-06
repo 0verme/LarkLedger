@@ -66,6 +66,9 @@ class LongConnectionReceiver:
         self._sdk_loop: asyncio.AbstractEventLoop | None = None
         self._status = "stopped"
         self._startup_error: str | None = None
+        self._started_once = False
+        self._consumer_task_done = False
+        self._consumer_task_exception_code: str | None = None
 
     @property
     def status(self) -> str:
@@ -75,10 +78,34 @@ class LongConnectionReceiver:
     def startup_error(self) -> str | None:
         return self._startup_error
 
+    def health_snapshot(self) -> dict[str, bool | str | None]:
+        """Return receiver state without exposing SDK errors or credentials."""
+        task = self._consumer_task
+        running = bool(
+            task is not None
+            and not task.done()
+            and self._status not in {"stopped", "stopping", "error"}
+            and not self._stop_requested.is_set()
+        )
+        return {
+            "started": self._started_once,
+            "running": running,
+            "stopping": self._status == "stopping" or self._stop_requested.is_set(),
+            "task_done": self._consumer_task_done,
+            "task_exception": self._consumer_task_exception_code is not None
+            or self._status == "error",
+            "connection_status": self._status,
+            "last_error_code": self._consumer_task_exception_code,
+        }
+
     async def start(self) -> None:
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
         self._consumer_task = asyncio.create_task(self._consume(), name="feishu-event-consumer")
+        self._started_once = True
+        self._consumer_task_done = False
+        self._consumer_task_exception_code = None
+        self._consumer_task.add_done_callback(self._consume_task_result)
         self._stop_requested.clear()
         self._started.clear()
         self._startup_error = None
@@ -93,6 +120,20 @@ class LongConnectionReceiver:
         if self._startup_error is not None:
             await self.stop()
             raise RuntimeError(f"failed to start Feishu long connection: {self._startup_error}")
+
+    def _consume_task_result(self, task: asyncio.Task[None]) -> None:
+        self._consumer_task_done = True
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except Exception as exc:
+            self._consumer_task_exception_code = type(exc).__name__
+            self._status = "error"
+            logger.error(
+                "Feishu event consumer exited unexpectedly error_code=%s",
+                self._consumer_task_exception_code,
+            )
 
     async def stop(self) -> None:
         self._status = "stopping"

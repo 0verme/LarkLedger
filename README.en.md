@@ -90,6 +90,7 @@ Send in Feishu (replace `#XXXXX` with the short ID the bot actually returns):
 docker compose -f compose.yaml -f compose.dev.yaml ps
 docker compose -f compose.yaml -f compose.dev.yaml logs -f app
 curl http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8000/readyz
 ```
 
 Service name: `app`. Host port: **8000**. Source Compose runs `alembic upgrade head` before Uvicorn.
@@ -99,6 +100,11 @@ Expected WebSocket health shape:
 ```json
 {"status":"ok","event_mode":"websocket","long_connection":"connected"}
 ```
+
+`/healthz` is a database-independent liveness probe. `/readyz` additionally
+checks PostgreSQL, the current Alembic revision, enabled Event / Reply Workers,
+and the receiver in WebSocket mode. It returns HTTP 503 when the instance cannot
+accept work and never probes Feishu or AI.
 
 ### Existing PostgreSQL
 
