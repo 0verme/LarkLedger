@@ -338,7 +338,7 @@ async def test_reply_delivery_migration_roundtrip_0009(
         monkeypatch.setenv("LARK_LEDGER_DATABASE_URL", scratch_dsn)
         get_settings.cache_clear()
         await asyncio.to_thread(_run_migrations, "20260806_0008")
-        await asyncio.to_thread(_run_migrations, "head")
+        await asyncio.to_thread(_run_migrations, "20260806_0009")
 
         async with scratch_engine.connect() as conn:
             revision = await conn.scalar(text("SELECT version_num FROM alembic_version"))

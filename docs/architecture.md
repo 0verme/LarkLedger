@@ -128,7 +128,14 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 - `GET /readyz` 对 PostgreSQL 执行轻量 `SELECT 1`，从 Alembic 配置解析代码唯一 head 并与数据库 `alembic_version` 比对，再读取应用 shutdown、Event Worker、Reply Worker 和 WebSocket receiver 的只读任务快照。Webhook 模式不要求 receiver；显式关闭 Worker 是合法兼容模式。
 - Worker / receiver task 的完成回调会主动取回异常，只保留异常类型作为安全错误码，避免 `Task exception was never retrieved`。异常退出、未启动、迁移不一致或 shutdown 都返回 HTTP 503；探针不执行 migration、不扫描业务表、不返回数据库 URL、凭据、用户标识、payload、回复内容或完整 nonce。
 
-**尚未实现（后续版本）：** 事件人工重放、dead 事件重新执行业务、Web 管理后台 / Outbox 可视化、终态自动清理、对用户可见的回放命令。
+### 终态保留与 Cleanup Worker（v0.2.1 / P06d）
+
+- 只清理 `processed_events` 的 `succeeded` / `legacy_succeeded` / `dead` 和 `reply_outbox` 的 `sent` / `dead`。`received` / `processing` / `failed` Event、`pending` / `sending` / `failed` Outbox、有效 lease，以及全部账本 / revision 永不进入清理选择集。
+- 默认成功记录保留 30 天，dead 保留 90 天；成功 Event 使用 `processed_at`，dead Event 使用 `updated_at`，sent Outbox 使用 `sent_at`，dead Outbox 使用 `updated_at`。所有截止时间使用时区感知 UTC；保留期最小 1 天，关闭需显式 `CLEANUP_ENABLED=false`。
+- 每类清理在独立短事务中按时间索引选取至多 `batch_size` 个主键并使用 `FOR UPDATE SKIP LOCKED`，再按主键删除。顺序固定为 Outbox 后 Event；Event 只有在关联 Outbox 已全部按自身期限清除后才可删除，不依赖 CASCADE 提前丢失审计记录。多实例可并发运行且重复执行幂等。
+- Cleanup Worker 随 lifespan 启停，单轮失败只记录清理类型、截止时间、耗时和安全错误码，下轮继续。它不属于核心承接硬门禁：异常退出时 `/readyz` 的 `cleanup_worker` 为 `warning`，整体仍可 ready；`/healthz` 不受影响。
+
+**尚未实现（后续版本）：** 事件人工重放、dead 事件重新执行业务、Web 管理后台 / Outbox 可视化、对用户可见的回放命令。
 
 ### 载荷内容与隐私
 

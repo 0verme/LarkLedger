@@ -10,6 +10,12 @@ from lark_ledger.config import EventMode, get_settings
 from lark_ledger.db import SessionFactory, engine
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.services.ai import AIInterpreter
+from lark_ledger.services.cleanup import (
+    CleanupService,
+    CleanupStore,
+    CleanupWorker,
+    RetentionPolicy,
+)
 from lark_ledger.services.events import EventService
 from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.feishu import FeishuClient, MessageProcessor
@@ -49,6 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.event_service = event_service
     worker: EventWorker | None = None
     reply_worker: ReplyWorker | None = None
+    cleanup_worker: CleanupWorker | None = None
     receiver: LongConnectionReceiver | None = None
     try:
         if settings.worker_enabled:
@@ -85,6 +92,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             app.state.reply_worker = reply_worker
             reply_worker.start()
+        if settings.cleanup_enabled:
+            cleanup_worker = CleanupWorker(
+                CleanupService(
+                    CleanupStore(SessionFactory),
+                    RetentionPolicy(
+                        event_succeeded_days=settings.event_succeeded_retention_days,
+                        event_dead_days=settings.event_dead_retention_days,
+                        outbox_sent_days=settings.outbox_sent_retention_days,
+                        outbox_dead_days=settings.outbox_dead_retention_days,
+                    ),
+                    batch_size=settings.cleanup_batch_size,
+                ),
+                interval_seconds=settings.cleanup_interval_seconds,
+            )
+            app.state.cleanup_worker = cleanup_worker
+            cleanup_worker.start()
         if settings.event_mode is EventMode.WEBSOCKET:
             receiver = LongConnectionReceiver(settings, app.state.event_service)
             app.state.long_connection = receiver
@@ -103,6 +126,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await worker.stop()
         if reply_worker is not None:
             await reply_worker.stop()
+        if cleanup_worker is not None:
+            await cleanup_worker.stop()
         await engine.dispose()
 
 

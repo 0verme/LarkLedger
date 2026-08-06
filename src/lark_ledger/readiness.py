@@ -72,6 +72,7 @@ class ReadinessService:
             attribute="reply_worker",
             enabled=self._settings.reply_worker_enabled,
         )
+        cleanup_worker = self._cleanup_worker_check(state)
         receiver = self._receiver_check(state)
         checks = {
             "application": application,
@@ -79,9 +80,13 @@ class ReadinessService:
             "migration": migration,
             "event_worker": event_worker,
             "reply_worker": reply_worker,
+            "cleanup_worker": cleanup_worker,
             "receiver": receiver,
         }
-        ready = all(check["status"] in {"ok", "disabled"} for check in checks.values())
+        ready = all(
+            check["status"] in {"ok", "disabled", "warning"}
+            for check in checks.values()
+        )
         return {"status": "ready" if ready else "not_ready", "checks": checks}
 
     async def _check_database_and_migration(self) -> tuple[Check, Check]:
@@ -235,6 +240,17 @@ class ReadinessService:
         result.update(snapshot)
         if not healthy:
             result["reason"] = "receiver_unhealthy"
+        return result
+
+    def _cleanup_worker_check(self, state: State) -> Check:
+        result = self._worker_check(
+            state,
+            attribute="cleanup_worker",
+            enabled=self._settings.cleanup_enabled,
+        )
+        if result["status"] == "error":
+            result["status"] = "warning"
+            result["reason"] = "cleanup_degraded"
         return result
 
 

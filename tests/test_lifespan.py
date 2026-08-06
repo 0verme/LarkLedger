@@ -186,3 +186,57 @@ async def test_lifespan_does_not_start_reply_worker_when_disabled(
     app = FastAPI()
     async with main.lifespan(app):
         assert not hasattr(app.state, "reply_worker")
+
+
+async def test_lifespan_starts_and_stops_cleanup_worker_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        event_mode="webhook",
+        worker_enabled=False,
+        reply_worker_enabled=False,
+        cleanup_enabled=True,
+    )
+    lifecycle: list[str] = []
+
+    class FakeCleanupWorker:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            lifecycle.append("constructed")
+
+        def start(self) -> None:
+            lifecycle.append("started")
+
+        async def stop(self) -> None:
+            lifecycle.append("stopped")
+
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    monkeypatch.setattr(main, "CleanupWorker", FakeCleanupWorker)
+
+    app = FastAPI()
+    async with main.lifespan(app):
+        assert lifecycle == ["constructed", "started"]
+        assert isinstance(app.state.cleanup_worker, FakeCleanupWorker)
+    assert lifecycle == ["constructed", "started", "stopped"]
+
+
+async def test_lifespan_does_not_start_cleanup_worker_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        _env_file=None,
+        event_mode="webhook",
+        worker_enabled=False,
+        reply_worker_enabled=False,
+        cleanup_enabled=False,
+    )
+
+    def unexpected_worker(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("cleanup worker must not start when disabled")
+
+    monkeypatch.setattr(main, "get_settings", lambda: settings)
+    monkeypatch.setattr(main, "CleanupWorker", unexpected_worker)
+
+    app = FastAPI()
+    async with main.lifespan(app):
+        assert not hasattr(app.state, "cleanup_worker")

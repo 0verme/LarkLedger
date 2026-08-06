@@ -47,6 +47,17 @@ class Settings(BaseSettings):
     reply_retry_base_seconds: float = Field(default=2.0, gt=0, le=86400)
     reply_retry_max_seconds: float = Field(default=3600.0, gt=0, le=86400)
 
+    # Terminal delivery retention (P06d). Cleanup is deliberately explicit:
+    # disabling uses the boolean switch, while every enabled retention window
+    # is at least one day so a zero value can never erase all terminal data.
+    cleanup_enabled: bool = True
+    cleanup_interval_seconds: float = Field(default=3600.0, ge=60, le=604800)
+    cleanup_batch_size: int = Field(default=500, ge=1, le=10000)
+    event_succeeded_retention_days: int = Field(default=30, ge=1, le=3650)
+    event_dead_retention_days: int = Field(default=90, ge=1, le=3650)
+    outbox_sent_retention_days: int = Field(default=30, ge=1, le=3650)
+    outbox_dead_retention_days: int = Field(default=90, ge=1, le=3650)
+
     lark_app_id: str = ""
     lark_app_secret: str = ""
     lark_verification_token: str = ""

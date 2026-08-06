@@ -48,7 +48,7 @@ class HealthyReceiver(HealthyTask):
 
 
 async def sqlite_factory(
-    revision: str | None = "20260806_0009",
+    revision: str | None = "20260806_0010",
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as connection:
@@ -65,7 +65,7 @@ def build_app(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    expected_revision: str = "20260806_0009",
+    expected_revision: str = "20260806_0010",
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -80,6 +80,8 @@ def build_app(
         app.state.event_worker = HealthyTask()
     if settings.reply_worker_enabled:
         app.state.reply_worker = HealthyTask()
+    if settings.cleanup_enabled:
+        app.state.cleanup_worker = HealthyTask()
     if settings.event_mode.value == "websocket":
         app.state.long_connection = HealthyReceiver()
     return app
@@ -138,8 +140,8 @@ async def test_readyz_returns_200_with_independent_component_checks() -> None:
     assert body["checks"]["database"] == {"status": "ok"}
     assert body["checks"]["migration"] == {
         "status": "ok",
-        "current": "20260806_0009",
-        "expected": "20260806_0009",
+        "current": "20260806_0010",
+        "expected": "20260806_0010",
     }
     assert body["checks"]["event_worker"]["running"] is True
     assert body["checks"]["reply_worker"]["running"] is True
@@ -172,7 +174,7 @@ async def test_readyz_returns_503_for_database_failure_without_leaking_details()
     app.state.readiness = ReadinessService(
         settings,
         BrokenFactory(),  # type: ignore[arg-type]
-        expected_revision="20260806_0009",
+        expected_revision="20260806_0010",
     )
 
     response = await get(app, "/readyz")
@@ -355,4 +357,26 @@ def test_code_revision_is_resolved_from_alembic_configuration() -> None:
     revision, error = resolve_code_revision()
 
     assert error is None
-    assert revision == "20260806_0009"
+    assert revision == "20260806_0010"
+
+
+async def test_cleanup_worker_failure_is_degraded_but_not_a_readiness_failure() -> None:
+    engine, factory = await sqlite_factory("20260806_0010")
+    settings = Settings(
+        _env_file=None,
+        event_mode="webhook",
+        worker_enabled=False,
+        reply_worker_enabled=False,
+        cleanup_enabled=True,
+    )
+    app = build_app(settings, factory)
+    app.state.cleanup_worker = FailedTask()
+
+    response = await get(app, "/readyz")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ready"
+    cleanup = response.json()["checks"]["cleanup_worker"]
+    assert cleanup["status"] == "warning"
+    assert cleanup["reason"] == "cleanup_degraded"
+    await engine.dispose()

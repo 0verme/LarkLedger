@@ -168,6 +168,7 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 - 事件处理失败**会自动重试**（指数退避，默认最多 3 次）并在耗尽或永久错误时进入 `dead`；业务变更与回复意图通过 **Transactional Outbox** 在同一事务提交（P06a），崩溃重试不会重复执行业务，但仍**不**宣称"绝不重复记账"，来源唯一约束为兜底保障
 - 回复发送失败**会自动重试**（P06b）：后台 Reply Worker 用 `FOR UPDATE SKIP LOCKED` 领取已提交的 Outbox、数据库租约、指数退避重试、永久错误或重试耗尽进入回复 `dead`；发送失败**绝不**重新执行业务，进程重启后继续投递 `pending` / `failed` 回复
 - 每次回复携带稳定的飞书 `uuid` 幂等键（Outbox 行 ID）：1 小时内崩溃重发由飞书去重；极端情况（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过 1 小时）用户可能收到重复回复，但**绝不会**导致重复执行业务或重复记账
+- 轻量 Cleanup Worker 默认按小批次清理终态投递记录：成功 Event / 已发送 Outbox 默认保留 30 天，dead 默认保留 90 天；不会删除账本或 revision。清理不是数据库备份，调整保留期前应评估审计要求
 - 没有用户可见的结果回放 / 人工重发命令（`OutboxReplayService` 为内部可测试能力）；没有 `dead` 事件人工重放
 - 图片 / 语音 / 批量尚无写入前确认
 - 无 Web 管理页面、无共享账本
@@ -176,8 +177,8 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 路线（无具体发布日期承诺）：
 
 ```text
-v0.2.1：可靠投递（事件 Worker / 租约 / 重试 / dead 已完成；Transactional Outbox 已完成；
-        后台回复 Worker / 回复租约 / 回复重试 / 回复 dead 已完成；结果回放为内部能力）
+v0.2.1：可靠投递（Event / Reply Worker、Transactional Outbox、readiness、
+        终态保留清理已完成；结果回放为内部能力）
 v0.3.0：高风险确认（图片、语音、批量等）
 ```
 

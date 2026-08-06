@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.2.0` |
 | Git tag | `v0.2.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.2.0`（亦有 `0.2` / `latest` 由发布流水线写入） |
-| Alembic head | `20260806_0009`（main；v0.2.0 为 `20260806_0007`） |
+| Alembic head | `20260806_0010`（main；v0.2.0 为 `20260806_0007`） |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -148,4 +148,17 @@ Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 
 检查，不自动运行 migration，也不探测飞书或 AI。升级脚本仍需先显式执行
 `alembic upgrade head`；readiness 不能替代迁移步骤。
 
-当前 Alembic head：`20260806_0009`。
+## 迁移 `20260806_0010`（终态清理索引）
+
+- **升级：** 为 Event 的 `(status, processed_at)` / `(status, updated_at)` 和 Outbox 的
+  `(status, sent_at)` / `(status, updated_at)` 增加 4 个索引，支撑 P06d 小批量保留期扫描。
+  迁移不改写、不删除任何数据。
+- **默认行为：** `CLEANUP_ENABLED=true`，成功 Event / sent Outbox 保留 30 天，dead Event /
+  dead Outbox 保留 90 天，每小时按每类最多 500 行的短事务清理。保留期必须至少 1 天；
+  需要关闭时显式设置 `CLEANUP_ENABLED=false`。
+- **安全边界：** 只删除终态投递记录，不删除账本、revision、非终态、有效 lease 或仍有关联
+  Outbox 的 Event。清理不是备份；调整期限前评估审计需求。当前仍无人工事件重放。
+- **回退：** `alembic downgrade 20260806_0009` 只删除 4 个清理索引，不恢复已经按配置过期
+  并由应用清理的数据。若要回退代码并停止后续清理，应先设置 `CLEANUP_ENABLED=false` 并备份。
+
+当前 Alembic head：`20260806_0010`。

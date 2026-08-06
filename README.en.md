@@ -132,6 +132,7 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - Failed events **are** automatically retried (exponential backoff, default max 3 attempts) and move to `dead` when exhausted or permanently broken; business writes and reply intents commit atomically through the **Transactional Outbox** (P06a), so a crash retry never re-runs business. We still do **not** claim "never double-bookkeeps"; the source-message uniqueness constraint remains the fallback guard.
 - Failed replies **are** auto-retried by the background **Reply Worker** (P06b): committed outbox intents are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, delivered with a database lease, retried with exponential backoff, and dead-lettered after permanent errors or exhausted attempts. A failed reply never re-runs business, and pending / failed replies are re-delivered after a restart.
 - Each reply carries a stable Feishu `uuid` idempotency key (the outbox row id): within the 1-hour dedup window a re-send after a crash is deduplicated by Feishu. In the extreme case (Feishu sent, local mark lost, and the re-send is more than 1 hour later) a duplicate reply may reach the user — it can **never** cause duplicate business execution or double bookkeeping.
+- A lightweight Cleanup Worker deletes only terminal delivery records in bounded batches: successful events / sent replies default to 30 days, while dead records default to 90 days. Ledger entries and revisions are never deleted. Cleanup is not a database backup; review audit requirements before shortening retention.
 - There is **no** user-visible replay / manual-resend command; `OutboxReplayService` is an internal testable capability. There is no human replay for `dead` events.
 - Image / voice / batch paths have **no** pre-write confirmation flow yet
 - No web admin UI, no shared ledgers
@@ -140,8 +141,8 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 Roadmap themes (no promised ship dates):
 
 ```text
-v0.2.1: reliable delivery (event worker / lease / retry / dead done; transactional outbox done;
-        reply worker / reply lease / reply retry / reply dead done; result replay is internal)
+v0.2.1: reliable delivery (Event / Reply Workers, Transactional Outbox, readiness,
+        and terminal retention cleanup done; result replay is internal)
 v0.3.0: high-risk confirmation (image / voice / batch, etc.)
 ```
 

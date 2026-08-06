@@ -128,6 +128,8 @@ class ProcessedEvent(Base):
         Index("ix_events_lease_expires", "lease_expires_at"),
         Index("ix_events_source_message", "source_message_id"),
         Index("ix_events_user_open_id", "user_open_id"),
+        Index("ix_events_cleanup_processed", "status", "processed_at"),
+        Index("ix_events_cleanup_updated", "status", "updated_at"),
     )
 
     event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -184,6 +186,8 @@ class ReplyOutbox(Base):
         Index("ix_outbox_status_next_attempt", "status", "next_attempt_at"),
         Index("ix_outbox_lease_expires", "lease_expires_at"),
         Index("ix_outbox_event_sequence", "event_id", "sequence"),
+        Index("ix_outbox_cleanup_sent", "status", "sent_at"),
+        Index("ix_outbox_cleanup_updated", "status", "updated_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)

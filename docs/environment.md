@@ -142,11 +142,19 @@ docker compose -f compose.yaml -f compose.dev.yaml down -v
 | 回复租约秒 `REPLY_LEASE_SECONDS` | `300` | `300` | 有默认（崩溃/慢 Worker 的回复在租约过期后被接管） |
 | 回复退避基数秒 `REPLY_RETRY_BASE_SECONDS` | `2.0` | `2.0` | 有默认 |
 | 回复退避上限秒 `REPLY_RETRY_MAX_SECONDS` | `3600` | `3600` | 有默认 |
+| Cleanup Worker 开关 `CLEANUP_ENABLED` | `true` | `true` | 显式设 `false` 才关闭 |
+| Cleanup 间隔秒 `CLEANUP_INTERVAL_SECONDS` | `3600` | `3600` | 最小 60 秒 |
+| Cleanup 单类批量 `CLEANUP_BATCH_SIZE` | `500` | `500` | 每个短事务上限 |
+| 成功 Event 保留天数 `EVENT_SUCCEEDED_RETENTION_DAYS` | `30` | `30` | 同时适用于 legacy_succeeded；最小 1 天 |
+| dead Event 保留天数 `EVENT_DEAD_RETENTION_DAYS` | `90` | `90` | 默认长于成功记录 |
+| sent Outbox 保留天数 `OUTBOX_SENT_RETENTION_DAYS` | `30` | `30` | 按 sent_at |
+| dead Outbox 保留天数 `OUTBOX_DEAD_RETENTION_DAYS` | `90` | `90` | 按 updated_at；默认更长 |
 | 日志级别 | **无此配置项** | — | — |
 | Webhook 监听 | 进程内 `0.0.0.0:8000`（Compose 映射 `8000:8000`） | — | WebSocket 仅用于 healthz 时可内网访问 |
 | Compose 应用服务名 | `app` | — | — |
 | 数据库迁移 | 源码 Compose：`alembic upgrade head` 再 uvicorn | — | 自动 |
 | healthz | `GET /healthz` | — | 验收 |
+| readyz | `GET /readyz` | — | 数据库、migration 与后台任务验收 |
 
 Compose 默认读取 `.env`；可用 `LARK_LEDGER_ENV_FILE` 指定其他文件。生产**不得**直接把 `.env.example` 当运行配置。
 
@@ -350,6 +358,11 @@ PostgreSQL 不可用也仍返回 200。`/readyz` 是 readiness，会执行 `SELE
 revision 与代码唯一 Alembic head，并读取已启用 Event / Reply Worker 和 WebSocket receiver
 的任务状态。Webhook 模式不要求 receiver，显式关闭的 Worker 是合法兼容模式。未就绪返回
 HTTP 503；探针不会自动迁移数据库，也不会访问飞书、AI、DNS 或其他外部网络。
+
+Cleanup Worker 默认每小时执行终态小批量清理。成功 Event / sent Outbox 默认保留 30 天，
+dead Event / dead Outbox 默认保留 90 天；非终态、有有效 lease、仍有关联 Outbox 的 Event
+不会删除，账本与 revision 永不删除。清理日志不记录 payload、回复、用户或消息标识。清理
+不等于数据库备份；缩短保留期前应先确认审计需求。当前仍没有人工事件重放命令。
 
 健康检查**不会**回显凭据、完整异常、事件或回复内容。排查时不要在工单中粘贴 App
 Secret、AI Key、数据库密码、完整消息正文。

@@ -4,6 +4,14 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (v0.2.1 — terminal retention cleanup; P06d)
+
+- A lifespan-managed Cleanup Worker deletes only terminal delivery records in bounded, short transactions: `processed_events` in `succeeded` / `legacy_succeeded` / `dead`, and `reply_outbox` in `sent` / `dead`. Non-terminal rows, active leases, ledger entries, and ledger revisions are never selected.
+- Safe defaults retain successful events and sent replies for 30 days and dead events / replies for 90 days. Retention is configurable but must be at least one day; disabling requires explicit `LARK_LEDGER_CLEANUP_ENABLED=false`, so zero can never mean "delete everything".
+- Cleanup runs outbox-before-event, uses status/time indexes plus `FOR UPDATE SKIP LOCKED`, and refuses to delete an event while any associated outbox audit remains. Multiple instances can clean concurrently; each batch is independently committed and repeatable.
+- Cleanup failure is non-critical: a failed sweep is retried later, `/healthz` is unaffected, and an exited Cleanup Worker appears as `warning` in `/readyz` without blocking the core event/reply path. Logs include only cleanup kind, cutoff, count, elapsed time, and safe error type.
+- Migration `20260806_0010` adds four status/time cleanup indexes without rewriting or deleting rows; downgrade removes only those indexes.
+
 ### Added (v0.2.1 — readiness and worker health; P06c)
 
 - `GET /readyz` returns HTTP 200 only when PostgreSQL accepts `SELECT 1`, the database revision matches the single Alembic code head, the application is not shutting down, enabled Event / Reply Workers are running, and the WebSocket receiver is active when WebSocket mode is selected. Webhook mode and explicitly disabled workers remain valid configurations.
@@ -51,7 +59,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Changed
 
-- Head migration is now `20260806_0009` (P06b adds reply delivery metadata and the sequence index; P06a added the `reply_outbox` table at `20260806_0008`).
+- Head migration is now `20260806_0010` (P06d adds terminal cleanup indexes; P06b added reply delivery metadata at `20260806_0009`).
 - `ReplyOutboxStore` gains P06b claim / lease primitives: `claim_batch` (worker, `FOR UPDATE SKIP LOCKED` + per-event ordering), `claim_by_id` (synchronous path), lease-guarded `mark_sent` / `record_failure` (both guarded by `status='sending' AND lease_owner=<owner>`), and `persist_file_key` / `persist_image_key`. `attempt_count` is incremented at claim (entering `sending`), not on failure; the old unguarded `mark_failed` is replaced by `record_failure`. The compatible single send and the Reply Worker share the same `ReplyDeliverer`.
 - `FeishuClient.reply_text` / `reply_card` / `reply_file` now accept a `uuid` idempotency key and return the remote reply `message_id`.
 - `MessageProcessor` takes `reply_worker_enabled` and an optional `wakeup`; with the worker enabled it only signals delivery after the outbox commit, otherwise it drives the synchronous claim / send loop.
@@ -67,7 +75,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 ### Known limitations (v0.2.1 is not finished)
 
 - **Transactional Outbox (P06a) + Reply Worker (P06b) are provided:** business changes and reply intents commit atomically, a crashed event converges to `succeeded` without re-running business, and committed replies are delivered by the background reply worker with a lease, exponential-backoff retry, and reply `dead` handling.
-- **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal), `dead`-event human replay, a web admin UI / outbox visualization, and terminal-state auto-cleanup. Readiness is now available at `/readyz`.
+- **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal), `dead`-event human replay, and a web admin UI / outbox visualization. Readiness and terminal retention cleanup are now available.
 - **Pre-business error / notice replies** (e.g. "图片识别功能尚未配置", stage error prompts) are still sent directly and are **not** persisted to the outbox.
 - **Extreme duplicate-reply window (disclosed):** if Feishu sends successfully but the local `sent` mark is lost and the re-send is more than 1 hour later (past the Feishu `uuid` dedup window), a duplicate reply may reach the user — it can never cause duplicate business execution or double bookkeeping.
 - The release must not claim "never double-bookkeeps"; the `(source_message_id, source_item_index)` unique constraint remains the fallback guard.
