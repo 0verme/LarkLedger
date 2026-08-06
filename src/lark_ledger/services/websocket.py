@@ -42,6 +42,37 @@ def adapt_message_event(
     return event_id, event
 
 
+def adapt_card_action_event(
+    data: Any, marshal: Callable[[Any], str] | None = None
+) -> tuple[str, dict[str, Any]]:
+    """Convert an SDK card.action.trigger event into ``(event_id, action_event)``.
+
+    ``action_event`` carries ``operator`` / ``action.value`` / ``context`` in the
+    shape the CardActionService expects.
+    """
+    if isinstance(data, dict):
+        payload = data
+    else:
+        if marshal is None:
+            lark = import_module("lark_oapi")
+            marshal = lark.JSON.marshal
+        decoded = json.loads(marshal(data))
+        if not isinstance(decoded, dict):
+            raise ValueError("Feishu SDK event is not an object")
+        payload = decoded
+
+    header = payload.get("header")
+    event = payload.get("event")
+    if not isinstance(header, dict) or not isinstance(event, dict):
+        raise ValueError("Feishu SDK card event is missing header or event")
+    if header.get("event_type") != "card.action.trigger":
+        raise ValueError("unexpected Feishu event type")
+    event_id = str(header.get("event_id") or "")
+    if not event_id:
+        raise ValueError("Feishu SDK card event is missing event_id")
+    return event_id, event
+
+
 class LongConnectionReceiver:
     """Run lark-oapi's reconnecting WebSocket client outside the ASGI event loop."""
 
@@ -50,14 +81,18 @@ class LongConnectionReceiver:
         settings: Settings,
         event_service: EventService,
         *,
+        card_action_service: Any | None = None,
         client_factory: SdkClientFactory | None = None,
     ) -> None:
         self._settings = settings
         self._event_service = event_service
+        self._card_action_service = card_action_service
         self._client_factory = client_factory or self._build_sdk_client
         self._loop: asyncio.AbstractEventLoop | None = None
         self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
+        self._card_queue: asyncio.Queue[tuple[str, dict[str, Any]]] | None = None
         self._consumer_task: asyncio.Task[None] | None = None
+        self._card_consumer_task: asyncio.Task[None] | None = None
         self._processing_tasks: set[asyncio.Task[None]] = set()
         self._thread: threading.Thread | None = None
         self._stop_requested = threading.Event()
@@ -102,6 +137,11 @@ class LongConnectionReceiver:
         self._loop = asyncio.get_running_loop()
         self._queue = asyncio.Queue()
         self._consumer_task = asyncio.create_task(self._consume(), name="feishu-event-consumer")
+        self._card_queue = asyncio.Queue()
+        if self._card_action_service is not None:
+            self._card_consumer_task = asyncio.create_task(
+                self._consume_card_actions(), name="feishu-card-action-consumer"
+            )
         self._started_once = True
         self._consumer_task_done = False
         self._consumer_task_exception_code = None
@@ -150,11 +190,17 @@ class LongConnectionReceiver:
         if task is not None:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+        card_task = self._card_consumer_task
+        if card_task is not None:
+            card_task.cancel()
+            await asyncio.gather(card_task, return_exceptions=True)
         if self._processing_tasks:
             await asyncio.gather(*self._processing_tasks, return_exceptions=True)
         self._thread = None
         self._consumer_task = None
+        self._card_consumer_task = None
         self._queue = None
+        self._card_queue = None
         self._status = "stopped"
 
     def _build_sdk_client(self, callback: Callable[[Any], None]) -> Any:
@@ -165,11 +211,11 @@ class LongConnectionReceiver:
             # explicitly configured; direct Docker connections are unchanged.
             sdk_ws_client = import_module("lark_oapi.ws.client")
             sdk_ws_client.__dict__["_ws_connect_kwargs"] = lambda: {}
-        event_handler = (
-            lark.EventDispatcherHandler.builder("", "")
-            .register_p2_im_message_receive_v1(callback)
-            .build()
-        )
+        builder = lark.EventDispatcherHandler.builder("", "")
+        builder.register_p2_im_message_receive_v1(callback)
+        if self._card_action_service is not None:
+            builder.register_p2_card_action_trigger(self._on_sdk_card_action)
+        event_handler = builder.build()
         client = lark.ws.Client(
             self._settings.lark_app_id,
             self._settings.lark_app_secret,
@@ -251,9 +297,25 @@ class LongConnectionReceiver:
         if loop is not None:
             loop.call_soon_threadsafe(self._enqueue, item)
 
+    def _on_sdk_card_action(self, data: Any) -> dict[str, Any]:
+        """SDK card action callback: enqueue for async processing, ack now."""
+        try:
+            item = adapt_card_action_event(data)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            logger.exception("failed to adapt Feishu long-connection card action")
+            return {"toast": {"type": "error", "content": "处理失败"}}
+        loop = self._loop
+        if loop is not None:
+            loop.call_soon_threadsafe(self._enqueue_card_action, item)
+        return {"toast": {"type": "success", "content": "处理中…"}}
+
     def _enqueue(self, item: tuple[str, dict[str, Any]]) -> None:
         if self._queue is not None:
             self._queue.put_nowait(item)
+
+    def _enqueue_card_action(self, item: tuple[str, dict[str, Any]]) -> None:
+        if self._card_queue is not None:
+            self._card_queue.put_nowait(item)
 
     async def _consume(self) -> None:
         assert self._queue is not None
@@ -266,6 +328,18 @@ class LongConnectionReceiver:
                     transport="websocket",
                 ),
                 name=f"feishu-event-{event_id}",
+            )
+            self._processing_tasks.add(task)
+            task.add_done_callback(self._processing_tasks.discard)
+
+    async def _consume_card_actions(self) -> None:
+        assert self._card_queue is not None
+        assert self._card_action_service is not None
+        while True:
+            event_id, action_event = await self._card_queue.get()
+            task = asyncio.create_task(
+                self._card_action_service.handle_action(event_id, action_event),
+                name=f"feishu-card-action-{event_id}",
             )
             self._processing_tasks.add(task)
             task.add_done_callback(self._processing_tasks.discard)

@@ -9,11 +9,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import monotonic
 
-from sqlalchemy import delete, exists, or_, select
+from sqlalchemy import delete, exists, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.event_payload import EventProcessStatus
-from lark_ledger.models import ProcessedEvent, ReplyOutbox
+from lark_ledger.models import (
+    PendingCommand,
+    PendingStatus,
+    ProcessedEvent,
+    ReplyOutbox,
+)
 from lark_ledger.outbox import ReplyStatus
 
 logger = logging.getLogger(__name__)
@@ -31,6 +36,9 @@ class RetentionPolicy:
     event_dead_days: int = 90
     outbox_sent_days: int = 30
     outbox_dead_days: int = 90
+    # Terminal pending confirmations (P07): executed / cancelled / expired /
+    # failed rows are deleted after this many days.
+    pending_retention_days: int = 7
 
     def __post_init__(self) -> None:
         values = (
@@ -38,6 +46,7 @@ class RetentionPolicy:
             self.event_dead_days,
             self.outbox_sent_days,
             self.outbox_dead_days,
+            self.pending_retention_days,
         )
         if any(value < 1 for value in values):
             raise ValueError("retention windows must be at least one day")
@@ -50,6 +59,8 @@ class CleanupResult:
     event_succeeded: int = 0
     event_legacy_succeeded: int = 0
     event_dead: int = 0
+    pending_expired: int = 0
+    pending_deleted: int = 0
 
     @property
     def total(self) -> int:
@@ -60,6 +71,8 @@ class CleanupResult:
                 self.event_succeeded,
                 self.event_legacy_succeeded,
                 self.event_dead,
+                self.pending_expired,
+                self.pending_deleted,
             )
         )
 
@@ -157,6 +170,82 @@ class CleanupStore:
             await session.commit()
             return len(event_ids)
 
+    async def expire_pending_batch(
+        self,
+        *,
+        cutoff: datetime,
+        now: datetime,
+        batch_size: int,
+    ) -> int:
+        """Mark pending confirmations past their expiry as expired (idempotent).
+
+        Only touches ``pending`` rows; executed / cancelled / failed rows are
+        never re-expired, and non-pending rows are never selected.
+        """
+        async with self._factory() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(PendingCommand.id)
+                        .where(
+                            PendingCommand.status == PendingStatus.PENDING.value,
+                            PendingCommand.expires_at.is_not(None),
+                            PendingCommand.expires_at <= cutoff,
+                        )
+                        .order_by(PendingCommand.expires_at, PendingCommand.id)
+                        .limit(batch_size)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+            )
+            if not ids:
+                return 0
+            await session.execute(
+                update(PendingCommand)
+                .where(PendingCommand.id.in_(ids))
+                .values(status=PendingStatus.EXPIRED.value, updated_at=now)
+            )
+            await session.commit()
+            return len(ids)
+
+    async def delete_pending_terminal_batch(
+        self,
+        *,
+        cutoff: datetime,
+        now: datetime,
+        batch_size: int,
+    ) -> int:
+        """Delete terminal pending rows (executed/cancelled/expired/failed) that
+        are past the retention cutoff. Open ``pending`` rows are never selected."""
+        terminal = (
+            PendingStatus.EXECUTED.value,
+            PendingStatus.CANCELLED.value,
+            PendingStatus.EXPIRED.value,
+            PendingStatus.FAILED.value,
+        )
+        async with self._factory() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(PendingCommand.id)
+                        .where(
+                            PendingCommand.status.in_(terminal),
+                            PendingCommand.updated_at <= cutoff,
+                        )
+                        .order_by(PendingCommand.updated_at, PendingCommand.id)
+                        .limit(batch_size)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+            )
+            if not ids:
+                return 0
+            await session.execute(
+                delete(PendingCommand).where(PendingCommand.id.in_(ids))
+            )
+            await session.commit()
+            return len(ids)
+
 
 class CleanupService:
     """Apply terminal retention in outbox-before-event order."""
@@ -183,6 +272,8 @@ class CleanupService:
             "outbox_dead": current - timedelta(days=self._policy.outbox_dead_days),
             "event_succeeded": current - timedelta(days=self._policy.event_succeeded_days),
             "event_dead": current - timedelta(days=self._policy.event_dead_days),
+            "pending_expired": current,
+            "pending_deleted": current - timedelta(days=self._policy.pending_retention_days),
         }
         counts: dict[str, int] = {}
         counts["outbox_sent"] = await self._timed_delete(
@@ -231,6 +322,24 @@ class CleanupService:
             self._store.delete_event_batch(
                 status=EventProcessStatus.DEAD,
                 cutoff=cutoffs["event_dead"],
+                now=current,
+                batch_size=self._batch_size,
+            ),
+        )
+        counts["pending_expired"] = await self._timed_delete(
+            "pending_expired",
+            cutoffs["pending_expired"],
+            self._store.expire_pending_batch(
+                cutoff=cutoffs["pending_expired"],
+                now=current,
+                batch_size=self._batch_size,
+            ),
+        )
+        counts["pending_deleted"] = await self._timed_delete(
+            "pending_deleted",
+            cutoffs["pending_deleted"],
+            self._store.delete_pending_terminal_batch(
+                cutoff=cutoffs["pending_deleted"],
                 now=current,
                 batch_size=self._batch_size,
             ),

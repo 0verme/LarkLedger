@@ -58,6 +58,17 @@ class Settings(BaseSettings):
     outbox_sent_retention_days: int = Field(default=30, ge=1, le=3650)
     outbox_dead_retention_days: int = Field(default=90, ge=1, le=3650)
 
+    # High-risk command confirmation (P07). risky_only policy: simple single
+    # text entries write through; image / voice / batch / likely-duplicate
+    # writes first create a pending_commands row and wait for the user's
+    # 确认 #C-XXXXX. pending_enabled=false restores direct-write behavior as an
+    # escape hatch. Expiry and retention feed the P06d Cleanup Worker.
+    pending_enabled: bool = True
+    pending_expires_seconds: int = Field(default=86400, ge=60, le=604800)
+    pending_retention_days: int = Field(default=7, ge=1, le=365)
+    pending_duplicate_window_minutes: int = Field(default=60, ge=1, le=1440)
+    pending_max_list: int = Field(default=10, ge=1, le=50)
+
     lark_app_id: str = ""
     lark_app_secret: str = ""
     lark_verification_token: str = ""

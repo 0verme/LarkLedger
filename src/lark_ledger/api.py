@@ -81,13 +81,25 @@ async def feishu_webhook(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
     if payload.get("type") == "url_verification":
         return {"challenge": payload.get("challenge", "")}
-    if header.get("event_type") != "im.message.receive_v1":
-        return {"code": 0}
 
     event_id = str(header.get("event_id", ""))
+    event = payload.get("event")
+    event_type = header.get("event_type")
+    if event_type == "card.action.trigger":
+        if not event_id:
+            raise HTTPException(status_code=400, detail="missing event_id")
+        if not isinstance(event, dict):
+            raise HTTPException(status_code=400, detail="missing event")
+        card_service = getattr(request.app.state, "card_action_service", None)
+        if card_service is None:
+            return {"code": 0}
+        background_tasks.add_task(card_service.handle_action, event_id, event)
+        return {"code": 0}
+    if event_type != "im.message.receive_v1":
+        return {"code": 0}
+
     if not event_id:
         raise HTTPException(status_code=400, detail="missing event_id")
-    event = payload.get("event")
     if not isinstance(event, dict):
         raise HTTPException(status_code=400, detail="missing event")
     background_tasks.add_task(

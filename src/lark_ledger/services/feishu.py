@@ -20,8 +20,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
 from lark_ledger.entry_commands import (
+    PendingDirective,
     bind_entry_refs_from_message,
     try_parse_deterministic_entry_command,
+    try_parse_pending_directive,
 )
 from lark_ledger.models import ProcessedEvent, ReplyOutbox
 from lark_ledger.outbox import (
@@ -44,8 +46,14 @@ from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.outbox import ReplyOutboxStore
+from lark_ledger.services.pending import (
+    PendingCommandStore,
+    PendingPreview,
+    build_pending_preview_card,
+)
 from lark_ledger.services.reply_worker import ReplyDeliverer
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
+from lark_ledger.services.risk import MediaKind, RiskAssessment, RiskDecision, RiskRouter
 from lark_ledger.services.worker import generate_owner_id
 
 logger = logging.getLogger(__name__)
@@ -297,6 +305,8 @@ class MessageProcessor:
         self.renderer = renderer or ReportRenderer(settings.report_font_path)
         self.exchange_rates = exchange_rates or ExchangeRateService(settings)
         self.outbox_store = outbox_store or ReplyOutboxStore(session_factory)
+        self._risk_router = RiskRouter(session_factory, settings)
+        self._pending_store = PendingCommandStore(session_factory, settings)
         self._reply_worker_enabled = reply_worker_enabled
         self._wakeup = wakeup
         self._sync_owner = generate_owner_id()
@@ -405,6 +415,23 @@ class MessageProcessor:
                 return
             stage = "vision_interpretation" if images else "interpretation"
             if not images:
+                # Confirmation directives (P07) are deterministic and must never
+                # reach the AI interpreter: 确认/取消/查看待确认 #C-A83F2.
+                directive = try_parse_pending_directive(text)
+                if isinstance(directive, str):
+                    await self.feishu.reply_text(message_id, directive)
+                    return
+                if directive is not None:
+                    stage = "pending_action"
+                    outbox_rows = await self._handle_pending_directive(
+                        directive,
+                        message_id=message_id,
+                        user_open_id=user_open_id,
+                        event_id=event_id,
+                    )
+                    stage = "reply"
+                    await self._signal_or_deliver(outbox_rows)
+                    return
                 deterministic = try_parse_deterministic_entry_command(text)
                 if isinstance(deterministic, str):
                     await self.feishu.reply_text(message_id, deterministic)
@@ -418,6 +445,49 @@ class MessageProcessor:
                     await self.feishu.reply_text(message_id, bound)
                     return
                 command = bound
+
+            # Risk routing (P07): high-risk writes (image / voice / batch /
+            # likely duplicate) create a pending confirmation instead of hitting
+            # the ledger; simple single text writes continue straight through.
+            write_source_message_id = (
+                message_id
+                if command.action in {Action.CREATE, Action.CREATE_ENTRIES, Action.BATCH}
+                else None
+            )
+            if self.settings.pending_enabled:
+                media = (
+                    MediaKind.VISION
+                    if images
+                    else MediaKind.TRANSCRIPTION
+                    if source_type == "audio"
+                    else MediaKind.NONE
+                )
+                risk = await self._risk_router.route(
+                    command=command,
+                    source_type=source_type,
+                    user_open_id=user_open_id,
+                    media=media,
+                )
+                if risk.decision is RiskDecision.PENDING:
+                    stage = "pending_create"
+                    outbox_rows = await self._create_pending_with_preview_outbox(
+                        event_id=event_id,
+                        message_id=message_id,
+                        user_open_id=user_open_id,
+                        command=command,
+                        source_type=source_type,
+                        source_message_id=write_source_message_id,
+                        risk=risk,
+                    )
+                    stage = "reply"
+                    await self._signal_or_deliver(outbox_rows)
+                    return
+                if risk.decision is RiskDecision.REJECT:
+                    await self.feishu.reply_text(
+                        message_id, risk.message or "该请求被拒绝，未写入账本。"
+                    )
+                    return
+
             stage = "persistence"
             outbox_rows = await self._execute_with_outbox(
                 event_id=event_id,
@@ -425,22 +495,12 @@ class MessageProcessor:
                 user_open_id=user_open_id,
                 command=command,
                 source_type=source_type,
-                source_message_id=(
-                    message_id
-                    if command.action in {Action.CREATE, Action.CREATE_ENTRIES, Action.BATCH}
-                    else None
-                ),
+                source_message_id=write_source_message_id,
             )
             # From here the business + outbox are already committed; a post-commit
             # bookkeeping failure must not send a misleading "save failed" reply.
             stage = "reply"
-            if self._reply_worker_enabled:
-                # The background Reply Worker owns delivery: signal it and let
-                # the DB lease coordinate. A lost wakeup only delays one poll.
-                if self._wakeup is not None:
-                    self._wakeup()
-            else:
-                await self._sync_deliver_rows(outbox_rows)
+            await self._signal_or_deliver(outbox_rows)
         except CommandInterpretationError:
             error_id = self._log_processing_error(stage, message_id, message_type)
             if is_visual_message:
@@ -556,6 +616,7 @@ class MessageProcessor:
             "vision_interpretation": "图片识别服务调用失败，请稍后重试。",
             "interpretation": "指令识别服务调用失败，请稍后重试。",
             "persistence": "账目保存失败，本次未确认入账，请联系管理员检查数据库日志。",
+            "pending_create": "创建待确认单失败，请稍后重试。",
             "report_reply": "报告生成或发送失败，请稍后重试。",
             "export_reply": "账单已生成，但发送文件失败，请稍后重试。",
         }
@@ -608,6 +669,116 @@ class MessageProcessor:
                     # possibly-cleaned outbox row to avoid duplicate business.
                     parent.business_committed_at = datetime.now(UTC)
             await session.commit()
+        return rows
+
+    async def _create_pending_with_preview_outbox(
+        self,
+        *,
+        event_id: str | None,
+        message_id: str,
+        user_open_id: str,
+        command: ParsedCommand,
+        source_type: str,
+        source_message_id: str | None,
+        risk: RiskAssessment,
+    ) -> list[ReplyOutbox]:
+        """Create a pending confirmation + its preview card in ONE transaction.
+
+        The original event is not left ``processing``: the pending row plus the
+        preview outbox are committed together with ``business_committed_at``, so
+        a crash between this commit and the event status update converges on
+        re-claim (the outbox pre-check skips business) without a second pending.
+        """
+        async with self.session_factory() as session:
+            pending = await self._pending_store.create_pending(
+                session=session,
+                event_id=event_id,
+                message_id=message_id,
+                user_open_id=user_open_id,
+                command=command,
+                source_type=source_type,
+                risk=risk,
+                now=datetime.now(UTC),
+            )
+            row = self._make_outbox_row(
+                event_id=event_id,
+                message_id=message_id,
+                reply_type=ReplyType.CARD,
+                sequence=0,
+                payload=build_card_payload(
+                    card=build_pending_preview_card(
+                        PendingPreview.from_json(pending.preview_json)
+                    )
+                ),
+                blob=None,
+            )
+            session.add(row)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    parent.business_committed_at = datetime.now(UTC)
+            await session.commit()
+        logger.info(
+            "pending confirmation created confirmation_code=%s event_id=%s "
+            "risk_reason=%s",
+            pending.confirmation_code,
+            event_id,
+            pending.risk_reason,
+        )
+        return [row]
+
+    async def _signal_or_deliver(self, outbox_rows: list[ReplyOutbox]) -> None:
+        """Deliver committed outbox rows: wake the Reply Worker or send inline."""
+        if not outbox_rows:
+            return
+        if self._reply_worker_enabled:
+            # The background Reply Worker owns delivery: signal it and let the
+            # DB lease coordinate. A lost wakeup only delays one poll.
+            if self._wakeup is not None:
+                self._wakeup()
+        else:
+            await self._sync_deliver_rows(outbox_rows)
+
+    async def _handle_pending_directive(
+        self,
+        directive: PendingDirective,
+        *,
+        message_id: str,
+        user_open_id: str,
+        event_id: str | None,
+    ) -> list[ReplyOutbox]:
+        """Dispatch a 确认 / 取消 / 查看待确认 directive to the pending store.
+
+        The directive is a new event; the pending store commits its result reply
+        (bound to this event) so a re-delivery converges without re-execution.
+        """
+        now = datetime.now(UTC)
+        if directive.action == "confirm":
+            assert directive.confirmation_code is not None
+            _, rows = await self._pending_store.confirm_and_execute(
+                user_open_id=user_open_id,
+                confirmation_code=directive.confirmation_code,
+                reply_to_message_id=message_id,
+                confirm_event_id=event_id,
+                exchange_rates=self.exchange_rates,
+                now=now,
+            )
+            return rows
+        if directive.action == "cancel":
+            assert directive.confirmation_code is not None
+            _, rows = await self._pending_store.cancel(
+                user_open_id=user_open_id,
+                confirmation_code=directive.confirmation_code,
+                reply_to_message_id=message_id,
+                cancel_event_id=event_id,
+                now=now,
+            )
+            return rows
+        _, rows = await self._pending_store.list_pending(
+            user_open_id=user_open_id,
+            reply_to_message_id=message_id,
+            event_id=event_id,
+        )
         return rows
 
     async def _business_result_committed(self, event_id: str) -> bool:

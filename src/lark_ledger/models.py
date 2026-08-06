@@ -288,3 +288,69 @@ class LedgerEntryRevision(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class PendingStatus(StrEnum):
+    """Lifecycle of a high-risk command awaiting user confirmation (P07)."""
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    EXECUTING = "executing"
+    EXECUTED = "executed"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+    FAILED = "failed"
+
+
+class PendingCommand(Base):
+    """A frozen, high-risk command awaiting user confirmation (P07).
+
+    Created when the risk router decides an image / voice / batch / likely-
+    duplicate write must not hit the ledger until the user confirms. The
+    ``payload_json`` holds the **frozen** ``ParsedCommand`` (``model_dump``), so
+    confirming never re-calls AI or re-recognizes the media; ``preview_json``
+    holds the frozen user preview (aggregates only, never OCR text or full
+    transcripts). ``confirmation_code`` is the user-facing ``#C-A83F2`` form
+    minus the ``#``/``-`` (stored as ``CA83F2``), user-unique and never reused.
+
+    ``source_event_id`` intentionally has no foreign key: terminal event
+    cleanup must not cascade-delete a pending confirmation that a user may still
+    act on. The unique constraint backs "one logical pending per source event"
+    (Postgres treats NULLs as distinct, so out-of-band rows without an event are
+    unaffected).
+    """
+
+    __tablename__ = "pending_commands"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_open_id", "confirmation_code", name="uq_pending_user_code"
+        ),
+        UniqueConstraint("source_event_id", name="uq_pending_source_event"),
+        Index("ix_pending_status_expires", "status", "expires_at"),
+        Index("ix_pending_user_status", "user_open_id", "status"),
+        Index("ix_pending_source_event", "source_event_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    confirmation_code: Mapped[str] = mapped_column(String(6), nullable=False)
+    user_open_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    source_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    transport: Mapped[str] = mapped_column(String(16), nullable=False, default="feishu")
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False, default="text")
+    command_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    preview_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    risk_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )

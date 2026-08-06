@@ -10,6 +10,7 @@ from lark_ledger.config import EventMode, get_settings
 from lark_ledger.db import SessionFactory, engine
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.services.ai import AIInterpreter
+from lark_ledger.services.card_action import CardActionService
 from lark_ledger.services.cleanup import (
     CleanupService,
     CleanupStore,
@@ -53,6 +54,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.processor = processor
     app.state.event_service = event_service
+    card_action_service = CardActionService(
+        settings,
+        processor._pending_store,
+        processor.exchange_rates,
+        processor._signal_or_deliver,
+    )
+    app.state.card_action_service = card_action_service
     worker: EventWorker | None = None
     reply_worker: ReplyWorker | None = None
     cleanup_worker: CleanupWorker | None = None
@@ -101,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         event_dead_days=settings.event_dead_retention_days,
                         outbox_sent_days=settings.outbox_sent_retention_days,
                         outbox_dead_days=settings.outbox_dead_retention_days,
+                        pending_retention_days=settings.pending_retention_days,
                     ),
                     batch_size=settings.cleanup_batch_size,
                 ),
@@ -109,7 +118,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.cleanup_worker = cleanup_worker
             cleanup_worker.start()
         if settings.event_mode is EventMode.WEBSOCKET:
-            receiver = LongConnectionReceiver(settings, app.state.event_service)
+            receiver = LongConnectionReceiver(
+                settings,
+                app.state.event_service,
+                card_action_service=card_action_service,
+            )
             app.state.long_connection = receiver
             await receiver.start()
         yield

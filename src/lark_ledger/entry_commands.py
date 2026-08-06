@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import re
-from typing import Final
+from dataclasses import dataclass
+from typing import Final, Literal
 
+from lark_ledger.confirmation_id import (
+    CONFIRMATION_PREFIX,
+    normalize_confirmation_code,
+)
 from lark_ledger.schemas import (
     DEFAULT_LIST_LIMIT,
     MAX_LIST_LIMIT,
@@ -39,6 +44,71 @@ _RESTORE_RE: Final[re.Pattern[str]] = re.compile(
 _MUTATION_ACTIONS = frozenset(
     {Action.UPDATE_ENTRY, Action.DELETE_ENTRY, Action.RESTORE_ENTRY, Action.GET_ENTRY}
 )
+
+# Confirmation directives (P07). Parsed deterministically BEFORE the AI
+# interpreter so a 确认 #C-A83F2 message never becomes a bookkeeping attempt.
+# The regex requires the literal ``C`` prefix (so "确认午饭32元" falls through),
+# but captures a loose code and lets confirmation_id validate it — a "clearly a
+# confirmation with a bad code" message returns an error instead of silently
+# falling into bookkeeping.
+_CONFIRM_VERBS = "确认|同意|执行"
+_CANCEL_VERBS = "取消|放弃"
+
+_PENDING_CONFIRM_RE: Final[re.Pattern[str]] = re.compile(
+    rf"^(?:{_CONFIRM_VERBS})\s*#?{CONFIRMATION_PREFIX}-?(?P<code>\S{{1,12}})$",
+    re.IGNORECASE,
+)
+_PENDING_CANCEL_RE: Final[re.Pattern[str]] = re.compile(
+    rf"^(?:{_CANCEL_VERBS})\s*#?{CONFIRMATION_PREFIX}-?(?P<code>\S{{1,12}})$",
+    re.IGNORECASE,
+)
+_PENDING_LIST_RE: Final[re.Pattern[str]] = re.compile(
+    r"^(?:查看)?\s*(?:待确认|确认列表)\s*$",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class PendingDirective:
+    """A deterministic confirmation directive (确认/取消/查看待确认)."""
+
+    action: Literal["confirm", "cancel", "list"]
+    confirmation_code: str | None = None
+
+
+def try_parse_pending_directive(text: str) -> PendingDirective | str | None:
+    """Parse confirmation directives without AI.
+
+    Returns:
+    - ``PendingDirective`` on success (``confirmation_code`` is the storage form
+      ``CA83F2``)
+    - ``str`` user-facing error when the message is clearly a confirmation
+      directive with an invalid code
+    - ``None`` when the message should fall through to bookkeeping / AI
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+
+    if _PENDING_LIST_RE.fullmatch(stripped) is not None:
+        return PendingDirective(action="list")
+
+    directives: list[tuple[re.Pattern[str], Literal["confirm", "cancel"]]] = [
+        (_PENDING_CONFIRM_RE, "confirm"),
+        (_PENDING_CANCEL_RE, "cancel"),
+    ]
+    for pattern, action in directives:
+        match = pattern.fullmatch(stripped)
+        if match is None:
+            continue
+        try:
+            code = normalize_confirmation_code(
+                f"{CONFIRMATION_PREFIX}-{match.group('code')}"
+            )
+        except ValueError:
+            return "确认编号格式无效。请使用例如：确认 #C-A83F2"
+        return PendingDirective(action=action, confirmation_code=code)
+    return None
 
 
 def try_parse_deterministic_entry_command(text: str) -> ParsedCommand | str | None:
