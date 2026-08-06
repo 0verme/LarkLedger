@@ -4,7 +4,11 @@ from collections.abc import Callable
 from typing import Any
 
 from lark_ledger.config import Settings
-from lark_ledger.services.websocket import LongConnectionReceiver, adapt_message_event
+from lark_ledger.services.websocket import (
+    LongConnectionReceiver,
+    adapt_card_action_event,
+    adapt_message_event,
+)
 
 
 def message_payload(event_id: str = "evt_1") -> dict[str, Any]:
@@ -22,10 +26,39 @@ def message_payload(event_id: str = "evt_1") -> dict[str, Any]:
     }
 
 
+def card_action_payload(event_id: str = "evt_card") -> dict[str, Any]:
+    return {
+        "schema": "2.0",
+        "header": {"event_id": event_id, "event_type": "card.action.trigger"},
+        "event": {
+            "operator": {"open_id": "ou_1"},
+            "action": {
+                "tag": "button",
+                "value": {"k": "larkledger_pending", "action": "confirm", "code": "A83F2"},
+            },
+            "context": {"open_message_id": "om_card", "card_id": "card_1"},
+        },
+    }
+
+
 def test_adapt_long_connection_message_event() -> None:
     event_id, event = adapt_message_event(message_payload())
     assert event_id == "evt_1"
     assert event["message"]["message_id"] == "om_1"
+
+
+def test_adapt_card_action_event() -> None:
+    event_id, event = adapt_card_action_event(card_action_payload())
+    assert event_id == "evt_card"
+    assert event["action"]["value"]["code"] == "A83F2"
+    assert event["operator"]["open_id"] == "ou_1"
+
+
+def test_adapt_card_action_rejects_wrong_type() -> None:
+    import pytest
+
+    with pytest.raises(ValueError):
+        adapt_card_action_event(message_payload())
 
 
 def test_adapter_uses_sdk_marshaller_for_typed_event() -> None:

@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from lark_ledger.config import Settings
-from lark_ledger.models import Base, Direction, LedgerEntry
+from lark_ledger.models import Base, Direction, PendingCommand
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.ai import CommandInterpretationError
 from lark_ledger.services.feishu import MAX_POST_IMAGES, MessageProcessor
@@ -322,9 +322,11 @@ async def test_post_entries_keep_post_source_type() -> None:
         )
     )
 
+    # A post-with-image is a high-risk vision write (P07): it creates a pending
+    # confirmation instead of a ledger entry, preserving the source_type.
     async with factory() as session:
-        row = (await session.execute(select(LedgerEntry))).scalar_one()
+        row = (await session.execute(select(PendingCommand))).scalar_one()
     await engine.dispose()
     assert row.source_type == "post"
     assert row.source_message_id == "om_post_source"
-    assert row.source_item_index == 0
+    assert row.payload_json["action"] == "create"

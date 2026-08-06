@@ -43,3 +43,21 @@ def test_replay_event_cli_rejects_missing_required_fields(missing: str) -> None:
         arguments.extend(["--reason", "reason"])
     with pytest.raises(SystemExit):
         build_parser().parse_args(arguments)
+
+
+def test_list_pending_cli_parses() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["list-pending"])
+    assert args.command == "list-pending"
+    assert args.limit == 50
+    args = parser.parse_args(["list-pending", "--limit", "10"])
+    assert args.limit == 10
+
+
+def test_expire_pending_cli_parses() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["expire-pending"])
+    assert args.command == "expire-pending"
+    assert args.batch_size == 500
+    args = parser.parse_args(["expire-pending", "--batch-size", "100"])
+    assert args.batch_size == 100

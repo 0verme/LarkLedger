@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -53,7 +53,7 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260806_0011"
+    assert revision == "20260806_0012"
 
 
 async def test_readiness_uses_real_postgres_and_current_alembic_revision(
@@ -76,8 +76,8 @@ async def test_readiness_uses_real_postgres_and_current_alembic_revision(
     assert result["checks"]["database"] == {"status": "ok"}
     assert result["checks"]["migration"] == {
         "status": "ok",
-        "current": "20260806_0011",
-        "expected": "20260806_0011",
+        "current": "20260806_0012",
+        "expected": "20260806_0012",
     }
 
 
@@ -253,7 +253,7 @@ async def test_export_entries_query_on_postgres(
         assert "#EX002" in with_deleted.export.content.decode("utf-8-sig")
 
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "20260806_0011"
+        assert revision == "20260806_0012"
 
 
 async def test_short_id_unique_per_user_allows_cross_user_reuse(

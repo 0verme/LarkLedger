@@ -23,6 +23,7 @@ from lark_ledger.models import (
     EventReplayAudit,
     LedgerEntry,
     LedgerEntryRevision,
+    PendingCommand,
     ProcessedEvent,
     ReplyOutbox,
 )
@@ -63,6 +64,30 @@ def event_row(
         processed_at=when,
         updated_at=when,
         lease_expires_at=lease_expires_at,
+    )
+
+
+def pending_row(
+    confirmation_code: str,
+    status: str,
+    *,
+    expires_at: datetime | None = None,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
+) -> PendingCommand:
+    return PendingCommand(
+        confirmation_code=confirmation_code,
+        user_open_id="ou_user",
+        source_type="image",
+        command_type="create",
+        payload_version=1,
+        payload_json={"action": "create"},
+        preview_json={"code": confirmation_code},
+        risk_reason="vision",
+        status=status,
+        expires_at=expires_at or NOW + timedelta(hours=1),
+        created_at=created_at or NOW,
+        updated_at=updated_at or NOW,
     )
 
 
@@ -389,3 +414,95 @@ def test_policy_and_service_reject_unsafe_values() -> None:
         RetentionPolicy(event_succeeded_days=0)
     with pytest.raises(ValueError, match="positive"):
         CleanupService(object(), RetentionPolicy(), batch_size=0)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# P07 pending confirmation cleanup
+# ---------------------------------------------------------------------------
+
+
+async def test_cleanup_expires_due_pending_and_keeps_open_and_terminal() -> None:
+    engine, factory = await database()
+    past = NOW - timedelta(hours=1)
+    future = NOW + timedelta(hours=1)
+    async with factory() as session:
+        session.add(pending_row("CAAAA1", "pending", expires_at=past))  # due
+        session.add(pending_row("CAAAA2", "pending", expires_at=future))  # not due
+        session.add(pending_row("CAAAA3", "executed", expires_at=past))  # terminal, not re-expired
+        await session.commit()
+
+    expired = await CleanupStore(factory).expire_pending_batch(
+        cutoff=NOW, now=NOW, batch_size=10
+    )
+    assert expired == 1
+
+    async with factory() as session:
+        rows = (await session.scalars(select(PendingCommand))).all()
+    by_code = {row.confirmation_code: row.status for row in rows}
+    assert by_code["CAAAA1"] == "expired"
+    assert by_code["CAAAA2"] == "pending"
+    assert by_code["CAAAA3"] == "executed"
+    await engine.dispose()
+
+
+async def test_cleanup_deletes_terminal_pending_after_retention_and_keeps_open() -> None:
+    engine, factory = await database()
+    old = NOW - timedelta(days=30)
+    async with factory() as session:
+        session.add(pending_row("CBBBB1", "executed", updated_at=old))
+        session.add(pending_row("CBBBB2", "cancelled", updated_at=old))
+        session.add(pending_row("CBBBB3", "expired", updated_at=old))
+        session.add(pending_row("CBBBB4", "failed", updated_at=old))
+        session.add(pending_row("CBBBB5", "pending", updated_at=old))  # open -> kept
+        session.add(pending_row("CBBBB6", "executed", updated_at=NOW))  # recent -> kept
+        await session.commit()
+
+    deleted = await CleanupStore(factory).delete_pending_terminal_batch(
+        cutoff=old, now=NOW, batch_size=10
+    )
+    assert deleted == 4
+
+    async with factory() as session:
+        rows = (await session.scalars(select(PendingCommand))).all()
+    by_code = {row.confirmation_code: row.status for row in rows}
+    assert "CBBBB5" in by_code  # open pending never deleted
+    assert "CBBBB6" in by_code  # recent terminal never deleted
+    assert "CBBBB1" not in by_code
+    await engine.dispose()
+
+
+async def test_cleanup_service_sweeps_pending_confirmations() -> None:
+    engine, factory = await database()
+    past = NOW - timedelta(hours=2)
+    async with factory() as session:
+        session.add(pending_row("CCCCC1", "pending", expires_at=past))
+        session.add(
+            pending_row(
+                "CCCCC2", "executed", updated_at=NOW - timedelta(days=14)
+            )
+        )
+        await session.commit()
+
+    result = await CleanupService(CleanupStore(factory), RetentionPolicy()).run_once(
+        now=NOW
+    )
+    assert result.pending_expired == 1
+    assert result.pending_deleted == 1
+    assert result.total == 2
+
+    async with factory() as session:
+        remaining = (await session.scalars(select(PendingCommand))).all()
+    # CCCC1 was just expired (updated_at=now) so it survives this sweep; the
+    # old executed row is deleted after its retention window.
+    assert [row.confirmation_code for row in remaining] == ["CCCCC1"]
+    assert remaining[0].status == "expired"
+    await engine.dispose()
+
+
+def test_pending_retention_rejects_unsafe_and_tracks_result() -> None:
+    with pytest.raises(ValueError, match="at least one day"):
+        RetentionPolicy(pending_retention_days=0)
+    result = CleanupResult(pending_expired=2, pending_deleted=3)
+    assert result.pending_expired == 2
+    assert result.pending_deleted == 3
+    assert result.total == 5

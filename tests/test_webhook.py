@@ -55,6 +55,44 @@ async def test_webhook_dispatches_message_to_shared_event_service() -> None:
     )
 
 
+async def test_webhook_dispatches_card_action_trigger() -> None:
+    card_service = AsyncMock()
+    event = {
+        "operator": {"open_id": "ou_1"},
+        "action": {
+            "value": {"k": "larkledger_pending", "action": "confirm", "code": "A83F2"}
+        },
+        "context": {"open_message_id": "om_card", "card_id": "card_1"},
+    }
+    app = build_app(Settings(_env_file=None, event_mode="webhook"), AsyncMock())
+    app.state.card_action_service = card_service
+    response = await post(
+        app,
+        {
+            "header": {"event_type": "card.action.trigger", "event_id": "evt_card"},
+            "event": event,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"code": 0}
+    card_service.handle_action.assert_awaited_once_with("evt_card", event)
+
+
+async def test_webhook_card_action_without_service_is_acknowledged() -> None:
+    app = build_app(Settings(_env_file=None, event_mode="webhook"), AsyncMock())
+    if hasattr(app.state, "card_action_service"):
+        del app.state.card_action_service
+    response = await post(
+        app,
+        {
+            "header": {"event_type": "card.action.trigger", "event_id": "evt_card"},
+            "event": {"operator": {"open_id": "ou_1"}},
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == {"code": 0}
+
+
 async def test_websocket_mode_does_not_expose_webhook_or_require_verification_token() -> None:
     service = AsyncMock()
     settings = Settings(

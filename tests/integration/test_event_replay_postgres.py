@@ -1,4 +1,4 @@
-"""P06e PostgreSQL locking and migration coverage for manual event replay."""
+﻿"""P06e PostgreSQL locking and migration coverage for manual event replay."""
 
 from __future__ import annotations
 
@@ -201,7 +201,7 @@ async def test_guarded_replay_migration_upgrade_downgrade_roundtrip(
                     "WHERE event_id = 'evt-existing-outbox'"
                 )
             )
-            assert revision == "20260806_0011"
+            assert revision == "20260806_0012"
             assert replay_columns == {
                 "manual_replay_count",
                 "replay_safety_version",

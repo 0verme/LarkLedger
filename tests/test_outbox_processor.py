@@ -298,8 +298,11 @@ async def test_delete_and_restore_and_outbox_commit_atomically() -> None:
 async def test_batch_entries_and_outbox_commit_atomically() -> None:
     engine, factory = await _sqlite_factory()
     feishu = RecordingFeishu()
+    # This test targets the direct-write transaction boundary; with the P07
+    # default (pending_enabled=True) a batch write creates a pending
+    # confirmation instead. The pending path is covered in test_pending_commands.
     processor = MessageProcessor(
-        Settings(_env_file=None),
+        Settings(_env_file=None, pending_enabled=False),
         factory,
         feishu,  # type: ignore[arg-type]
         FixedInterpreter(

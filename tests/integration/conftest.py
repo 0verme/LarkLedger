@@ -36,7 +36,7 @@ async def postgres_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
         await connection.execute(
             text(
                 "TRUNCATE TABLE event_replay_audits, budget_alerts, category_budgets, "
-                "ledger_entry_revisions, ledger_entries, reply_outbox, "
+                "ledger_entry_revisions, ledger_entries, pending_commands, reply_outbox, "
                 "processed_events CASCADE"
             )
         )
@@ -45,7 +45,7 @@ async def postgres_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
         await connection.execute(
             text(
                 "TRUNCATE TABLE event_replay_audits, budget_alerts, category_budgets, "
-                "ledger_entry_revisions, ledger_entries, reply_outbox, "
+                "ledger_entry_revisions, ledger_entries, pending_commands, reply_outbox, "
                 "processed_events CASCADE"
             )
         )

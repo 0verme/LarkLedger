@@ -43,7 +43,13 @@ async def test_websocket_lifespan_starts_and_stops_without_webhook_token(
     class FakeReceiver:
         status = "connected"
 
-        def __init__(self, receiver_settings: Settings, event_service: Any) -> None:
+        def __init__(
+            self,
+            receiver_settings: Settings,
+            event_service: Any,
+            *,
+            card_action_service: Any = None,
+        ) -> None:
             assert receiver_settings is settings
 
         async def start(self) -> None:
