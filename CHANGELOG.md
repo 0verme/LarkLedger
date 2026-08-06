@@ -4,6 +4,16 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (v0.2.1 — transactional reply outbox; P06a)
+
+- **Transactional Outbox:** new `reply_outbox` table (migration `20260806_0008`) stores durable, self-contained Feishu reply intents written in the **same transaction** as the ledger change they confirm. A successful business commit now guarantees a reply intent exists for later delivery or compensation.
+- **Atomic business + reply:** `MessageProcessor` runs `LedgerService` with `commit_changes=False` (flush only), builds the reply intents from its result, and commits business + outbox together. Business failure and outbox failure roll back together; no business is ever committed without a matching outbox row.
+- **Self-contained reply payloads:** text replies persist the final text verbatim; CSV exports and report images persist raw bytes in `payload_blob` (with `size` and `sha256`), so a later worker (P06b) can deliver after a container restart without re-calling AI, re-querying the ledger, or reopening a temporary file. `(event_id, reply_type)` is unique; `sequence` orders multi-message replies.
+- **New `succeeded` semantics:** an event `succeeded` now means "business handled and reply intents durably written to the outbox", **not** "Feishu received the reply". Feishu send outcomes live on the outbox rows.
+- **Crash-window recovery:** if business + outbox commit but the event status update is lost, the re-claimed event checks for an existing outbox row, skips business (no duplicate entries / replies), and converges to `succeeded` — the outbox pre-check replaces `IntegrityError → dead` as the normal recovery path.
+- **Compatible post-commit single send:** after commit, the processor sends each committed intent once synchronously: success marks `sent`, failure marks `failed` (with a redacted, length-capped `result_summary`); a failed send never re-runs business and never fails the event. A failed CSV file send keeps the v0.2.0 direct fallback notice.
+- **Outbox status enum:** `ReplyStatus` (`pending` / `sending` / `sent` / `failed` / `dead`) is centralized; P06a writes `pending` → `sent` | `failed` only, with `sending` and `dead` reserved for P06b. Status updates are conditional (`pending/sending/failed` only), so a `sent` row is never re-sent.
+
 ### Added (v0.2.1 — event worker, lease, retry, dead; P05b)
 
 - Background PostgreSQL-driven **event worker** (`EventWorker`) started and stopped by the FastAPI lifespan. It claims `processed_events` rows in one transaction with `SELECT ... FOR UPDATE SKIP LOCKED`, writes `processing` / `lease_owner` / `lease_expires_at`, increments `attempt_count`, commits, then runs the `MessageProcessor` on the payload reloaded from the database. No Redis / Celery / RQ / Kafka / RabbitMQ; the database is the only queue.
@@ -21,8 +31,9 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Changed
 
-- Head migration is now `20260806_0007`. P05b adds **no new migration**; it uses the P05a fields and indexes.
-- `EventService` gains a `claim()` (T1-only) path and routes `handle_safely` by worker mode; the synchronous `handle()` is retained for `WORKER_ENABLED=false` and tests.
+- Head migration is now `20260806_0008` (P06a adds the `reply_outbox` table).
+- `LedgerService` gains `commit_changes: bool = True`; internal methods no longer commit, `execute()` commits once when enabled, and the batch-budget path uses savepoints. The Transactional Outbox path constructs the service with `commit_changes=False` so the processor owns the transaction.
+- `EventService` gains a `claim()` (T1-only) path and routes `handle_safely` by worker mode; the synchronous `handle()` is retained for `WORKER_ENABLED=false` and tests. The `succeeded` status now means "business handled + reply intents written to the outbox".
 
 ### Security
 
@@ -31,9 +42,11 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Known limitations (v0.2.1 is not finished)
 
-- **No Transactional Outbox:** business writes and the `succeeded` event status are **not** atomic. If a business transaction commits but the status update fails, a retry may re-run the processor; the existing `(source_message_id, source_item_index)` unique constraint prevents duplicate ledger entries. The release must not claim "never double-bookkeeps".
-- **No reply compensation** (in-flight business commit + failed Feishu reply is not compensated) and **no human replay** of `dead` events.
-- No pre-write confirmation for image / voice / batch; CSV file send failures are not auto-retried; no complete readiness API.
+- **Transactional Outbox is provided (P06a):** business changes and reply intents commit atomically, so a successful business write is always matched by a durable `reply_outbox` row and a crashed event converges to `succeeded` without re-running business.
+- **Still missing (P06b):** a background reply worker, reply auto-retry, outbox lease / `FOR UPDATE SKIP LOCKED` claim loop, reply `dead` handling, user result replay, manual resend, and a complete readiness API. Today the processor sends each committed intent once synchronously; a failed send marks the outbox `failed` and waits for a future mechanism.
+- **Pre-business error / notice replies** (e.g. "图片识别功能尚未配置", stage error prompts) are still sent directly and are **not** persisted to the outbox.
+- CSV file send failures are recorded in the outbox and the v0.2.0 fallback notice is sent; they are not auto-retried in this version.
+- The release must not claim "never double-bookkeeps"; the `(source_message_id, source_item_index)` unique constraint remains the fallback guard.
 
 ## [0.2.0] - 2026-08-05
 

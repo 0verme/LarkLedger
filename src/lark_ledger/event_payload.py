@@ -29,6 +29,10 @@ class EventProcessStatus(StrEnum):
     background worker (P05b) also writes ``dead`` once retries are exhausted or
     an error is permanent. ``legacy_succeeded`` marks pre-payload historical
     rows that are not replayable.
+
+    Since P06a, ``succeeded`` means the business action completed **and** its
+    reply intents were durably written to ``reply_outbox``; Feishu delivery
+    outcome lives on the outbox rows, so a failed reply never fails the event.
     """
 
     RECEIVED = "received"
@@ -200,11 +204,21 @@ def parse_stored_payload(raw: Mapping[str, Any] | str | None) -> dict[str, Any]:
 
 
 def business_event_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Extract the MessageProcessor event dict from a validated payload."""
+    """Extract the MessageProcessor event dict from a validated payload.
+
+    The returned dict carries the source ``event_id`` (from the envelope) so the
+    processor can link reply intents to the event and converge a crashed event
+    on retry. ``event_id`` is missing only for events delivered directly to the
+    processor in tests or out-of-band callers.
+    """
     event = payload.get("event")
     if not isinstance(event, Mapping):
         raise EventPayloadError("payload.event must be an object")
-    return normalize_business_event(event)
+    business = normalize_business_event(event)
+    event_id = payload.get("event_id")
+    if event_id is not None and str(event_id).strip():
+        business["event_id"] = str(event_id)
+    return business
 
 
 def is_replayable_payload(raw: Mapping[str, Any] | str | None) -> bool:

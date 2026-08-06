@@ -105,4 +105,20 @@ main 分支已加入后台事件 Worker（P05b），**本阶段不新增迁移**
 - **幂等边界（诚实声明）：** 本版本没有 Transactional Outbox，业务写入与事件状态不是原子提交；重复处理由现有 `(source_message_id, source_item_index)` 唯一约束阻止重复入账，但**不**宣称"绝不重复记账"。没有回复自动补偿、没有人工重放 `dead`。
 - **回退：** 代码回退到 `v0.2.0` tag 即可关闭 Worker 行为；数据库结构不变，无需降级。
 
-当前 Alembic head：`20260806_0007`。
+## 迁移 `20260806_0008`（Transactional Outbox / 回复 Outbox）
+
+- **升级：** 新增 `reply_outbox` 表，保存自包含的飞书回复意图（`event_id`、`message_id`、`reply_type`、`sequence`、`payload_json` 信封、`payload_blob` 文件/图片字节、`status`、`attempt_count`、P06b 预留的 `next_attempt_at` / `lease_owner` / `lease_expires_at`、`sent_at`、脱敏 `last_error_code` / `result_summary`）。唯一约束 `(event_id, reply_type)` 保证同一事件不重复插入同一回复；`(status, next_attempt_at)` 与 `lease_expires_at` 索引为后续 P06b Worker 铺路。已有 `processed_events` 行不受影响，无需回填。
+- **行为：** 业务变更与回复意图在同一事务提交；`succeeded` 语义变为"业务已处理且回复意图已可靠写入 Outbox"。崩溃窗口重试不会重复执行业务。提交后会同步尝试发送一次，发送失败把 Outbox 标记为 `failed`（本版本无后台重试）。
+- **降级数据损失：** `alembic downgrade` 删除 `reply_outbox` 表及全部待发送回复意图（`pending` / `failed` 行被丢弃，其回复需要重新生成）。降级前请确认备份。
+
+## 开发中 main（P06a Transactional Outbox）
+
+main 分支在 P05b 之上加入了 Transactional Outbox（P06a），新增迁移 `20260806_0008`。
+
+- **业务 + Outbox 同事务：** `MessageProcessor` 以 `LedgerService(commit_changes=False)` 执行业务（只 flush），生成回复意图并插入 `reply_outbox`，与业务同一 `commit` 提交。业务成功 ⟹ 一定有 Outbox 记录。
+- **succeeded 语义：** 事件 `succeeded` 表示"业务已处理且回复意图已可靠入 Outbox"，不再表示"飞书已收到回复"。飞书发送失败记录在 Outbox（`failed`），不会让事件进入业务重试。
+- **崩溃恢复：** 业务 + Outbox 已提交而事件状态未更新时，事件被重新领取会先检查 Outbox，跳过业务并收敛为 `succeeded`（不再以 `IntegrityError→dead` 作为正常恢复路径）。
+- **兼容单次发送：** 提交后从已提交的 Outbox 同步发送一次：成功标记 `sent`，失败标记 `failed`；无后台回复 Worker、无自动重试、无 Outbox lease（P06b 范围）。
+- **回退：** 代码回退到 `v0.2.0` tag 即可关闭 Worker 与 Outbox 行为；若已运行 `0008`，数据库需显式 `alembic downgrade 20260806_0007`（会丢弃待发送回复意图），或先备份后处理。
+
+当前 Alembic head：`20260806_0008`。

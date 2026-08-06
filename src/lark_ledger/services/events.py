@@ -45,12 +45,16 @@ class EventService:
       worker. T2 failures are recorded as ``failed`` with a safe
       ``result_summary`` and are **not** retried.
 
-    Transaction boundary (v0.2.0 / P00) in both modes:
+    Transaction boundary (v0.2.0 / P00, extended by P06a) in both modes:
 
     * **T1 — claim:** insert with payload and commit. Primary-key conflict means
       the event was already claimed (still returns the dedup result immediately).
     * **T2 — process:** run the processor on a payload reloaded from the
-      database (round-trip contract), owned by the worker in worker mode.
+      database (round-trip contract), owned by the worker in worker mode. Since
+      P06a the processor commits business + ``reply_outbox`` intents atomically
+      and then performs one compatible send from the committed outbox (T3).
+    * **T4 — succeeded:** since P06a ``succeeded`` means business handled and
+      reply intents durably written; Feishu delivery state lives on the outbox.
     """
 
     def __init__(

@@ -20,12 +20,15 @@ take them over. Status updates are guarded by ``status='processing' AND
 lease_owner=<owner>`` so a stale worker can never overwrite a new owner's
 state.
 
-This module does **not** implement a Transactional Outbox, reply compensation,
-or human replay. Business writes and the ``succeeded`` status are not atomic:
-if the business transaction commits but the status update does not, a retry may
-re-run the processor. Existing ledger idempotency keys (the unique
-``(source_message_id, source_item_index)`` constraint) prevent duplicate
-entries.
+Since P06a, ``succeeded`` means "business handled and its reply intents durably
+written to ``reply_outbox``" — Feishu delivery state lives on the outbox rows,
+not the event. The processor's outbox pre-check lets a crashed event (committed
+business + outbox, then a lost status update) converge to ``succeeded`` on
+re-claim without re-running business. This module does **not** implement reply
+compensation, an outbox background worker, or human replay; those belong to
+P06b. Existing ledger idempotency keys (the unique
+``(source_message_id, source_item_index)`` constraint) remain the fallback
+guard against duplicate entries.
 """
 
 from __future__ import annotations

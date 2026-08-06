@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     SmallInteger,
     String,
@@ -152,6 +153,68 @@ class ProcessedEvent(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ReplyOutbox(Base):
+    """Transactional outbox for durable Feishu reply intents (P06a).
+
+    A row is written in the **same database transaction** as the business
+    change it confirms, so "the reply intent is durable" is atomic with "the
+    ledger change happened". A later worker (P06b) may pick up ``pending`` /
+    ``failed`` rows and deliver them without re-executing business: every row is
+    self-contained (recipient ``message_id``, reply type, JSON envelope, and —
+    for files / report images — the raw ``payload_blob`` bytes plus size and
+    checksum), so nothing has to be re-derived from AI, in-memory objects, or
+    temporary files.
+
+    Idempotency: ``(event_id, reply_type)`` is unique, so a retried event can
+    never insert a duplicate reply. ``status`` values come from the
+    ``ReplyStatus`` enum; ``sending`` and ``dead`` are reserved for the P06b
+    background worker and are not produced in P06a. ``sequence`` gives a stable
+    order for multi-message replies (e.g. CSV export sends its file before its
+    confirmation text).
+    """
+
+    __tablename__ = "reply_outbox"
+    __table_args__ = (
+        UniqueConstraint("event_id", "reply_type", name="uq_outbox_event_type"),
+        Index("ix_outbox_status_next_attempt", "status", "next_attempt_at"),
+        Index("ix_outbox_lease_expires", "lease_expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("processed_events.event_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    message_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    reply_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    transport: Mapped[str] = mapped_column(String(16), nullable=False, default="feishu")
+    payload_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    payload_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    payload_blob: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    result_summary: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )

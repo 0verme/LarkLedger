@@ -87,13 +87,24 @@ class LedgerService:
         now: datetime | None = None,
         exchange_rates: ExchangeRateService | None = None,
         short_id_factory: Callable[[], str] | None = None,
+        commit_changes: bool = True,
     ) -> None:
+        """Ledger operations on ``session``.
+
+        With ``commit_changes=True`` (the default and the legacy behavior) the
+        service commits once at the end of ``execute``. The Transactional
+        Outbox path (P06a) constructs the service with ``commit_changes=False``
+        so the caller owns the transaction: business flushes, reply intents are
+        added to the same session, and the caller commits business + outbox
+        atomically.
+        """
         self.session = session
         self.currency = currency
         self.timezone = ZoneInfo(timezone)
         self.now = now
         self.exchange_rates = exchange_rates
         self._short_id_factory = short_id_factory or generate_short_id
+        self.commit_changes = commit_changes
 
     async def execute(
         self,
@@ -105,56 +116,61 @@ class LedgerService:
         source_item_index: int = 0,
     ) -> ExecutionResult:
         if command.action is Action.CREATE:
-            return await self._create(
+            result = await self._create(
                 user_open_id,
                 command,
                 source_type=source_type,
                 source_message_id=source_message_id,
                 source_item_index=source_item_index,
             )
-        if command.action is Action.BATCH:
-            return await self._execute_batch(
+        elif command.action is Action.BATCH:
+            result = await self._execute_batch(
                 user_open_id,
                 command,
                 source_type=source_type,
                 source_message_id=source_message_id,
             )
-        if command.action is Action.CREATE_ENTRIES:
-            return await self._create_entries(
+        elif command.action is Action.CREATE_ENTRIES:
+            result = await self._create_entries(
                 user_open_id,
                 command,
                 source_type=source_type,
                 source_message_id=source_message_id,
             )
-        if command.action is Action.UPDATE_LAST:
-            return await self._update_last(user_open_id, command)
-        if command.action is Action.UNDO_LAST:
-            return await self._undo_last(user_open_id)
-        if command.action is Action.LIST_ENTRIES:
-            return await self._list_entries(user_open_id, command)
-        if command.action is Action.GET_ENTRY:
-            return await self._get_entry(user_open_id, command)
-        if command.action is Action.UPDATE_ENTRY:
-            return await self._update_entry(user_open_id, command)
-        if command.action is Action.DELETE_ENTRY:
-            return await self._delete_entry(user_open_id, command)
-        if command.action is Action.RESTORE_ENTRY:
-            return await self._restore_entry(user_open_id, command)
-        if command.action is Action.EXPORT_ENTRIES:
-            return await self._export_entries(user_open_id, command)
-        if command.action is Action.SUMMARY:
-            return await self._summary(user_open_id, command)
-        if command.action is Action.REPORT:
-            return await self._report(user_open_id, command)
-        if command.action is Action.SET_BUDGET:
-            return await self._set_budget(user_open_id, command)
-        if command.action is Action.SET_BUDGETS:
-            return await self._set_budgets(user_open_id, command)
-        if command.action is Action.LIST_BUDGETS:
-            return await self._list_budgets(user_open_id, command)
-        if command.action is Action.DELETE_BUDGET:
-            return await self._delete_budget(user_open_id, command)
-        return ExecutionResult(message=HELP_TEXT)
+        elif command.action is Action.UPDATE_LAST:
+            result = await self._update_last(user_open_id, command)
+        elif command.action is Action.UNDO_LAST:
+            result = await self._undo_last(user_open_id)
+        elif command.action is Action.LIST_ENTRIES:
+            result = await self._list_entries(user_open_id, command)
+        elif command.action is Action.GET_ENTRY:
+            result = await self._get_entry(user_open_id, command)
+        elif command.action is Action.UPDATE_ENTRY:
+            result = await self._update_entry(user_open_id, command)
+        elif command.action is Action.DELETE_ENTRY:
+            result = await self._delete_entry(user_open_id, command)
+        elif command.action is Action.RESTORE_ENTRY:
+            result = await self._restore_entry(user_open_id, command)
+        elif command.action is Action.EXPORT_ENTRIES:
+            result = await self._export_entries(user_open_id, command)
+        elif command.action is Action.SUMMARY:
+            result = await self._summary(user_open_id, command)
+        elif command.action is Action.REPORT:
+            result = await self._report(user_open_id, command)
+        elif command.action is Action.SET_BUDGET:
+            result = await self._set_budget(user_open_id, command)
+        elif command.action is Action.SET_BUDGETS:
+            result = await self._set_budgets(user_open_id, command)
+        elif command.action is Action.LIST_BUDGETS:
+            result = await self._list_budgets(user_open_id, command)
+        elif command.action is Action.DELETE_BUDGET:
+            result = await self._delete_budget(user_open_id, command)
+        else:
+            result = ExecutionResult(message=HELP_TEXT)
+
+        if self.commit_changes:
+            await self.session.commit()
+        return result
 
     @staticmethod
     def _entry_order_by() -> tuple[Any, ...]:
@@ -205,7 +221,6 @@ class LedgerService:
             source_message_id=source_message_id,
             source_item_index=source_item_index,
         )
-        await self.session.commit()
         return ExecutionResult(
             message=self._created_message(entry, converted),
             budget_alert=budget_alert,
@@ -333,7 +348,6 @@ class LedgerService:
                 if budget_alert and budget_alert not in alerts:
                     alerts.append(budget_alert)
 
-        await self.session.commit()
         lines = [
             f"批量图片记账完成：成功 {len(successes)} 笔，失败 {len(failures)} 笔",
             f"收入合计 {self._format_money(income_total)} · "
@@ -429,7 +443,6 @@ class LedgerService:
                     "✅ " + self._budget_set_message(item, converted, spent).replace("\n", "；")
                 )
 
-        await self.session.commit()
         lines = [
             "复杂指令处理完成："
             f"账目成功 {len(entry_successes)} 笔、失败 {len(entry_failures)} 笔；"
@@ -639,7 +652,6 @@ class LedgerService:
             before=before,
             after=after,
         )
-        await self.session.commit()
         conversion = self._conversion_note(converted) if converted is not None else ""
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f" · {entry.note}" if entry.note else ""
@@ -679,7 +691,6 @@ class LedgerService:
             before=before,
             after=after,
         )
-        await self.session.commit()
         if last_style:
             return ExecutionResult(
                 message=(
@@ -713,7 +724,6 @@ class LedgerService:
             before=before,
             after=after,
         )
-        await self.session.commit()
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f" · {entry.note}" if entry.note else ""
         return ExecutionResult(
@@ -747,7 +757,6 @@ class LedgerService:
         self, user_open_id: str, command: ParsedCommand
     ) -> ExecutionResult:
         converted, spent = await self._stage_budget(user_open_id, command)
-        await self.session.commit()
         return ExecutionResult(message=self._budget_set_message(command, converted, spent))
 
     async def _stage_budget(
@@ -807,15 +816,16 @@ class LedgerService:
                 failures.append(f"❌ {label}：{error}")
                 continue
             try:
-                result = await self._set_budget(user_open_id, item_command)
+                # A savepoint isolates a single budget item so one bad item does
+                # not abort the rest; the outer transaction commits all successes
+                # together (with the outbox in P06a) once, never per item.
+                async with self.session.begin_nested():
+                    result = await self._set_budget(user_open_id, item_command)
             except ExchangeRateUnavailableError:
-                await self.session.rollback()
                 failures.append(f"❌ {label}：暂时无法获取汇率")
             except ValueError:
-                await self.session.rollback()
                 failures.append(f"❌ {label}：换算后的金额超出支持范围")
             except Exception:
-                await self.session.rollback()
                 logger.exception("failed to persist batch budget item %s", index + 1)
                 failures.append(f"❌ {label}：保存失败，请稍后重试")
             else:
@@ -924,7 +934,6 @@ class LedgerService:
             return ExecutionResult(message=f"还没有设置{command.category}月预算。")
         await self.session.execute(delete(BudgetAlert).where(BudgetAlert.budget_id == budget.id))
         await self.session.delete(budget)
-        await self.session.commit()
         return ExecutionResult(message=f"已取消{command.category}月预算。")
 
     async def _check_budget(self, entry: LedgerEntry) -> str | None:

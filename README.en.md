@@ -123,9 +123,9 @@ Webhook URL: `https://your-domain/webhooks/feishu`. Webhook remains a supported 
 
 Do **not** describe this as "never loses messages / never double-bookkeeps":
 
-- Failed events **are** automatically retried (exponential backoff, default max 3 attempts) and move to `dead` when exhausted or permanently broken; but there is **no Transactional Outbox**—business writes and the event status are **not** atomic, and the existing source-message uniqueness constraint backs the dedup on retry. No claim of "never double-bookkeeps".
-- Successful ledger writes with failed replies are **not** auto-compensated
-- There is **no** human replay command for `dead` events
+- Failed events **are** automatically retried (exponential backoff, default max 3 attempts) and move to `dead` when exhausted or permanently broken; business writes and reply intents commit atomically through the **Transactional Outbox** (P06a), so a crash retry never re-runs business. We still do **not** claim "never double-bookkeeps"; the source-message uniqueness constraint remains the fallback guard.
+- A failed reply is **not** auto-retried yet: the processor sends each committed intent once synchronously after commit; failures are recorded on the outbox (`failed`). A background reply worker / auto-retry / outbox lease belongs to P06b.
+- There is **no** human replay command for `dead` events, no result replay, no manual resend
 - Image / voice / batch paths have **no** pre-write confirmation flow yet
 - Failed CSV file delivery is **not** auto-retried
 - No web admin UI, no shared ledgers
@@ -134,7 +134,8 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 Roadmap themes (no promised ship dates):
 
 ```text
-v0.2.1: reliable delivery (event worker / lease / retry / dead done; outbox and reply compensation still missing)
+v0.2.1: reliable delivery (event worker / lease / retry / dead done; transactional outbox done;
+        background reply worker / reply compensation still missing)
 v0.3.0: high-risk confirmation (image / voice / batch, etc.)
 ```
 
