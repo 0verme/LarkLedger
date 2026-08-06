@@ -10,7 +10,7 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works in v0.2.0
+## What works in v0.2.1
 
 - **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies
 - **Recent list / single-entry detail** (`最近10笔`, `查看 #XXXXX`)
@@ -19,6 +19,7 @@ Detailed user, deployment, and architecture docs are **Chinese-first**. This REA
 - Summaries, monthly category budgets, consumption report cards
 - Image / voice bookkeeping as **optional extensions** (not required for first success)
 - User isolation by Feishu `open_id` and claim-first `event_id` idempotency
+- **Reliable delivery**: background Event / Reply Workers, transactional reply outbox, PostgreSQL lease and exponential-backoff retry, readiness probes, terminal retention cleanup, and guarded manual event replay
 - Self-hosted stack: FastAPI, PostgreSQL, Docker Compose
 
 ## Who it is for
@@ -141,15 +142,13 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 Roadmap themes (no promised ship dates):
 
 ```text
-v0.2.1: reliable delivery (Event / Reply Workers, Transactional Outbox, readiness,
-        terminal retention cleanup, and guarded event replay done; result replay is internal)
 v0.3.0: high-risk confirmation (image / voice / batch, etc.)
 ```
 
-Current release: **v0.2.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.2.0`. You can also build from source with `docker compose ... --build`.
+Current release: **v0.2.1**. Prebuilt image: `ghcr.io/0verme/larkledger:0.2.1` (also `0.2` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.2.0
+export LARK_LEDGER_IMAGE_TAG=0.2.1
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d

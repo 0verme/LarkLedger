@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.2.0** |
-| 包版本 / `__version__` | `0.2.0` |
-| Git tag | `v0.2.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.2.0`（亦有 `0.2` / `latest` 由发布流水线写入） |
-| Alembic head | `20260806_0011`（main；v0.2.0 为 `20260806_0007`） |
+| 最新正式版本 | **v0.2.1** |
+| 包版本 / `__version__` | `0.2.1` |
+| Git tag | `v0.2.1` |
+| GHCR | `ghcr.io/0verme/larkledger:0.2.1`（亦有 `0.2` / `latest` 由发布流水线写入） |
+| Alembic head | `20260806_0011`（v0.2.0 为 `20260806_0007`） |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -21,11 +21,25 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
 
+## 从 v0.2.0 升级到 v0.2.1
+
+v0.2.1「可靠投递」新增迁移 `20260806_0008`～`20260806_0011`（回复 Outbox、投递元数据、清理索引、重放状态）。`alembic upgrade head` 会依次应用；关键行为变化：
+
+- **入口模式**：`LARK_LEDGER_WORKER_ENABLED`（默认 `true`）与 `LARK_LEDGER_REPLY_WORKER_ENABLED`（默认 `true`）使事件与回复由后台 Worker 处理。若想保持 v0.2.0 的进程内同步处理，显式设回 `false`。
+- **succeeded 语义**：`succeeded` 表示"业务已处理且回复意图已可靠入 Outbox"，不再表示"飞书已收到回复"。业务写入与回复意图同事务提交。
+- **事件重试与 dead**：`failed` 事件按指数退避自动重试（默认最多 3 次），永久错误进入 `dead`；已 `succeeded` / `dead` 的历史事件不会被领取。
+- **回复重试与 dead**：`pending` / 到期 `failed` 的 Outbox 行由 Reply Worker 自动投递，临时错误按退避重试，永久错误进入 `dead`；发送失败**绝不**重新执行业务。
+- **readiness**：升级后可用 `GET /readyz` 检查数据库、revision、Worker 与接收器；`/healthz` 保持原语义。
+- **清理**：`LARK_LEDGER_CLEANUP_ENABLED` 默认 `true`，成功记录保留 30 天、dead 保留 90 天；需要关闭时显式设 `false`。
+- **人工重放**：管理员可用 `python -m lark_ledger.admin replay-event` 重放安全的 `dead` / `failed` 事件（默认 dry-run，需 `--execute`）。
+
+升级步骤：备份 → 拉取 v0.2.1 → `alembic upgrade head` → 重启 → 检查 `/healthz` 与 `/readyz` → 一笔文字记账验收。代码回退到 v0.2.0 tag 即可关闭 Worker / Outbox / Cleanup 行为；若已运行 `0008` 之后的迁移，需显式 `alembic downgrade` 并评估待发送回复意图的丢失。
+
 ## 使用源码 Compose
 
 ```bash
 git fetch --tags origin
-git checkout v0.2.0
+git checkout v0.2.1
 docker compose run --rm app alembic upgrade head
 docker compose up -d --build
 curl http://127.0.0.1:8000/healthz
@@ -42,14 +56,14 @@ docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ## 使用 GHCR 镜像
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.2.0
+export LARK_LEDGER_IMAGE_TAG=0.2.1
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
 curl http://127.0.0.1:8000/healthz
 ```
 
-PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.0"`。
+PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.1"`。
 
 `compose.image.yaml` **不会**在 `up` 时自动迁移；升级必须显式 `alembic upgrade head`。
 
@@ -95,7 +109,7 @@ PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.0"`。
 - **行为：** 当前版本**没有** Worker，`next_attempt_at` / `lease_owner` / `lease_expires_at` 保持 NULL；失败事件只记录脱敏的单行 `result_summary`。**这仍是 claim-first，不代表可靠投递已经完成。**
 - **降级数据损失：** `alembic downgrade` 删除上述新列与索引，丢弃重试 / 租约 / 结果元数据与定位列；`payload_json` 与 `status` 保留。
 
-## 开发中 main（P05b 事件 Worker）
+## v0.2.1：事件 Worker（P05b，复用 `20260806_0007`）
 
 main 分支已加入后台事件 Worker（P05b），**本阶段不新增迁移**，复用 `20260806_0007` 的字段与索引。
 
@@ -111,7 +125,7 @@ main 分支已加入后台事件 Worker（P05b），**本阶段不新增迁移**
 - **行为：** 业务变更与回复意图在同一事务提交；`succeeded` 语义变为"业务已处理且回复意图已可靠写入 Outbox"。崩溃窗口重试不会重复执行业务。提交后会同步尝试发送一次，发送失败把 Outbox 标记为 `failed`（本版本无后台重试）。
 - **降级数据损失：** `alembic downgrade` 删除 `reply_outbox` 表及全部待发送回复意图（`pending` / `failed` 行被丢弃，其回复需要重新生成）。降级前请确认备份。
 
-## 开发中 main（P06a Transactional Outbox）
+## v0.2.1：Transactional Outbox（P06a）
 
 main 分支在 P05b 之上加入了 Transactional Outbox（P06a），新增迁移 `20260806_0008`。
 
@@ -124,10 +138,10 @@ main 分支在 P05b 之上加入了 Transactional Outbox（P06a），新增迁�
 ## 迁移 `20260806_0009`（回复投递元数据 + 顺序索引）
 
 - **升级：** 为 `reply_outbox` 增加可空列 `remote_message_id`（远端回复消息 ID，`sent` 时写入）、`remote_file_key` / `remote_image_key`（上传资源键，上传成功后写入，重试时复用不重复上传），并新增 `(event_id, sequence)` 索引支撑同一事件内按 `sequence` 顺序领取。唯一约束 `(event_id, reply_type)` 不变，已支持全部真实回复组合。历史 `pending` / `sent` / `failed` 行不受影响，无需回填。
-- **行为：** 详见下文「开发中 main（P06b Reply Worker）」。
+- **行为：** 详见下文「v0.2.1：Reply Worker（P06b）」。
 - **降级数据损失：** `alembic downgrade` 删除上述三列与顺序索引；已记录的远端消息 ID 与上传资源键丢失（后续投递会重新上传字节，安全但重复），`sent` 消息审计信息减少。待发送意图不丢失。
 
-## 开发中 main（P06b Reply Worker）
+## v0.2.1：Reply Worker（P06b）
 
 main 分支在 P06a 之上加入后台回复 Worker（P06b），新增迁移 `20260806_0009`。
 
@@ -137,9 +151,9 @@ main 分支在 P06a 之上加入后台回复 Worker（P06b），新增迁移 `20
 - **幂等（诚实声明）：** 每次回复携带飞书回复 API 的 `uuid` 幂等键（Outbox 行 ID），1 小时内重发由飞书去重；极端情况下（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过 1 小时）用户可能收到重复回复，但**绝不会**重复执行业务或重复记账。
 - **回退：** 代码回退到含 `0008` 的提交即可关闭 Reply Worker（若 `REPLY_WORKER_ENABLED=false` 不启用）与 `0009` 新增列的行为；若已运行 `0009`，数据库需显式 `alembic downgrade 20260806_0008`（丢弃投递元数据，意图不丢失），或先备份后处理。
 
-## 开发中 main（P06c Readiness）
+## v0.2.1：Readiness（P06c）
 
-P06c 不新增迁移，Alembic head 仍为 `20260806_0009`。升级代码并重启后可使用
+P06c 不新增迁移（v0.2.1 head 为 `20260806_0011`）。升级代码并重启后可使用
 `GET /readyz` 检查 PostgreSQL、数据库 revision、已启用的 Event / Reply Worker，以及
 WebSocket 模式下的接收器。数据库未初始化、revision 落后或领先、代码存在多个 head、
 Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 HTTP 503。

@@ -2,7 +2,7 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
-## [Unreleased]
+## [0.2.1] - 2026-08-06
 
 ### Added (v0.2.1 — guarded manual event replay; P06e)
 
@@ -81,7 +81,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 - Worker logs include `event_id`, `status`, `attempt_count`, a shortened owner label, retry time, and `error_code`, never the message body or payload.
 - Reply outbox rows and reply worker logs carry the same discipline: a redacted, length-capped `result_summary`, and logs that never include reply text, financial body, file bytes, base64, full card JSON, credentials, or `Authorization` headers.
 
-### Known limitations (v0.2.1 is not finished)
+### Known limitations (v0.2.1)
 
 - **Transactional Outbox (P06a) + Reply Worker (P06b) are provided:** business changes and reply intents commit atomically, a crashed event converges to `succeeded` without re-running business, and committed replies are delivered by the background reply worker with a lease, exponential-backoff retry, and reply `dead` handling.
 - **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal) and a web admin UI / outbox visualization. Guarded operator event replay is CLI-only; readiness and terminal retention cleanup are available.

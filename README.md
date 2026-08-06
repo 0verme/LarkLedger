@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-## 当前能力（v0.2.0）
+## 当前能力（v0.2.1）
 
 - **文字记账**，成功回复含用户内唯一五位短 ID（`#XXXXX`）
 - **最近账目 / 单笔详情**（例如 `最近10笔`、`查看 #XXXXX`）
@@ -17,6 +17,7 @@
 - 汇总、分类月预算、消费报告
 - 图片 / 语音记账（扩展能力，快速路径不要求）
 - 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
+- **可靠投递**：事件 / 回复后台 Worker、事务性回复 Outbox、PostgreSQL 租约与指数退避重试、readiness、终态清理与受控人工事件重放
 - 自托管：FastAPI、PostgreSQL、Docker Compose
 
 完整消息示例见[用户手册](docs/help.md)。
@@ -27,7 +28,7 @@
 - 重度飞书用户，希望**自托管**个人账本
 - 首次部署只想尽快完成**一笔纯文字记账**
 
-不适合：需要 Web 管理页、共享账本、强一致投递保证（业务写入与事件状态尚未原子一致，见下方限制与路线）。事件处理失败会自动重试并最终进入 dead。
+不适合：需要 Web 管理页、共享账本、图片 / 语音 / 批量写入前确认（规划 v0.3.0）。可靠投递（事件 / 回复 Worker、事务性 Outbox）已在 v0.2.1 实现，但**仍不**宣称「绝不重复记账」或「绝对零重复回复」（见下方已知限制）。
 
 ## 快速开始（推荐）
 
@@ -177,12 +178,10 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 路线（无具体发布日期承诺）：
 
 ```text
-v0.2.1：可靠投递（Event / Reply Worker、Transactional Outbox、readiness、
-        终态保留清理与受控事件重放已完成；结果回放为内部能力）
-v0.3.0：高风险确认（图片、语音、批量等）
+v0.3.0：高风险确认（图片、语音、批量等写入前确认）
 ```
 
-镜像与版本：当前正式版本为 **v0.2.0**。预构建镜像：`ghcr.io/0verme/larkledger:0.2.0`（也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.2.1**。预构建镜像：`ghcr.io/0verme/larkledger:0.2.1`（亦有 `0.2` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -232,8 +231,8 @@ pytest --cov
 ## 使用预构建镜像（可选）
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.2.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.2.0"
+export LARK_LEDGER_IMAGE_TAG=0.2.1
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.2.1"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -248,7 +247,7 @@ curl http://127.0.0.1:8000/healthz
 - [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
 - [架构说明](docs/architecture.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md) · [v0.2.0 发布说明](.github/release-notes/v0.2.0.md)
+- [变更日志](CHANGELOG.md) · [v0.2.1 发布说明](.github/release-notes/v0.2.1.md) · [v0.2.0 发布说明](.github/release-notes/v0.2.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 
