@@ -56,13 +56,14 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 - Event rows store only a single-line error summary with credentials (URL passwords, Authorization headers, Bearer tokens) redacted and a 512-character cap; full tracebacks are never persisted.
 - Worker logs include `event_id`, `status`, `attempt_count`, a shortened owner label, retry time, and `error_code`, never the message body or payload.
+- Reply outbox rows and reply worker logs carry the same discipline: a redacted, length-capped `result_summary`, and logs that never include reply text, financial body, file bytes, base64, full card JSON, credentials, or `Authorization` headers.
 
 ### Known limitations (v0.2.1 is not finished)
 
-- **Transactional Outbox is provided (P06a):** business changes and reply intents commit atomically, so a successful business write is always matched by a durable `reply_outbox` row and a crashed event converges to `succeeded` without re-running business.
-- **Still missing (P06b):** a background reply worker, reply auto-retry, outbox lease / `FOR UPDATE SKIP LOCKED` claim loop, reply `dead` handling, user result replay, manual resend, and a complete readiness API. Today the processor sends each committed intent once synchronously; a failed send marks the outbox `failed` and waits for a future mechanism.
+- **Transactional Outbox (P06a) + Reply Worker (P06b) are provided:** business changes and reply intents commit atomically, a crashed event converges to `succeeded` without re-running business, and committed replies are delivered by the background reply worker with a lease, exponential-backoff retry, and reply `dead` handling.
+- **Still missing (later work packages):** a user-visible result replay / manual-resend command (`OutboxReplayService` is internal), `dead`-event human replay, a web admin UI / outbox visualization, a complete readiness API, and terminal-state auto-cleanup.
 - **Pre-business error / notice replies** (e.g. "图片识别功能尚未配置", stage error prompts) are still sent directly and are **not** persisted to the outbox.
-- CSV file send failures are recorded in the outbox and the v0.2.0 fallback notice is sent; they are not auto-retried in this version.
+- **Extreme duplicate-reply window (disclosed):** if Feishu sends successfully but the local `sent` mark is lost and the re-send is more than 1 hour later (past the Feishu `uuid` dedup window), a duplicate reply may reach the user — it can never cause duplicate business execution or double bookkeeping.
 - The release must not claim "never double-bookkeeps"; the `(source_message_id, source_item_index)` unique constraint remains the fallback guard.
 
 ## [0.2.0] - 2026-08-05
