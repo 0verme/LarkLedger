@@ -492,8 +492,9 @@ async def test_event_state_migration_roundtrip(
         get_settings.cache_clear()
         await asyncio.to_thread(_run_migrations, "20260805_0006")
 
-        # Seed pre-0007 rows exactly as v0.2.0 would have left them.
-        async with scratch_engine.connect() as conn:
+        # Seed pre-0007 rows exactly as v0.2.0 would have left them. begin()
+        # commits on exit; engine.connect() would roll the inserts back.
+        async with scratch_engine.begin() as conn:
             await conn.execute(
                 text(
                     "INSERT INTO processed_events "
