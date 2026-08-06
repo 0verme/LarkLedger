@@ -121,10 +121,11 @@ Webhook URL: `https://your-domain/webhooks/feishu`. Webhook remains a supported 
 
 ## Known limitations
 
-Still **claim-first** synchronous processing—do not describe this as reliable delivery:
+Do **not** describe this as "never loses messages / never double-bookkeeps":
 
-- Failed events are **not** automatically retried
+- Failed events **are** automatically retried (exponential backoff, default max 3 attempts) and move to `dead` when exhausted or permanently broken; but there is **no Transactional Outbox**—business writes and the event status are **not** atomic, and the existing source-message uniqueness constraint backs the dedup on retry. No claim of "never double-bookkeeps".
 - Successful ledger writes with failed replies are **not** auto-compensated
+- There is **no** human replay command for `dead` events
 - Image / voice / batch paths have **no** pre-write confirmation flow yet
 - Failed CSV file delivery is **not** auto-retried
 - No web admin UI, no shared ledgers
@@ -133,7 +134,7 @@ Still **claim-first** synchronous processing—do not describe this as reliable 
 Roadmap themes (no promised ship dates):
 
 ```text
-v0.2.1: reliable delivery (state machine / worker / outbox)
+v0.2.1: reliable delivery (event worker / lease / retry / dead done; outbox and reply compensation still missing)
 v0.3.0: high-risk confirmation (image / voice / batch, etc.)
 ```
 

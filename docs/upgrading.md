@@ -95,4 +95,14 @@ PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.0"`。
 - **行为：** 当前版本**没有** Worker，`next_attempt_at` / `lease_owner` / `lease_expires_at` 保持 NULL；失败事件只记录脱敏的单行 `result_summary`。**这仍是 claim-first，不代表可靠投递已经完成。**
 - **降级数据损失：** `alembic downgrade` 删除上述新列与索引，丢弃重试 / 租约 / 结果元数据与定位列；`payload_json` 与 `status` 保留。
 
+## 开发中 main（P05b 事件 Worker）
+
+main 分支已加入后台事件 Worker（P05b），**本阶段不新增迁移**，复用 `20260806_0007` 的字段与索引。
+
+- **默认行为变化：** `LARK_LEDGER_WORKER_ENABLED` 默认 `true`。升级后入口（Webhook 后台任务 / WebSocket 回调）只负责领取事件并立即返回，处理由进程内 Worker 完成（领取 → 租约 → 指数退避重试 → dead）。若想保持 v0.2.0 的进程内同步处理，显式设置 `LARK_LEDGER_WORKER_ENABLED=false`。
+- **存量事件：** 升级前已处于 `received` 的事件会被 Worker 自动领取处理；已 `succeeded` / `dead` / `legacy_succeeded` 的事件不会被领取。历史 `failed` 且未设 `next_attempt_at` 的行不会被 Worker 自动捞取（避免重放旧错误），如需处理请人工介入（本版本无重放命令）。
+- **失败处理：** 可重试错误写入 `failed` 并按指数退避重试（默认最多 3 次），永久错误（payload 损坏 / 契约错误 / 重复约束 / 非 429 的 4xx）直接进入 `dead`。崩溃后未完成的事件在租约过期（默认 300 秒）后由其他 Worker 接管。
+- **幂等边界（诚实声明）：** 本版本没有 Transactional Outbox，业务写入与事件状态不是原子提交；重复处理由现有 `(source_message_id, source_item_index)` 唯一约束阻止重复入账，但**不**宣称"绝不重复记账"。没有回复自动补偿、没有人工重放 `dead`。
+- **回退：** 代码回退到 `v0.2.0` tag 即可关闭 Worker 行为；数据库结构不变，无需降级。
+
 当前 Alembic head：`20260806_0007`。

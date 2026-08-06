@@ -10,7 +10,8 @@
 | --- | --- |
 | FastAPI 应用 | 管理生命周期，提供 `GET /healthz` 和 Webhook 入口 |
 | Webhook / 长连接接收器 | 接收飞书事件并转换为统一事件结构 |
-| `EventService` | 按 `event_id` 抢占并去重事件，调用消息处理器 |
+| `EventService` | 按 `event_id` 抢占并去重事件；Worker 模式下只领取，同步模式下调用消息处理器 |
+| `EventWorker` | 后台事件 Worker（P05b）：`FOR UPDATE SKIP LOCKED` 领取、数据库租约、指数退避重试与 dead 处理 |
 | `MessageProcessor` | 归一化文字、图片、音频和富文本消息，下载媒体、调用 AI、执行业务动作并回复飞书 |
 | `AIInterpreter` | 按独立配置路由文字、单图/多图和语音服务，解析单笔、复杂文字批量或最多 30 笔图片流水，并生成聚合消费建议 |
 | `ExchangeRateService` | 获取并缓存外币到默认账本币种的最新参考汇率 |
@@ -44,35 +45,53 @@ Webhook 端点完成来源校验、请求解析和后台任务登记后立即确
 
 收到事件后，`EventService` 在 **T1（领取事务）** 中把 `event_id` 与一份版本化的可重放 JSON 载荷写入 `processed_events` 并提交。主键冲突表示事件已经领取，本次投递不再处理。新账目还会保存飞书 `message_id`，并通过唯一约束避免同一来源消息重复创建。
 
-### 事务边界（v0.2.0 / P00）
+### 事务边界（v0.2.0 / P00 + v0.2.1 / P05b）
 
 ```text
 T1  claim：insert processed_events(event_id, payload_json, …) → commit
-T2  process：从数据库读回载荷 → 反序列化为业务事件 → 同步 MessageProcessor.process
+T2  process：从数据库读回载荷 → 反序列化为业务事件 → 处理
 ```
 
-- T1 成功只表示“事件已被领取且载荷已落库”，**不是**业务成功。
-- T2 仍可能失败（AI、数据库、回复等）。失败时状态可记为 `failed`，写入有限的 `last_error_code`（异常类型名）与单行、脱敏、截断的 `result_summary`，但 **不会** 取消 claim。
-- **当前仍是 claim-first**：同一 `event_id` 的重投不会自动重试 T2。
-- **本版本没有** Worker 轮询、lease、自动 retry、死信队列或回复 Outbox；**不**宣称 at-least-once，也**不**解决“已入账但回复失败”。
-- 未来 **v0.2.1** 将基于已持久化的 payload 与状态实现可靠投递与补偿。
+两种执行模式（由 `LARK_LEDGER_WORKER_ENABLED` 选择，生产默认开启）：
 
-### 事件状态模型（v0.2.1 / P05a 地基）
+- **Worker 模式（默认）**：入口（Webhook 后台任务 / WebSocket 回调）只执行 T1，把事件写入 `received` 后立即返回，**不等待** AI、飞书或账本处理。后台 `EventWorker` 用 `SELECT … FOR UPDATE SKIP LOCKED` 原子领取 `received`、已到期重试或租约过期的行，写入 `processing`、`lease_owner`、`lease_expires_at` 并 `attempt_count+1` 后提交，再加载 payload 执行 T2。重复 `event_id` 仍立即返回去重结果。
+- **同步模式（`WORKER_ENABLED=false`）**：保留 v0.2.0 的 claim-first 路径，T2 在领取后立即执行。供单元测试与关闭 Worker 的部署使用。
+
+两种模式互斥：同一进程只会启用其中一种，不存在”同步处理一次、Worker 又处理一次”的竞争。
+
+- T1 成功只表示”事件已被领取且载荷已落库”，**不是**业务成功。
+- T2 失败时：Worker 模式按错误分类写入 `failed`（带指数退避的 `next_attempt_at`）或 `dead`（永久错误或达到最大尝试次数）；同步模式写入 `failed` 与脱敏的 `result_summary`，**不会**取消 claim。
+- **本版本没有** Transactional Outbox、回复自动补偿或人工重放；业务写入与 `succeeded` 状态**不是**原子提交。若业务事务已提交而状态更新未提交，重试可能再次执行处理器，但现有 `(source_message_id, source_item_index)` 唯一约束会阻止重复入账（详见下文「事件 Worker」）。
+
+### 事件状态模型（v0.2.1 / P05a 地基 + P05b Worker）
 
 `EventProcessStatus` 集中定义状态集合，业务代码只写枚举成员，不散落任意字符串：
 
 | 状态 | 语义 | 分类 |
 | --- | --- | --- |
-| `received` | 已领取、载荷已落库，尚未处理 | 初始状态；未来 Worker 可捞取 |
-| `processing` | 一次处理尝试正在进行 | 处理中（不可直接捞取） |
+| `received` | 已领取、载荷已落库，尚未处理 | 初始状态；Worker 可捞取 |
+| `processing` | 一次处理尝试正在进行（含租约） | 处理中；租约过期后可被接管 |
 | `succeeded` | 处理成功 | 终态 |
-| `failed` | 某次尝试失败；可重试性由 `attempt_count` / `next_attempt_at` 表达 | 可重试候选；未来 Worker 可捞取 |
-| `dead` | 重试耗尽（保留终态；本版本无代码写入） | 终态 |
+| `failed` | 某次尝试失败，重试未到期 | 可重试候选；`next_attempt_at` 到期后 Worker 可捞取 |
+| `dead` | 重试耗尽或永久错误，Worker 写入 | 终态 |
 | `legacy_succeeded` | 迁移前无载荷的历史行，不可重放 | 终态 |
 
-同步路径写入 `received → processing → succeeded | failed`，进入 `processing` 时 `attempt_count` 加一。`next_attempt_at`、`lease_owner`、`lease_expires_at` 为未来 Worker 的调度 / 租约字段，**本版本保持 NULL**：没有自动 retry、没有 dead 处理、没有租约续期。**P05a 只完成了数据模型地基，不代表可靠投递已经可用。**
+Worker 写入 `received → processing → succeeded | failed | dead`，每次进入 `processing`（含租约过期后的重新领取）`attempt_count` 加一。`next_attempt_at`、`lease_owner`、`lease_expires_at` 由 Worker 在领取 / 失败时写入，成功或失败后租约字段清空。
 
 错误摘要 `result_summary` 只保存单行文本：取异常第一行、长度上限 512 字符，并脱敏 URL 中的密码、`Authorization` 头与 `Bearer` 令牌；完整异常栈与消息正文不会持久化。
+
+### 事件 Worker（v0.2.1 / P05b）
+
+后台 `EventWorker` 是一个 asyncio 任务，随 FastAPI lifespan 启动和停止；数据库是唯一队列与协调存储，**不引入** Redis / Celery / RQ / Kafka / RabbitMQ。多个进程或多个副本同时运行时，每个进程都可成为 Worker，但数据库租约保证并发安全。
+
+- **领取（claim）：** 单个事务内执行 `SELECT … FOR UPDATE SKIP LOCKED` 选取候选行（`received`；`failed` 且 `next_attempt_at` 已到期；`processing` 且租约已过期，且 `payload_json` 非空），写入 `processing`、`lease_owner`、`lease_expires_at`，`attempt_count + 1` 并提交，然后才加载 payload 执行业务处理。两个 Worker 不会领取同一行；崩溃后未完成的行在租约过期后由其他 Worker 接管。
+- **租约：** 只有持有租约的 Worker 能提交本次结果（完成或失败都带 `status='processing' AND lease_owner=<owner>` 条件）。租约过期或被接管后，旧 Worker 的更新 rowcount 为 0，不会覆盖新 Worker 的状态。默认租约 300 秒，无续期；若单条处理可能超过租约，调大 `LARK_LEDGER_EVENT_LEASE_SECONDS`。
+- **attempt 语义：** 每次进入 `processing`（含租约接管）`attempt_count + 1`；最大尝试次数包含首次处理；达到上限后失败进入 `dead`。
+- **重试分类：** 永久错误（payload 无法解析 / 版本不支持 / `ValueError`/`TypeError` 契约错误 / 重复约束 `IntegrityError` / 非 408/429 的 4xx）直接进入 `dead`；其余默认视为可重试（网络、超时、429、5xx、数据库临时故障），写入 `failed` 并按指数退避安排 `next_attempt_at`。分类策略保守且可解释，文档见代码注释。
+- **退避：** `min(base × 2^(attempt-1), max)`，默认 base 2 秒、max 3600 秒，并带约 10% 随机抖动避免多个事件同时重试。测试使用可注入时钟，不真实等待。
+- **dead：** 永久错误、payload 缺失 / 损坏 / 版本不支持，或达到最大尝试次数时写入 `dead`，清空租约与 `next_attempt_at`，保留脱敏错误摘要；不再自动领取。**本版本不提供人工重放 dead**（属后续工作包）。
+
+**幂等与重复记账边界（诚实声明）：** 本版本**没有** Transactional Outbox，业务写入与 `succeeded` 状态**不是**原子提交。若业务事务已提交而状态更新失败，重试可能再次运行处理器。现有账本层的 `(source_message_id, source_item_index)` 唯一约束会在重试时抛出 `IntegrityError`，阻止重复入账并把事件移入 `dead`；改、删、恢复动作对已应用的结果是幂等的（重复执行会返回"没有变化 / 已删除"）。因此**不**宣称"绝不重复记账"，发布文案不得使用 at-least-once 之外更强的主张。
 
 ### 载荷内容与隐私
 
@@ -85,7 +104,7 @@ T2  process：从数据库读回载荷 → 反序列化为业务事件 → 同�
 
 ### 媒体重取限制
 
-图片与语音处理在运行时通过飞书 `messages/{message_id}/resources/{file_key}` 重新下载。载荷只保存资源标识。飞书侧资源是否长期可下载取决于开放平台保留策略与机器人权限；**P00 不保证**历史媒体在任意时刻仍可取回。未来 Worker 重放媒体事件时可能因资源过期而失败，需要单独运维策略。
+图片与语音处理在运行时通过飞书 `messages/{message_id}/resources/{file_key}` 重新下载。载荷只保存资源标识。飞书侧资源是否长期可下载取决于开放平台保留策略与机器人权限；**不保证**历史媒体在任意时刻仍可取回。Worker 重试或重放媒体事件时可能因资源过期而失败，会进入重试直至 dead，需要单独运维策略。
 
 ### 历史行
 
@@ -121,10 +140,10 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 
 ## 运行与故障边界
 
-- 应用生命周期负责启动或停止长连接，并在关闭时释放数据库引擎。
-- Webhook 后台任务和长连接消息任务都运行在 Web 进程内；事件载荷已写入 PostgreSQL，但 **v0.2.0 仍无跨进程 Worker 消费这些载荷**。
+- 应用生命周期负责启动或停止长连接与事件 Worker，并在关闭时释放数据库引擎。Worker 关闭时会请求停止、取消任务并等待结束，不悬挂后台任务。
+- 默认（`WORKER_ENABLED=true`）下，Webhook 后台任务和长连接消息任务只负责领取事件；业务处理由进程内事件 Worker 执行。`WORKER_ENABLED=false` 时回到 v0.2.0 的进程内同步处理路径。多进程 / 多副本部署时每个进程都是 Worker，靠数据库租约与 `SKIP LOCKED` 保证并发安全。
 - 报告图片渲染或上传失败时会发送不含图片的文字卡片；建议生成失败时使用本地规则生成后备建议。
-- CSV 导出上传或发送失败时回复可理解错误；**不会**自动重试（可靠投递属后续版本）。临时导出文件在上传结束或失败后删除。
+- CSV 导出上传或发送失败时回复可理解错误；**不会**自动重试（回复补偿属后续工作包）。临时导出文件在上传结束或失败后删除。
 - 复杂文字以及单图或多图中的批量账目先逐项严格校验，再用数据库保存点隔离单项写入，最终统一提交并返回成功、失败和收支合计。复杂文字中的预算也逐项隔离处理。所有批量账目共用原始消息的 `message_id` 和逐项索引，沿用来源幂等约束。完整异常只记录到带错误编号和处理阶段的日志中，用户回复仅包含可执行的分类错误。
 - 基础 `compose.yaml` 只启动应用；`compose.dev.yaml` 可叠加本地 PostgreSQL 16。源码 Compose 在启动 Uvicorn 前执行 `alembic upgrade head`。
-- 高可用部署需要自行设计持久队列、重试、可观测性、数据库备份和凭据轮换。当前版本仍为 claim-first，**不是**可靠投递。
+- 高可用部署仍需自行设计备份与凭据轮换。事件重试、租约接管和 dead 由 Worker 自动完成，但**没有** Transactional Outbox、回复自动补偿或人工重放；业务写入与事件状态不是原子提交，重复处理由现有账本唯一约束兜底。**不**宣称"绝不重复记账"。

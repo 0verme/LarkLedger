@@ -30,35 +30,48 @@ class EventProcessor(Protocol):
 class EventService:
     """Shared idempotent entry point for all Feishu event transports.
 
-    Transaction boundary (v0.2.0 / P00):
+    Two execution modes, selected once at construction from
+    ``worker_enabled``:
 
-    * **T1 — claim:** insert ``processed_events`` with a versioned, normalized
-      payload and commit. Primary-key conflict means the event was already claimed.
-    * **T2 — process:** synchronously run the processor on a payload reloaded from
-      the database (round-trip contract for future workers).
+    * **Worker mode (``worker_enabled=True``, production default):** entry
+      points only **claim** — insert ``processed_events`` with a versioned,
+      normalized payload and commit. A background ``EventWorker`` (P05b) then
+      claims the row, reloads the payload from the database, and processes it
+      with retry / lease / dead-letter handling. Webhook responses and
+      WebSocket callbacks never wait for AI or ledger work.
+    * **Sync mode (``worker_enabled=False``):** the legacy claim-first path
+      runs the processor synchronously right after the claim, exactly as in
+      v0.2.0. This is retained for testing and for deployments that disable the
+      worker. T2 failures are recorded as ``failed`` with a safe
+      ``result_summary`` and are **not** retried.
 
-    T2 failures do **not** unclaim the event and are **not** retried in this
-    version. Status may be ``failed`` with a safe ``result_summary`` for
-    observability only. The event state model (P05a) records ``attempt_count``
-    but no worker, lease, retry, or dead-letter handling runs in this version.
+    Transaction boundary (v0.2.0 / P00) in both modes:
+
+    * **T1 — claim:** insert with payload and commit. Primary-key conflict means
+      the event was already claimed (still returns the dedup result immediately).
+    * **T2 — process:** run the processor on a payload reloaded from the
+      database (round-trip contract), owned by the worker in worker mode.
     """
 
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
         processor: EventProcessor,
+        *,
+        worker_enabled: bool = False,
     ) -> None:
         self._session_factory = session_factory
         self._processor = processor
+        self._worker_enabled = worker_enabled
 
-    async def handle(
+    async def claim(
         self,
         event_id: str,
         event: dict[str, Any],
         *,
         transport: str,
     ) -> bool:
-        """Claim and process an event, returning False when it was already claimed."""
+        """T1 claim only; the worker owns processing. False when already claimed."""
         received_at = datetime.now(UTC)
         message_id = message_id_from_event(event)
         try:
@@ -80,8 +93,8 @@ class EventService:
             )
             raise
 
-        # T1: claim with durable payload. attempt_count starts at 0; the
-        # PROCESSING transition below counts the first attempt.
+        # T1: claim with durable payload. attempt_count starts at 0; the worker
+        # (or the sync PROCESSING transition) counts the first attempt.
         async with self._session_factory() as session:
             session.add(
                 ProcessedEvent(
@@ -102,6 +115,18 @@ class EventService:
             except IntegrityError:
                 await session.rollback()
                 return False
+        return True
+
+    async def handle(
+        self,
+        event_id: str,
+        event: dict[str, Any],
+        *,
+        transport: str,
+    ) -> bool:
+        """Claim and synchronously process an event (legacy sync path)."""
+        if not await self.claim(event_id, event, transport=transport):
+            return False
 
         await self._mark_status(event_id, EventProcessStatus.PROCESSING)
 
@@ -129,6 +154,21 @@ class EventService:
         transport: str,
     ) -> None:
         message_id = message_id_from_event(event)
+        if self._worker_enabled:
+            # Worker mode: claim only. Processing happens in the background
+            # EventWorker, so this returns as soon as the durable payload is
+            # stored and never blocks on AI, Feishu, or ledger work.
+            try:
+                await self.claim(event_id, event, transport=transport)
+            except Exception:
+                logger.exception(
+                    "failed to claim Feishu event for worker "
+                    "event_id=%s transport=%s message_id=%s",
+                    event_id,
+                    transport,
+                    message_id,
+                )
+            return
         try:
             await self.handle(event_id, event, transport=transport)
         except Exception:

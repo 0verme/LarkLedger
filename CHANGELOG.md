@@ -4,19 +4,36 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
-### Added (v0.2.1 foundation — event state model only)
+### Added (v0.2.1 — event worker, lease, retry, dead; P05b)
 
-- Event state model foundation (P05a): `processed_events` gains `attempt_count`, `next_attempt_at`, `lease_owner`, `lease_expires_at`, `result_summary`, `source_message_id`, `user_open_id`, and `updated_at`; the `dead` terminal status is defined; migration `20260806_0007` backfills existing rows safely (already-processed rows get `attempt_count=1`, legacy payload-less rows stay non-replayable). Indexes support the future worker's status/retry-window queries and operator lookups by source message or user.
-- The sync path now records `attempt_count` (each transition to `processing` counts one attempt) and a safe, length-capped, credential-redacted `result_summary`; successful events clear error fields.
-- **Scope note:** this is only the data-model groundwork for v0.2.1 reliable delivery. There is still **no Worker**, **no automatic retry or dead-letter processing**, **no Transactional Outbox**, and **no reply compensation**; claim-first behavior is unchanged.
+- Background PostgreSQL-driven **event worker** (`EventWorker`) started and stopped by the FastAPI lifespan. It claims `processed_events` rows in one transaction with `SELECT ... FOR UPDATE SKIP LOCKED`, writes `processing` / `lease_owner` / `lease_expires_at`, increments `attempt_count`, commits, then runs the `MessageProcessor` on the payload reloaded from the database. No Redis / Celery / RQ / Kafka / RabbitMQ; the database is the only queue.
+- **Entry-point mode switch:** `LARK_LEDGER_WORKER_ENABLED` (default `true`) makes Webhook / WebSocket entries **claim only** and return immediately; processing moves to the worker. `false` restores the legacy in-process synchronous path. The two modes are mutually exclusive, so an event is never processed twice by both paths. Duplicate `event_id` still returns the dedup result immediately.
+- **Lease semantics:** only the current `lease_owner` may write a processing outcome (guarded by `status='processing' AND lease_owner=<owner>`); an expired lease lets another worker reclaim the event (`attempt_count` increments again), and a stale worker can never overwrite the new owner's state. Lease duration defaults to 300 s; no renewal in this version.
+- **Retry with exponential backoff:** retryable failures (network / timeout / 429 / 5xx / transient DB) are recorded as `failed` with `next_attempt_at = now + min(base × 2^(attempt-1), max)` (defaults 2 s / 3600 s) plus ~10% jitter. Unknown errors are conservatively retried.
+- **Dead-lettering:** permanent errors (unparseable / unsupported-version payload, contract `ValueError` / `TypeError`, duplicate-constraint `IntegrityError`, non-429/408 4xx) or an exhausted attempt budget (default `event_max_attempts=3`, first attempt counts as 1) move the event to `dead`, clearing the lease and retaining the redacted error summary. No human replay in this version.
+- **Crash recovery:** events left `processing` with an expired lease are reclaimed by another worker; a cancelled worker leaves its row for later takeover.
+- **New settings:** `LARK_LEDGER_WORKER_ENABLED`, `WORKER_POLL_INTERVAL_SECONDS` (1.0), `WORKER_BATCH_SIZE` (10), `EVENT_MAX_ATTEMPTS` (3), `EVENT_LEASE_SECONDS` (300), `EVENT_RETRY_BASE_SECONDS` (2.0), `EVENT_RETRY_MAX_SECONDS` (3600).
+
+### Added (v0.2.1 foundation — event state model only; P05a)
+
+- Event state model foundation (P05a): `processed_events` gains `attempt_count`, `next_attempt_at`, `lease_owner`, `lease_expires_at`, `result_summary`, `source_message_id`, `user_open_id`, and `updated_at`; the `dead` terminal status is defined; migration `20260806_0007` backfills existing rows safely (already-processed rows get `attempt_count=1`, legacy payload-less rows stay non-replayable). Indexes support the worker's status/retry-window queries and operator lookups by source message or user.
+- The sync path records `attempt_count` (each transition to `processing` counts one attempt) and a safe, length-capped, credential-redacted `result_summary`; successful events clear error fields.
 
 ### Changed
 
-- Head migration is now `20260806_0007`.
+- Head migration is now `20260806_0007`. P05b adds **no new migration**; it uses the P05a fields and indexes.
+- `EventService` gains a `claim()` (T1-only) path and routes `handle_safely` by worker mode; the synchronous `handle()` is retained for `WORKER_ENABLED=false` and tests.
 
 ### Security
 
 - Event rows store only a single-line error summary with credentials (URL passwords, Authorization headers, Bearer tokens) redacted and a 512-character cap; full tracebacks are never persisted.
+- Worker logs include `event_id`, `status`, `attempt_count`, a shortened owner label, retry time, and `error_code`, never the message body or payload.
+
+### Known limitations (v0.2.1 is not finished)
+
+- **No Transactional Outbox:** business writes and the `succeeded` event status are **not** atomic. If a business transaction commits but the status update fails, a retry may re-run the processor; the existing `(source_message_id, source_item_index)` unique constraint prevents duplicate ledger entries. The release must not claim "never double-bookkeeps".
+- **No reply compensation** (in-flight business commit + failed Feishu reply is not compensated) and **no human replay** of `dead` events.
+- No pre-write confirmation for image / voice / batch; CSV file send failures are not auto-retried; no complete readiness API.
 
 ## [0.2.0] - 2026-08-05
 

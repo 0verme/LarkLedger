@@ -23,6 +23,17 @@ class Settings(BaseSettings):
     currency: str = "CNY"
     event_mode: EventMode = EventMode.WEBHOOK
 
+    # Event worker (P05b): background PostgreSQL-driven worker with lease, retry,
+    # and dead-letter handling. When enabled, entry points only claim events and
+    # the worker processes them; when disabled, the legacy synchronous path runs.
+    worker_enabled: bool = True
+    worker_poll_interval_seconds: float = Field(default=1.0, gt=0, le=3600)
+    worker_batch_size: int = Field(default=10, ge=1, le=100)
+    event_max_attempts: int = Field(default=3, ge=1, le=100)
+    event_lease_seconds: float = Field(default=300.0, gt=0, le=86400)
+    event_retry_base_seconds: float = Field(default=2.0, gt=0, le=86400)
+    event_retry_max_seconds: float = Field(default=3600.0, gt=0, le=86400)
+
     lark_app_id: str = ""
     lark_app_secret: str = ""
     lark_verification_token: str = ""

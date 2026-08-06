@@ -112,12 +112,13 @@ class ProcessedEvent(Base):
     may have ``payload_json IS NULL`` and ``status=legacy_succeeded`` and are not
     replayable.
 
-    Reliable-delivery state (v0.2.1 / P05a): ``attempt_count``, ``next_attempt_at``,
-    ``lease_owner``, ``lease_expires_at``, and ``result_summary`` back the future
-    worker, retry, lease, and dead-letter model. The current sync path only writes
-    ``attempt_count`` and ``result_summary``; lease / scheduling columns stay NULL
-    until a worker exists. ``source_message_id`` / ``user_open_id`` are
-    denormalized at claim time for operator lookups.
+    Reliable-delivery state (v0.2.1 / P05a + P05b): ``attempt_count``,
+    ``next_attempt_at``, ``lease_owner``, ``lease_expires_at``, and
+    ``result_summary`` back the event worker's retry, lease, and dead-letter
+    model. The worker writes the lease / scheduling columns on claim and clears
+    them on completion or failure. The legacy sync path (``worker_enabled=false``)
+    writes only ``attempt_count`` and ``result_summary``. ``source_message_id`` /
+    ``user_open_id`` are denormalized at claim time for operator lookups.
     """
 
     __tablename__ = "processed_events"

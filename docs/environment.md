@@ -128,6 +128,13 @@ docker compose -f compose.yaml -f compose.dev.yaml down -v
 | AI 超时秒 | `45`（0–180） | `45` | 有默认 |
 | 汇率 API / 缓存 TTL | frankfurter / `3600` | 同左 | 外币时相关 |
 | 报告字体路径 | `None` | 空 | 可选 |
+| 事件 Worker 开关 `WORKER_ENABLED` | `true` | `true` | 有默认（生产默认开启；关闭则回到进程内同步路径） |
+| Worker 轮询间隔秒 `WORKER_POLL_INTERVAL_SECONDS` | `1.0` | `1.0` | 有默认 |
+| Worker 批量大小 `WORKER_BATCH_SIZE` | `10` | `10` | 有默认 |
+| 事件最大尝试 `EVENT_MAX_ATTEMPTS` | `3` | `3` | 有默认（首次处理计 1 次） |
+| 事件租约秒 `EVENT_LEASE_SECONDS` | `300` | `300` | 有默认（崩溃事件在租约过期后被接管） |
+| 重试退避基数秒 `EVENT_RETRY_BASE_SECONDS` | `2.0` | `2.0` | 有默认 |
+| 重试退避上限秒 `EVENT_RETRY_MAX_SECONDS` | `3600` | `3600` | 有默认 |
 | 日志级别 | **无此配置项** | — | — |
 | Webhook 监听 | 进程内 `0.0.0.0:8000`（Compose 映射 `8000:8000`） | — | WebSocket 仅用于 healthz 时可内网访问 |
 | Compose 应用服务名 | `app` | — | — |
@@ -381,8 +388,9 @@ uvicorn lark_ledger.main:app --reload
 
 与产品手册一致，部署文档也不使用「可靠投递」「永不丢消息」等措辞：
 
-- 仍采用 **claim-first**：处理失败不会自动重试
+- 事件处理失败会由 Worker 自动重试（指数退避）并最终进入 `dead`；**但没有** Transactional Outbox：业务写入与事件状态不是原子提交，重复处理由现有账本来源唯一约束兜底，不宣称"绝不重复记账"
 - 入账成功但回复失败不会自动补偿
+- 没有人工重放 `dead` 事件的命令
 - 图片 / 语音 / 批量尚无写入前确认
 - CSV 文件发送失败不会自动重试
 - 无 Web 管理页面、无共享账本
@@ -391,7 +399,7 @@ uvicorn lark_ledger.main:app --reload
 路线主题（**无发布日期承诺**）：
 
 ```text
-v0.2.1：可靠投递
+v0.2.1：可靠投递（事件 Worker / 租约 / 重试 / dead 已完成；Outbox 与回复补偿仍缺）
 v0.3.0：高风险确认
 ```
 

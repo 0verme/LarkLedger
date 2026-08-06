@@ -12,6 +12,7 @@ from lark_ledger.services.events import EventService
 from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.feishu import FeishuClient, MessageProcessor
 from lark_ledger.services.websocket import LongConnectionReceiver
+from lark_ledger.services.worker import EventWorker, EventWorkerStore, generate_owner_id
 
 
 @asynccontextmanager
@@ -31,18 +32,38 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         AIInterpreter(settings),
         exchange_rates=ExchangeRateService(settings),
     )
+    event_service = EventService(
+        SessionFactory, processor, worker_enabled=settings.worker_enabled
+    )
     app.state.processor = processor
-    app.state.event_service = EventService(SessionFactory, processor)
+    app.state.event_service = event_service
+    worker: EventWorker | None = None
     receiver: LongConnectionReceiver | None = None
-    if settings.event_mode is EventMode.WEBSOCKET:
-        receiver = LongConnectionReceiver(settings, app.state.event_service)
-        app.state.long_connection = receiver
-        await receiver.start()
     try:
+        if settings.worker_enabled:
+            worker = EventWorker(
+                EventWorkerStore(SessionFactory),
+                processor,
+                owner_id=generate_owner_id(),
+                batch_size=settings.worker_batch_size,
+                poll_interval_seconds=settings.worker_poll_interval_seconds,
+                max_attempts=settings.event_max_attempts,
+                lease_seconds=settings.event_lease_seconds,
+                retry_base_seconds=settings.event_retry_base_seconds,
+                retry_max_seconds=settings.event_retry_max_seconds,
+            )
+            app.state.event_worker = worker
+            worker.start()
+        if settings.event_mode is EventMode.WEBSOCKET:
+            receiver = LongConnectionReceiver(settings, app.state.event_service)
+            app.state.long_connection = receiver
+            await receiver.start()
         yield
     finally:
         if receiver is not None:
             await receiver.stop()
+        if worker is not None:
+            await worker.stop()
         await engine.dispose()
 
 

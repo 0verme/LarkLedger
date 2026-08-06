@@ -25,9 +25,10 @@ MAX_RESULT_SUMMARY_LENGTH: Final[int] = 512
 class EventProcessStatus(StrEnum):
     """Event status set for reliable delivery (v0.2.1 foundation, P05a).
 
-    The current sync path writes ``received -> processing -> succeeded|failed``.
-    ``dead`` is the reserved terminal state for future workers once retries are
-    exhausted; nothing writes it in this version.
+    The sync path writes ``received -> processing -> succeeded|failed``. The
+    background worker (P05b) also writes ``dead`` once retries are exhausted or
+    an error is permanent. ``legacy_succeeded`` marks pre-payload historical
+    rows that are not replayable.
     """
 
     RECEIVED = "received"
@@ -47,8 +48,10 @@ TERMINAL_STATUSES: Final[frozenset[str]] = frozenset(
     }
 )
 
-#: States a future worker may claim, subject to retry / lease windows
-#: (``next_attempt_at`` / ``lease_expires_at`` and an attempt budget).
+#: States the worker may claim, subject to retry / lease windows
+#: (``next_attempt_at`` / ``lease_expires_at`` and an attempt budget). Expired
+#: ``processing`` rows are also reclaimable; the worker combines this set with
+#: the lease-expiry window when it builds its claim predicate.
 WORKER_CLAIMABLE_STATUSES: Final[frozenset[str]] = frozenset(
     {
         EventProcessStatus.RECEIVED.value,
