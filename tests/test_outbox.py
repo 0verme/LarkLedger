@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -28,7 +29,10 @@ from lark_ledger.outbox import (
 from lark_ledger.services.outbox import ReplyOutboxStore, record_failure_summary
 
 
-async def _factory() -> async_sessionmaker[Any]:
+@pytest_asyncio.fixture
+async def factory() -> async_sessionmaker[Any]:
+    """In-memory SQLite factory; the engine is disposed on teardown so no
+    aiosqlite connection outlives the event loop."""
     engine = create_async_engine(
         "sqlite+aiosqlite://",
         connect_args={"check_same_thread": False},
@@ -36,7 +40,9 @@ async def _factory() -> async_sessionmaker[Any]:
     )
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
-    return async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    yield session_factory
+    await engine.dispose()
 
 
 async def _insert_row(
@@ -110,16 +116,14 @@ def test_card_payload_with_and_without_image() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_has_outbox_reports_committed_rows() -> None:
-    factory = await _factory()
+async def test_has_outbox_reports_committed_rows(factory: async_sessionmaker[Any]) -> None:
     store = ReplyOutboxStore(factory)
     assert await store.has_outbox("evt_none") is False
     await _insert_row(factory, event_id="evt_yes", message_id="om_yes")
     assert await store.has_outbox("evt_yes") is True
 
 
-async def test_load_by_ids_returns_committed_rows() -> None:
-    factory = await _factory()
+async def test_load_by_ids_returns_committed_rows(factory: async_sessionmaker[Any]) -> None:
     row = await _insert_row(factory, event_id="evt_load", message_id="om_load")
     loaded = await store_load(factory, [row.id])
     assert len(loaded) == 1
@@ -131,8 +135,7 @@ async def store_load(factory: async_sessionmaker[Any], ids: list[Any]) -> list[R
     return await ReplyOutboxStore(factory).load_by_ids(ids)
 
 
-async def test_mark_sent_transitions_pending_to_sent() -> None:
-    factory = await _factory()
+async def test_mark_sent_transitions_pending_to_sent(factory: async_sessionmaker[Any]) -> None:
     row = await _insert_row(factory, event_id="evt_sent", message_id="om_sent")
     store = ReplyOutboxStore(factory)
     assert await store.mark_sent(row.id, result_summary="delivered") is True
@@ -145,8 +148,7 @@ async def test_mark_sent_transitions_pending_to_sent() -> None:
     assert reloaded.last_error_code is None
 
 
-async def test_mark_sent_is_idempotent_for_sent_row() -> None:
-    factory = await _factory()
+async def test_mark_sent_is_idempotent_for_sent_row(factory: async_sessionmaker[Any]) -> None:
     row = await _insert_row(
         factory, event_id="evt_sent2", message_id="om_sent2", status=ReplyStatus.SENT.value
     )
@@ -156,8 +158,9 @@ async def test_mark_sent_is_idempotent_for_sent_row() -> None:
     assert await store.mark_failed(row.id, error_code="X", summary="nope") is False
 
 
-async def test_mark_failed_records_redacted_summary_and_attempt() -> None:
-    factory = await _factory()
+async def test_mark_failed_records_redacted_summary_and_attempt(
+    factory: async_sessionmaker[Any],
+) -> None:
     row = await _insert_row(factory, event_id="evt_fail", message_id="om_fail")
     store = ReplyOutboxStore(factory)
     boom = RuntimeError("http://user:sekret@host/path and Bearer abc123XYZ")
@@ -175,8 +178,7 @@ async def test_mark_failed_records_redacted_summary_and_attempt() -> None:
     assert "http://user:***@host/path" in (reloaded.result_summary or "")
 
 
-async def test_mark_failed_truncates_long_summary() -> None:
-    factory = await _factory()
+async def test_mark_failed_truncates_long_summary(factory: async_sessionmaker[Any]) -> None:
     row = await _insert_row(factory, event_id="evt_trunc", message_id="om_trunc")
     store = ReplyOutboxStore(factory)
     long_message = "x" * (MAX_RESULT_SUMMARY_LENGTH + 200)
@@ -188,8 +190,7 @@ async def test_mark_failed_truncates_long_summary() -> None:
     assert len(reloaded.result_summary or "") <= MAX_RESULT_SUMMARY_LENGTH
 
 
-async def test_event_reply_type_unique_violation() -> None:
-    factory = await _factory()
+async def test_event_reply_type_unique_violation(factory: async_sessionmaker[Any]) -> None:
     await _insert_row(factory, event_id="evt_uniq", message_id="om_u", reply_type="text")
     async with factory() as session:
         session.add(
@@ -209,8 +210,7 @@ async def test_event_reply_type_unique_violation() -> None:
         await session.rollback()
 
 
-async def test_outbox_row_links_to_claimed_event() -> None:
-    factory = await _factory()
+async def test_outbox_row_links_to_claimed_event(factory: async_sessionmaker[Any]) -> None:
     async with factory() as session:
         session.add(
             ProcessedEvent(
