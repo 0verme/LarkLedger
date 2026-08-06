@@ -485,9 +485,8 @@ async def test_event_state_migration_roundtrip(
     try:
         # CREATE / DROP DATABASE cannot run inside a transaction block.
         async with maint_engine.connect() as conn:
-            await conn.execution_options(isolation_level="AUTOCOMMIT").execute(
-                text(f'CREATE DATABASE "{scratch}"')
-            )
+            autocommit = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            await autocommit.execute(text(f'CREATE DATABASE "{scratch}"'))
 
         monkeypatch.setenv("LARK_LEDGER_DATABASE_URL", scratch_dsn)
         get_settings.cache_clear()
@@ -627,8 +626,7 @@ async def test_event_state_migration_roundtrip(
         monkeypatch.undo()
         get_settings.cache_clear()
         async with maint_engine.connect() as conn:
-            await conn.execution_options(isolation_level="AUTOCOMMIT").execute(
-                text(f'DROP DATABASE IF EXISTS "{scratch}"')
-            )
+            autocommit = await conn.execution_options(isolation_level="AUTOCOMMIT")
+            await autocommit.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
         await scratch_engine.dispose()
         await maint_engine.dispose()
