@@ -4,6 +4,20 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (v0.2.1 foundation — event state model only)
+
+- Event state model foundation (P05a): `processed_events` gains `attempt_count`, `next_attempt_at`, `lease_owner`, `lease_expires_at`, `result_summary`, `source_message_id`, `user_open_id`, and `updated_at`; the `dead` terminal status is defined; migration `20260806_0007` backfills existing rows safely (already-processed rows get `attempt_count=1`, legacy payload-less rows stay non-replayable). Indexes support the future worker's status/retry-window queries and operator lookups by source message or user.
+- The sync path now records `attempt_count` (each transition to `processing` counts one attempt) and a safe, length-capped, credential-redacted `result_summary`; successful events clear error fields.
+- **Scope note:** this is only the data-model groundwork for v0.2.1 reliable delivery. There is still **no Worker**, **no automatic retry or dead-letter processing**, **no Transactional Outbox**, and **no reply compensation**; claim-first behavior is unchanged.
+
+### Changed
+
+- Head migration is now `20260806_0007`.
+
+### Security
+
+- Event rows store only a single-line error summary with credentials (URL passwords, Authorization headers, Bearer tokens) redacted and a 512-character cap; full tracebacks are never persisted.
+
 ## [0.2.0] - 2026-08-05
 
 Theme: **auditable ledger** — see entries, edit by short ID, soft-delete/restore, CSV export, formal Release/GHCR.

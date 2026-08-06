@@ -7,13 +7,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.event_payload import (
+    MAX_RESULT_SUMMARY_LENGTH,
     EventPayloadError,
     EventProcessStatus,
     build_stored_payload,
     business_event_from_payload,
     message_id_from_event,
     parse_stored_payload,
+    safe_error_summary,
     serialize_payload,
+    user_open_id_from_event,
 )
 from lark_ledger.models import ProcessedEvent
 
@@ -35,7 +38,9 @@ class EventService:
       the database (round-trip contract for future workers).
 
     T2 failures do **not** unclaim the event and are **not** retried in this
-    version. Status may be ``failed`` for observability only.
+    version. Status may be ``failed`` with a safe ``result_summary`` for
+    observability only. The event state model (P05a) records ``attempt_count``
+    but no worker, lease, retry, or dead-letter handling runs in this version.
     """
 
     def __init__(
@@ -75,7 +80,8 @@ class EventService:
             )
             raise
 
-        # T1: claim with durable payload.
+        # T1: claim with durable payload. attempt_count starts at 0; the
+        # PROCESSING transition below counts the first attempt.
         async with self._session_factory() as session:
             session.add(
                 ProcessedEvent(
@@ -84,6 +90,9 @@ class EventService:
                     payload_version=int(payload["payload_version"]),
                     transport=transport,
                     status=EventProcessStatus.RECEIVED.value,
+                    attempt_count=0,
+                    source_message_id=message_id,
+                    user_open_id=user_open_id_from_event(event),
                     received_at=received_at,
                     last_error_code=None,
                 )
@@ -105,6 +114,7 @@ class EventService:
                 event_id,
                 EventProcessStatus.FAILED,
                 last_error_code=_error_code(exc),
+                result_summary=safe_error_summary(exc),
             )
             raise
 
@@ -147,7 +157,14 @@ class EventService:
         status: EventProcessStatus,
         *,
         last_error_code: str | None = None,
+        result_summary: str | None = None,
     ) -> None:
+        # Application-layer guard: only closed enum members may be written to the
+        # status column, so arbitrary strings cannot leak into event state.
+        if not isinstance(status, EventProcessStatus):
+            raise TypeError(
+                f"status must be an EventProcessStatus member, got {status!r}"
+            )
         async with self._session_factory() as session:
             result = await session.execute(
                 select(ProcessedEvent).where(ProcessedEvent.event_id == event_id)
@@ -156,10 +173,15 @@ class EventService:
             if row is None:
                 return
             row.status = status.value
+            if status is EventProcessStatus.PROCESSING:
+                row.attempt_count = (row.attempt_count or 0) + 1
             if last_error_code is not None:
                 row.last_error_code = last_error_code[:64]
-            elif status is EventProcessStatus.SUCCEEDED:
+            if result_summary is not None:
+                row.result_summary = result_summary[:MAX_RESULT_SUMMARY_LENGTH]
+            if status is EventProcessStatus.SUCCEEDED:
                 row.last_error_code = None
+                row.result_summary = None
             await session.commit()
 
 

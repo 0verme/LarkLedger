@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.2.0` |
 | Git tag | `v0.2.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.2.0`（亦有 `0.2` / `latest` 由发布流水线写入） |
-| Alembic head | `20260805_0006` |
+| Alembic head | `20260806_0007` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -57,7 +57,7 @@ PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.0"`。
 
 1. 备份数据库。
 2. 拉取 `v0.2.0` 代码或镜像。
-3. 执行 `alembic upgrade head`（将依次应用 `20260805_0004`～`0006`，若尚未应用）。
+3. 执行 `alembic upgrade head`（将依次应用 `20260805_0004`～`20260806_0007`，若尚未应用）。
 4. 重启应用并检查 `/healthz`。
 5. 验收：文字记账回复含 `#XXXXX`；`最近10笔`；按短 ID 查看/修改；按需验证 CSV 导出。
 
@@ -89,4 +89,10 @@ PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.0"`。
 - **行为：** 修改、软删除、恢复与 revision 同事务提交；无实际变化或幂等删除/恢复不写 revision。
 - **降级数据损失：** 删除 revision 表及全部审计历史；账目本体不变。
 
-当前 Alembic head：`20260805_0006`。
+## 迁移 `20260806_0007`（可靠投递事件状态模型）
+
+- **升级：** 为 `processed_events` 增加 `attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`result_summary`、`source_message_id`、`user_open_id`、`updated_at`。存量行安全回填：已进入处理的行（`processing` / `succeeded` / `failed`）`attempt_count=1`，其余为 0；`updated_at` 取 `processed_at`；`source_message_id` / `user_open_id` 从已有 payload 中提取。历史无 payload 行仍为 `legacy_succeeded` 且不可重放。
+- **行为：** 当前版本**没有** Worker，`next_attempt_at` / `lease_owner` / `lease_expires_at` 保持 NULL；失败事件只记录脱敏的单行 `result_summary`。**这仍是 claim-first，不代表可靠投递已经完成。**
+- **降级数据损失：** `alembic downgrade` 删除上述新列与索引，丢弃重试 / 租约 / 结果元数据与定位列；`payload_json` 与 `status` 保留。
+
+当前 Alembic head：`20260806_0007`。

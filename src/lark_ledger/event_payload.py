@@ -8,6 +8,7 @@ are retained so a future worker may re-download via the Feishu API.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
@@ -17,15 +18,43 @@ PAYLOAD_VERSION: Final[int] = 1
 
 ALLOWED_TRANSPORTS: Final[frozenset[str]] = frozenset({"webhook", "websocket"})
 
+#: Upper bound for ``processed_events.result_summary`` (safe error summaries).
+MAX_RESULT_SUMMARY_LENGTH: Final[int] = 512
+
 
 class EventProcessStatus(StrEnum):
-    """Minimal status set for v0.2.0 claim-first sync processing."""
+    """Event status set for reliable delivery (v0.2.1 foundation, P05a).
+
+    The current sync path writes ``received -> processing -> succeeded|failed``.
+    ``dead`` is the reserved terminal state for future workers once retries are
+    exhausted; nothing writes it in this version.
+    """
 
     RECEIVED = "received"
     PROCESSING = "processing"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    DEAD = "dead"
     LEGACY_SUCCEEDED = "legacy_succeeded"
+
+
+#: States that will never be picked up for processing again.
+TERMINAL_STATUSES: Final[frozenset[str]] = frozenset(
+    {
+        EventProcessStatus.SUCCEEDED.value,
+        EventProcessStatus.DEAD.value,
+        EventProcessStatus.LEGACY_SUCCEEDED.value,
+    }
+)
+
+#: States a future worker may claim, subject to retry / lease windows
+#: (``next_attempt_at`` / ``lease_expires_at`` and an attempt budget).
+WORKER_CLAIMABLE_STATUSES: Final[frozenset[str]] = frozenset(
+    {
+        EventProcessStatus.RECEIVED.value,
+        EventProcessStatus.FAILED.value,
+    }
+)
 
 
 class EventPayloadError(ValueError):
@@ -194,3 +223,60 @@ def message_id_from_event(event: Mapping[str, Any]) -> str | None:
     if message_id is None or str(message_id).strip() == "":
         return None
     return str(message_id)
+
+
+def user_open_id_from_event(event: Mapping[str, Any]) -> str | None:
+    """Best-effort sender identifier for denormalized operator lookups.
+
+    Mirrors ``normalize_business_event``: prefers ``open_id``, falls back to
+    ``user_id``, and returns ``None`` when the event carries no sender identity.
+    """
+    sender = event.get("sender")
+    if not isinstance(sender, Mapping):
+        return None
+    sender_id = sender.get("sender_id")
+    if not isinstance(sender_id, Mapping):
+        return None
+    for key in ("open_id", "user_id"):
+        value = sender_id.get(key)
+        if value is not None and str(value).strip():
+            return str(value)
+    return None
+
+
+_URL_CREDENTIAL_RE = re.compile(r"(://[^/@:\s]+):[^@\s]+@")
+_AUTHORIZATION_RE = re.compile(r"(?i)(authorization[:=]\s*).+?(?=[,;]|$)")
+_BEARER_TOKEN_RE = re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=\-]+")
+
+
+def _redact_secrets(text: str) -> str:
+    """Redact credentials that must never reach the events table."""
+    text = _URL_CREDENTIAL_RE.sub(r"\1:***@", text)
+    text = _AUTHORIZATION_RE.sub(r"\1***", text)
+    text = _BEARER_TOKEN_RE.sub(r"\1***", text)
+    return text
+
+
+def safe_error_summary(
+    exc: BaseException, *, max_length: int = MAX_RESULT_SUMMARY_LENGTH
+) -> str:
+    """Single-line, secret-redacted, length-capped error summary.
+
+    Suitable for ``processed_events.result_summary``. Never includes a
+    traceback: ``str(exc)`` is limited to its first line, credentials are
+    redacted, and the result is capped at ``max_length`` characters.
+    """
+    name = type(exc).__name__
+    try:
+        message = str(exc).strip()
+    except Exception:
+        # Never let broken __str__ mask the failure we are trying to record.
+        message = ""
+    if message:
+        message = _redact_secrets(message.splitlines()[0])
+        summary = f"{name}: {message}"
+    else:
+        summary = name
+    if len(summary) > max_length:
+        summary = summary[: max_length - 1] + "…"
+    return summary

@@ -1,12 +1,16 @@
 import asyncio
+import json
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import func, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from lark_ledger.event_payload import (
     EventProcessStatus,
@@ -18,6 +22,9 @@ from lark_ledger.services.events import EventService
 from lark_ledger.services.ledger import LedgerService
 
 pytestmark = pytest.mark.postgres
+
+# Resolved outside async tests so pathlib is not used inside event loops.
+_ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
 
 
 class RecordingProcessor:
@@ -44,7 +51,7 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260805_0006"
+    assert revision == "20260806_0007"
 
 
 async def test_list_keyset_and_get_entry_on_postgres(
@@ -219,7 +226,7 @@ async def test_export_entries_query_on_postgres(
         assert "#EX002" in with_deleted.export.content.decode("utf-8-sig")
 
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "20260805_0006"
+        assert revision == "20260806_0007"
 
 
 async def test_short_id_unique_per_user_allows_cross_user_reuse(
@@ -371,3 +378,257 @@ async def test_transaction_can_continue_after_unique_violation(
         assert legacy.status == EventProcessStatus.LEGACY_SUCCEEDED.value
 
     assert count == 2
+
+
+async def test_event_service_records_reliability_state_on_postgres(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    processor = RecordingProcessor()
+    service = EventService(postgres_session_factory, processor)
+    event = _message_event("om_state")
+    assert await service.handle("evt_state", event, transport="webhook")
+
+    async with postgres_session_factory() as session:
+        row = await session.get(ProcessedEvent, "evt_state")
+        assert row is not None
+        assert row.status == EventProcessStatus.SUCCEEDED.value
+        assert row.attempt_count == 1
+        assert row.source_message_id == "om_state"
+        assert row.user_open_id == "ou_integration"
+        assert row.result_summary is None
+        assert row.next_attempt_at is None
+        assert row.lease_owner is None
+        assert row.lease_expires_at is None
+        # Production storage must return timezone-aware timestamps.
+        assert row.received_at is not None and row.received_at.tzinfo is not None
+        assert row.updated_at is not None and row.updated_at.tzinfo is not None
+
+
+async def test_event_service_records_failure_summary_on_postgres(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    class FailingProcessor:
+        async def process(self, event: dict[str, Any]) -> None:
+            raise RuntimeError("pg boom")
+
+    service = EventService(postgres_session_factory, FailingProcessor())
+    with pytest.raises(RuntimeError, match="pg boom"):
+        await service.handle(
+            "evt_state_fail", _message_event("om_state_fail"), transport="websocket"
+        )
+
+    async with postgres_session_factory() as session:
+        row = await session.get(ProcessedEvent, "evt_state_fail")
+        assert row is not None
+        assert row.status == EventProcessStatus.FAILED.value
+        assert row.attempt_count == 1
+        assert row.last_error_code == "RuntimeError"
+        assert row.result_summary == "RuntimeError: pg boom"
+        assert row.updated_at.tzinfo is not None
+
+
+@pytest.mark.postgres
+async def test_event_state_migration_roundtrip(
+    postgres_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Upgrade 0006 -> 0007 backfills state, then downgrade drops it cleanly.
+
+    Runs against a scratch database so the shared test DB and other tests are
+    unaffected. Alembic runs in a worker thread because env.py calls
+    ``asyncio.run`` (a thread gets its own event loop).
+    """
+    from alembic.config import Config
+
+    from alembic import command
+    from lark_ledger.config import get_settings
+
+    url = make_url(postgres_url)
+    scratch = f"lark_ledger_mig_{uuid.uuid4().hex[:8]}"
+    scratch_dsn = url.set(database=scratch).render_as_string(hide_password=False)
+    base_dsn = url.render_as_string(hide_password=False)
+
+    def _run_migrations(target: str) -> None:
+        command.upgrade(Config(str(_ALEMBIC_INI)), target)
+
+    def _run_downgrade(target: str) -> None:
+        command.downgrade(Config(str(_ALEMBIC_INI)), target)
+
+    seed_payload = json.dumps(
+        {
+            "payload_version": 1,
+            "event_id": "evt_success",
+            "transport": "webhook",
+            "received_at": "2026-08-06T00:00:00+00:00",
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_mig"}},
+                "message": {"message_id": "om_mig", "message_type": "text", "content": "{}"},
+            },
+        },
+        ensure_ascii=False,
+    )
+    failed_payload = json.dumps(
+        {
+            "payload_version": 1,
+            "event_id": "evt_failed",
+            "transport": "websocket",
+            "received_at": "2026-08-06T00:00:00+00:00",
+            "event": {
+                "sender": {"sender_id": {"open_id": "ou_fail"}},
+                "message": {"message_id": "om_fail", "message_type": "text", "content": "{}"},
+            },
+        },
+        ensure_ascii=False,
+    )
+
+    maint_engine = create_async_engine(base_dsn)
+    scratch_engine = create_async_engine(scratch_dsn)
+    try:
+        # CREATE / DROP DATABASE cannot run inside a transaction block.
+        async with maint_engine.connect() as conn:
+            await conn.execution_options(isolation_level="AUTOCOMMIT").execute(
+                text(f'CREATE DATABASE "{scratch}"')
+            )
+
+        monkeypatch.setenv("LARK_LEDGER_DATABASE_URL", scratch_dsn)
+        get_settings.cache_clear()
+        await asyncio.to_thread(_run_migrations, "20260805_0006")
+
+        # Seed pre-0007 rows exactly as v0.2.0 would have left them.
+        async with scratch_engine.connect() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO processed_events "
+                    "(event_id, payload_json, payload_version, transport, status, processed_at) "
+                    "VALUES ('evt_legacy', NULL, NULL, NULL, 'legacy_succeeded', now())"
+                )
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO processed_events "
+                    "(event_id, payload_json, payload_version, transport, status, processed_at) "
+                    "VALUES ('evt_success', CAST(:payload AS json), "
+                    "1, 'webhook', 'succeeded', now())"
+                ),
+                {"payload": seed_payload},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO processed_events "
+                    "(event_id, payload_json, payload_version, transport, status, processed_at) "
+                    "VALUES ('evt_failed', CAST(:payload AS json), 1, 'websocket', 'failed', now())"
+                ),
+                {"payload": failed_payload},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO processed_events (event_id, status, processed_at) "
+                    "VALUES ('evt_received', 'received', now())"
+                )
+            )
+
+        # Apply 0007.
+        await asyncio.to_thread(_run_migrations, "head")
+
+        async with scratch_engine.connect() as conn:
+            legacy = (
+                await conn.execute(
+                    text(
+                        "SELECT status, attempt_count, source_message_id, user_open_id, "
+                        "updated_at, payload_json FROM processed_events "
+                        "WHERE event_id = 'evt_legacy'"
+                    )
+                )
+            ).one()
+            assert legacy.status == "legacy_succeeded"
+            assert legacy.attempt_count == 0
+            assert legacy.source_message_id is None
+            assert legacy.user_open_id is None
+            assert legacy.payload_json is None  # legacy stays non-replayable
+            assert legacy.updated_at is not None
+
+            success = (
+                await conn.execute(
+                    text(
+                        "SELECT status, attempt_count, source_message_id, user_open_id, "
+                        "updated_at FROM processed_events WHERE event_id = 'evt_success'"
+                    )
+                )
+            ).one()
+            assert success.status == "succeeded"
+            assert success.attempt_count == 1
+            assert success.source_message_id == "om_mig"
+            assert success.user_open_id == "ou_mig"
+            assert success.updated_at is not None
+
+            failed = (
+                await conn.execute(
+                    text(
+                        "SELECT attempt_count, source_message_id, user_open_id "
+                        "FROM processed_events WHERE event_id = 'evt_failed'"
+                    )
+                )
+            ).one()
+            assert failed.attempt_count == 1
+            assert failed.source_message_id == "om_fail"
+            assert failed.user_open_id == "ou_fail"
+
+            received = (
+                await conn.execute(
+                    text(
+                        "SELECT attempt_count FROM processed_events "
+                        "WHERE event_id = 'evt_received'"
+                    )
+                )
+            ).one()
+            assert received.attempt_count == 0
+
+            # Server defaults apply to rows inserted directly via SQL.
+            await conn.execute(
+                text(
+                    "INSERT INTO processed_events (event_id, status) "
+                    "VALUES ('evt_fresh', 'received')"
+                )
+            )
+            fresh = (
+                await conn.execute(
+                    text(
+                        "SELECT status, attempt_count, updated_at FROM processed_events "
+                        "WHERE event_id = 'evt_fresh'"
+                    )
+                )
+            ).one()
+            assert fresh.status == "received"
+            assert fresh.attempt_count == 0
+            assert fresh.updated_at is not None
+
+        # Downgrade to 0006: new columns disappear, retained data preserved.
+        await asyncio.to_thread(_run_downgrade, "20260805_0006")
+        async with scratch_engine.connect() as conn:
+            new_columns = await conn.scalar(
+                text(
+                    "SELECT COUNT(*) FROM information_schema.columns "
+                    "WHERE table_name = 'processed_events' AND column_name IN "
+                    "('attempt_count','next_attempt_at','lease_owner','lease_expires_at',"
+                    "'result_summary','source_message_id','user_open_id','updated_at')"
+                )
+            )
+            assert new_columns == 0
+            kept = (
+                await conn.execute(
+                    text(
+                        "SELECT status, payload_json FROM processed_events "
+                        "WHERE event_id = 'evt_success'"
+                    )
+                )
+            ).one()
+            assert kept.status == "succeeded"
+            assert kept.payload_json is not None
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+        async with maint_engine.connect() as conn:
+            await conn.execution_options(isolation_level="AUTOCOMMIT").execute(
+                text(f'DROP DATABASE IF EXISTS "{scratch}"')
+            )
+        await scratch_engine.dispose()
+        await maint_engine.dispose()

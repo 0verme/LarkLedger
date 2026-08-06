@@ -111,20 +111,49 @@ class ProcessedEvent(Base):
     New claims store a versioned JSON payload for future workers. Historical rows
     may have ``payload_json IS NULL`` and ``status=legacy_succeeded`` and are not
     replayable.
+
+    Reliable-delivery state (v0.2.1 / P05a): ``attempt_count``, ``next_attempt_at``,
+    ``lease_owner``, ``lease_expires_at``, and ``result_summary`` back the future
+    worker, retry, lease, and dead-letter model. The current sync path only writes
+    ``attempt_count`` and ``result_summary``; lease / scheduling columns stay NULL
+    until a worker exists. ``source_message_id`` / ``user_open_id`` are
+    denormalized at claim time for operator lookups.
     """
 
     __tablename__ = "processed_events"
+    __table_args__ = (
+        Index("ix_events_status_next_attempt", "status", "next_attempt_at"),
+        Index("ix_events_lease_expires", "lease_expires_at"),
+        Index("ix_events_source_message", "source_message_id"),
+        Index("ix_events_user_open_id", "user_open_id"),
+    )
 
     event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     payload_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     payload_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     transport: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="received")
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    result_summary: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    user_open_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     processed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
     last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
 
 
 class LedgerEntryRevision(Base):

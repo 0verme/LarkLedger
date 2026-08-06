@@ -52,10 +52,27 @@ T2  process：从数据库读回载荷 → 反序列化为业务事件 → 同�
 ```
 
 - T1 成功只表示“事件已被领取且载荷已落库”，**不是**业务成功。
-- T2 仍可能失败（AI、数据库、回复等）。失败时状态可记为 `failed` 并写入有限的 `last_error_code`（异常类型名），但 **不会** 取消 claim。
+- T2 仍可能失败（AI、数据库、回复等）。失败时状态可记为 `failed`，写入有限的 `last_error_code`（异常类型名）与单行、脱敏、截断的 `result_summary`，但 **不会** 取消 claim。
 - **当前仍是 claim-first**：同一 `event_id` 的重投不会自动重试 T2。
 - **本版本没有** Worker 轮询、lease、自动 retry、死信队列或回复 Outbox；**不**宣称 at-least-once，也**不**解决“已入账但回复失败”。
 - 未来 **v0.2.1** 将基于已持久化的 payload 与状态实现可靠投递与补偿。
+
+### 事件状态模型（v0.2.1 / P05a 地基）
+
+`EventProcessStatus` 集中定义状态集合，业务代码只写枚举成员，不散落任意字符串：
+
+| 状态 | 语义 | 分类 |
+| --- | --- | --- |
+| `received` | 已领取、载荷已落库，尚未处理 | 初始状态；未来 Worker 可捞取 |
+| `processing` | 一次处理尝试正在进行 | 处理中（不可直接捞取） |
+| `succeeded` | 处理成功 | 终态 |
+| `failed` | 某次尝试失败；可重试性由 `attempt_count` / `next_attempt_at` 表达 | 可重试候选；未来 Worker 可捞取 |
+| `dead` | 重试耗尽（保留终态；本版本无代码写入） | 终态 |
+| `legacy_succeeded` | 迁移前无载荷的历史行，不可重放 | 终态 |
+
+同步路径写入 `received → processing → succeeded | failed`，进入 `processing` 时 `attempt_count` 加一。`next_attempt_at`、`lease_owner`、`lease_expires_at` 为未来 Worker 的调度 / 租约字段，**本版本保持 NULL**：没有自动 retry、没有 dead 处理、没有租约续期。**P05a 只完成了数据模型地基，不代表可靠投递已经可用。**
+
+错误摘要 `result_summary` 只保存单行文本：取异常第一行、长度上限 512 字符，并脱敏 URL 中的密码、`Authorization` 头与 `Bearer` 令牌；完整异常栈与消息正文不会持久化。
 
 ### 载荷内容与隐私
 
@@ -96,7 +113,7 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 - `ledger_entry_revisions`：账目修改/删除/恢复的 append-only 快照（`before_json` / `after_json`，含 `snapshot_version`）；与账目变更同事务写入。
 - `category_budgets`：每个用户和分类唯一的长期月预算。
 - `budget_alerts`：记录预算在每个自然月已发送的 80% / 100% 阈值提醒。
-- `processed_events`：已领取的飞书事件。新事件含版本化 `payload_json`、`payload_version`、`transport`、`status`、`received_at` 与可选 `last_error_code`；历史无载荷行不可重放。
+- `processed_events`：已领取的飞书事件。新事件含版本化 `payload_json`、`payload_version`、`transport`、`status`、`received_at`、`processed_at` 与可选 `last_error_code`。可靠投递状态（P05a）另含 `attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`result_summary`、`updated_at`，以及为人工定位去规范化的 `source_message_id` / `user_open_id`；历史无载荷行保持 `legacy_succeeded` 且不可重放。
 
 所有日期范围都使用左闭右开语义。账目发生时间以带时区时间保存；相对时间、自然月和预算统计按全局配置的 IANA 时区计算。
 
