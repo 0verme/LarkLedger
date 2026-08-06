@@ -20,7 +20,8 @@ from sqlalchemy import select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from lark_ledger.models import ReplyOutbox
+from lark_ledger.event_payload import EventProcessStatus
+from lark_ledger.models import ProcessedEvent, ReplyOutbox
 from lark_ledger.outbox import (
     OUTBOX_PAYLOAD_VERSION,
     ReplyStatus,
@@ -87,6 +88,16 @@ async def _insert(
     if payload is None:
         payload = build_text_payload("hello")
     async with factory() as session:
+        # PostgreSQL enforces the reply_outbox -> processed_events FK, so every
+        # outbox row needs a parent event row (SQLite does not enforce it by
+        # default, which is why the unit tests can skip this).
+        if event_id is not None and await session.get(ProcessedEvent, event_id) is None:
+            session.add(
+                ProcessedEvent(
+                    event_id=event_id,
+                    status=EventProcessStatus.SUCCEEDED.value,
+                )
+            )
         session.add(
             ReplyOutbox(
                 event_id=event_id,
