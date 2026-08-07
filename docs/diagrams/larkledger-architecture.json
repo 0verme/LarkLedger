@@ -1,0 +1,367 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LarkLedger · High-level Architecture",
+    "subtitle": "Self-hosted Feishu/Lark AI bookkeeping bot — reliable event → AI → ledger → reply delivery (v0.2.1)",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/0verme/LarkLedger.git",
+      "revision": "733d48419519cc28e307891890c5403c4076b5a4"
+    },
+    "viewBox": [1640, 840]
+  },
+  "components": [
+    {
+      "id": "feishu",
+      "type": "external",
+      "label": "Feishu / Lark",
+      "sublabel": "open platform",
+      "pos": [60, 140],
+      "size": [170, 64],
+      "sources": [
+        { "path": "src/lark_ledger/services/websocket.py", "label": "long connection" },
+        { "path": "src/lark_ledger/services/feishu.py", "label": "FeishuClient" }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "AI services",
+      "sublabel": "text · vision · speech",
+      "pos": [1360, 400],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/ai.py", "label": "AIInterpreter routing" }]
+    },
+    {
+      "id": "fastapi",
+      "type": "backend",
+      "label": "FastAPI App",
+      "sublabel": "webhook · /healthz · /readyz",
+      "tag": "P06c",
+      "pos": [320, 400],
+      "size": [170, 64],
+      "sources": [
+        { "path": "src/lark_ledger/api.py", "label": "webhook entry" },
+        { "path": "src/lark_ledger/readiness.py", "label": "readiness" }
+      ]
+    },
+    {
+      "id": "ws_receiver",
+      "type": "backend",
+      "label": "WebSocket Receiver",
+      "sublabel": "Feishu long connection",
+      "pos": [320, 140],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/websocket.py", "label": "LongConnectionReceiver" }]
+    },
+    {
+      "id": "event_service",
+      "type": "backend",
+      "label": "EventService",
+      "sublabel": "T1 claim · event_id dedup",
+      "pos": [580, 140],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/events.py", "label": "claim" }]
+    },
+    {
+      "id": "event_worker",
+      "type": "backend",
+      "label": "EventWorker",
+      "sublabel": "lease · backoff · dead",
+      "tag": "P05b",
+      "pos": [840, 140],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/worker.py", "label": "SKIP LOCKED claim" }]
+    },
+    {
+      "id": "processor",
+      "type": "backend",
+      "label": "MessageProcessor",
+      "sublabel": "normalize · orchestrate T2",
+      "tag": "P06a",
+      "pos": [1100, 140],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/feishu.py", "label": "MessageProcessor" }]
+    },
+    {
+      "id": "interpreter",
+      "type": "backend",
+      "label": "AIInterpreter",
+      "sublabel": "ParsedCommand · strict",
+      "pos": [1360, 140],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/ai.py", "label": "AIInterpreter" }]
+    },
+    {
+      "id": "ledger",
+      "type": "backend",
+      "label": "LedgerService",
+      "sublabel": "fixed business actions",
+      "pos": [1170, 400],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/ledger.py", "label": "SQLAlchemy actions" }]
+    },
+    {
+      "id": "reply_worker",
+      "type": "backend",
+      "label": "ReplyWorker",
+      "sublabel": "claim outbox · deliver",
+      "tag": "P06b",
+      "pos": [840, 620],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/reply_worker.py", "label": "ReplyWorker" }]
+    },
+    {
+      "id": "feishu_client",
+      "type": "backend",
+      "label": "FeishuClient",
+      "sublabel": "send · upload · media",
+      "pos": [1100, 620],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/feishu.py", "label": "FeishuClient" }]
+    },
+    {
+      "id": "cleanup",
+      "type": "backend",
+      "label": "CleanupWorker",
+      "sublabel": "terminal retention",
+      "tag": "P06d",
+      "pos": [580, 620],
+      "size": [170, 64],
+      "sources": [{ "path": "src/lark_ledger/services/cleanup.py", "label": "CleanupWorker" }]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL 16",
+      "sublabel": "ledger · events · outbox",
+      "pos": [700, 400],
+      "size": [180, 70],
+      "sources": [
+        { "path": "src/lark_ledger/models.py", "label": "ORM models" },
+        { "path": "alembic/versions/20260806_0008_reply_outbox.py", "label": "schema migrations" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Self-hosted deployment · LarkLedger + PostgreSQL",
+      "wraps": [
+        "ws_receiver",
+        "fastapi",
+        "event_service",
+        "event_worker",
+        "processor",
+        "interpreter",
+        "ledger",
+        "postgres",
+        "reply_worker",
+        "feishu_client",
+        "cleanup"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Untrusted input · verify signature + dedup",
+      "wraps": ["feishu"]
+    },
+    {
+      "kind": "security-group",
+      "label": "AI trust boundary · ParsedCommand only, no DB access",
+      "wraps": ["interpreter", "llm"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "in-msg",
+      "from": "feishu",
+      "to": "ws_receiver",
+      "label": "message events",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "in-webhook",
+      "from": "feishu",
+      "to": "fastapi",
+      "label": "webhook events",
+      "variant": "dashed",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "claim-ws",
+      "from": "ws_receiver",
+      "to": "event_service",
+      "label": "claim",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "claim-http",
+      "from": "fastapi",
+      "to": "event_service",
+      "label": "claim · bg task",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "t1-insert",
+      "from": "event_service",
+      "to": "postgres",
+      "label": "T1 insert",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "claim-ev",
+      "from": "postgres",
+      "to": "event_worker",
+      "label": "claim · SKIP LOCKED",
+      "variant": "emphasis",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "process-t2",
+      "from": "event_worker",
+      "to": "processor",
+      "label": "T2 process",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "parse",
+      "from": "processor",
+      "to": "interpreter",
+      "label": "parse",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "prompt",
+      "from": "interpreter",
+      "to": "llm",
+      "label": "prompt",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [1350, 300]
+    },
+    {
+      "id": "parsed",
+      "from": "llm",
+      "to": "interpreter",
+      "label": "ParsedCommand",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "labelAt": [1510, 300]
+    },
+    {
+      "id": "exec",
+      "from": "processor",
+      "to": "ledger",
+      "label": "executed action",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "sql",
+      "from": "ledger",
+      "to": "postgres",
+      "label": "business + outbox · one commit",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right",
+      "labelAt": [1010, 430]
+    },
+    {
+      "id": "claim-obox",
+      "from": "postgres",
+      "to": "reply_worker",
+      "label": "claim outbox · T3",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "deliver",
+      "from": "reply_worker",
+      "to": "feishu_client",
+      "label": "deliver",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "reply",
+      "from": "feishu_client",
+      "to": "feishu",
+      "label": "send reply · upload",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [[1185, 760], [145, 760]]
+    },
+    {
+      "id": "clean",
+      "from": "cleanup",
+      "to": "postgres",
+      "label": "purge terminal rows",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "violet",
+      "title": "Reliable delivery",
+      "items": [
+        "PostgreSQL is the only queue · no Redis/Celery/Kafka; multi-instance safe via DB leases",
+        "Transactional Outbox: business changes + reply intent commit atomically (T2)",
+        "Lease-guarded status · succeeded / failed (exponential backoff) / dead; crash-window retry never re-runs business",
+        "ReplyWorker redelivers pending/failed outbox rows after restart; Feishu uuid idempotency key",
+        "Media (image/voice) downloaded via FeishuClient before AI parsing; keys persisted, binaries never",
+        "Admin CLI replay-event (dry-run default) re-runs only safe dead/failed events (P06e)"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Trust & safety",
+      "items": [
+        "Feishu events: webhook signature + decrypt + event_id dedup",
+        "AI → ParsedCommand strict Pydantic validation · extra fields rejected · no SQL/table/DB identifiers",
+        "LedgerService maps validated actions to fixed SQLAlchemy queries scoped to sender open_id",
+        "Logs carry event_id/message_id only, never message bodies; DB backups = sensitive financial data"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Supporting services",
+      "items": [
+        "ExchangeRateService: process-level FX cache → default currency; stale-cache fallback, fail-closed when empty",
+        "ExportService: CSV Schema v1 · per-user · ≤5,000 rows / 90 days · read-only, no revisions",
+        "ReportRenderer: report PNG + Feishu card; degrades to text card on failure",
+        "ReadinessService: /readyz checks PostgreSQL, Alembic head, Event/Reply/Cleanup workers, receiver"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Persistence · PostgreSQL",
+      "items": [
+        "ledger_entries + append-only ledger_entry_revisions; (user_open_id, short_id) unique",
+        "category_budgets · budget_alerts (80% / 100% threshold alerts)",
+        "processed_events: versioned replayable payload + status/lease/backoff fields",
+        "reply_outbox: self-contained reply intent + payload_blob (size / sha256) · event_replay_audits"
+      ]
+    }
+  ]
+}
