@@ -255,9 +255,9 @@ def build_pending_preview(
 def build_pending_preview_card(preview: PendingPreview) -> dict[str, Any]:
     """Render a confirmation preview card (schema 2.0) with 确认 / 取消 buttons.
 
-    The button ``value`` carries the storage confirmation code; the callback
-    handler re-verifies operator user + pending status, and text commands remain
-    the fallback path.
+    Each button uses the JSON 2.0 callback behavior to carry the storage
+    confirmation code.  The callback handler re-verifies operator user +
+    pending status, and text commands remain the fallback path.
     """
     elements: list[dict[str, Any]] = []
     header_lines = [
@@ -305,32 +305,43 @@ def build_pending_preview_card(preview: PendingPreview) -> dict[str, Any]:
         }
     )
     code_suffix = preview.code[1:] if preview.code else ""
-    elements.append(
-        {
-            "tag": "action",
-            "actions": [
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "确认"},
-                    "type": "primary",
-                    "value": {
-                        "k": CARD_ACTION_KEY,
-                        "action": "confirm",
-                        "code": code_suffix,
-                    },
-                },
-                {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "取消"},
-                    "type": "danger",
-                    "value": {
-                        "k": CARD_ACTION_KEY,
-                        "action": "cancel",
-                        "code": code_suffix,
-                    },
-                },
-            ],
-        }
+    elements.extend(
+        [
+            {
+                "tag": "button",
+                "element_id": "confirm_pending",
+                "text": {"tag": "plain_text", "content": "确认"},
+                "type": "primary",
+                "width": "fill",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "k": CARD_ACTION_KEY,
+                            "action": "confirm",
+                            "code": code_suffix,
+                        },
+                    }
+                ],
+            },
+            {
+                "tag": "button",
+                "element_id": "cancel_pending",
+                "text": {"tag": "plain_text", "content": "取消"},
+                "type": "danger",
+                "width": "fill",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "k": CARD_ACTION_KEY,
+                            "action": "cancel",
+                            "code": code_suffix,
+                        },
+                    }
+                ],
+            },
+        ]
     )
     return {
         "schema": "2.0",

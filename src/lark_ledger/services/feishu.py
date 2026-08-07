@@ -25,6 +25,7 @@ from lark_ledger.entry_commands import (
     try_parse_deterministic_entry_command,
     try_parse_pending_directive,
 )
+from lark_ledger.event_payload import safe_error_summary
 from lark_ledger.models import ProcessedEvent, ReplyOutbox
 from lark_ledger.outbox import (
     OUTBOX_PAYLOAD_VERSION,
@@ -59,6 +60,24 @@ from lark_ledger.services.worker import generate_owner_id
 logger = logging.getLogger(__name__)
 
 MAX_POST_IMAGES = 5
+
+
+def _feishu_error_details(response: httpx.Response) -> tuple[str, str]:
+    """Return bounded, secret-redacted Feishu error fields without response content."""
+    try:
+        payload = response.json()
+    except (ValueError, UnicodeDecodeError):
+        return "-", "-"
+    if not isinstance(payload, dict):
+        return "-", "-"
+
+    raw_code = payload.get("code")
+    api_code = str(raw_code)[:64] if isinstance(raw_code, (str, int)) else "-"
+    raw_message = payload.get("msg") or payload.get("message")
+    if not isinstance(raw_message, str) or not raw_message.strip():
+        return api_code, "-"
+    summary = safe_error_summary(RuntimeError(raw_message), max_length=256)
+    return api_code, summary.removeprefix("RuntimeError: ")
 
 
 def _safe_export_filename(filename: str) -> str:
@@ -106,6 +125,15 @@ class FeishuClient:
                 base_url=self.settings.lark_base_url.rstrip("/"), timeout=30
             ) as client:
                 response = await client.request(method, path, **kwargs)
+        if not response.is_success:
+            api_code, detail = _feishu_error_details(response)
+            logger.warning(
+                "Feishu API request rejected method=%s status=%d api_code=%s detail=%s",
+                method.upper(),
+                response.status_code,
+                api_code,
+                detail,
+            )
         response.raise_for_status()
         return response
 

@@ -48,6 +48,56 @@ async def test_upload_image_and_reply_report_card() -> None:
     assert len(requests) == 3
 
 
+async def test_feishu_http_error_log_is_actionable_and_redacted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    private_card_text = "private receipt content"
+    secret_token = "tenant-secret-token"
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/tenant_access_token/internal"):
+            return httpx.Response(
+                200,
+                json={"code": 0, "tenant_access_token": secret_token},
+            )
+        return httpx.Response(
+            400,
+            json={"code": 230001, "msg": "invalid card schema"},
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://open.feishu.cn"
+    )
+    feishu = FeishuClient(
+        Settings(lark_app_id="app", lark_app_secret="secret"),
+        client,
+    )
+
+    with caplog.at_level("WARNING", logger="lark_ledger.services.feishu"):
+        with pytest.raises(httpx.HTTPStatusError):
+            await feishu.reply_card(
+                "om_private_message_id",
+                {
+                    "schema": "2.0",
+                    "body": {
+                        "elements": [
+                            {"tag": "markdown", "content": private_card_text}
+                        ]
+                    },
+                },
+            )
+    await client.aclose()
+
+    joined = "\n".join(record.getMessage() for record in caplog.records)
+    assert "method=POST" in joined
+    assert "status=400" in joined
+    assert "api_code=230001" in joined
+    assert "detail=invalid card schema" in joined
+    assert private_card_text not in joined
+    assert secret_token not in joined
+    assert "om_private_message_id" not in joined
+
+
 @pytest.mark.parametrize("payload", [b"", b"not-png"])
 async def test_upload_image_rejects_invalid_payload(payload: bytes) -> None:
     client = httpx.AsyncClient(base_url="https://open.feishu.cn")

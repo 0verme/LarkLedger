@@ -18,6 +18,11 @@ from lark_ledger.models import (
     ReplyOutbox,
 )
 from lark_ledger.schemas import Action, EntryCandidate, ParsedCommand
+from lark_ledger.services.pending import (
+    CARD_ACTION_KEY,
+    PendingPreview,
+    build_pending_preview_card,
+)
 
 T0 = datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
 
@@ -200,6 +205,45 @@ async def _processor(
         feishu,  # type: ignore[arg-type]
         FixedInterpreter(command),
     )
+
+
+def test_pending_preview_card_uses_native_json_v2_callbacks() -> None:
+    card = build_pending_preview_card(
+        PendingPreview(code="CA83F2", display_code="#C-A83F2")
+    )
+
+    assert card["schema"] == "2.0"
+    elements = card["body"]["elements"]
+    assert all(element["tag"] != "action" for element in elements)
+
+    buttons = [element for element in elements if element["tag"] == "button"]
+    assert [button["element_id"] for button in buttons] == [
+        "confirm_pending",
+        "cancel_pending",
+    ]
+    assert len({button["element_id"] for button in buttons}) == 2
+    assert [button["behaviors"] for button in buttons] == [
+        [
+            {
+                "type": "callback",
+                "value": {
+                    "k": CARD_ACTION_KEY,
+                    "action": "confirm",
+                    "code": "A83F2",
+                },
+            }
+        ],
+        [
+            {
+                "type": "callback",
+                "value": {
+                    "k": CARD_ACTION_KEY,
+                    "action": "cancel",
+                    "code": "A83F2",
+                },
+            }
+        ],
+    ]
 
 
 # ---------------------------------------------------------------------------
