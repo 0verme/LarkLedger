@@ -144,7 +144,7 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 - `attempt_count` 表示当前自动尝试窗口，人工重放时重置为 0，使 Worker 获得新的有限重试窗口；`manual_replay_count` 累计人工重放次数，`event_replay_audits.previous_attempt_count` 保存旧窗口计数。两名操作员并发时只有持锁者能成功重放，旧 Worker 的 lease-guarded 更新不能覆盖新状态。
 - 每次执行尝试写入独立 `event_replay_audits`；成功审计与状态重置同事务。审计不复制 payload，终态 Event 清理也不级联删除审计。CLI 默认 dry-run，只有显式 `--execute` 修改数据，且输出不包含 payload、财务正文、operator 或 reason。
 
-**尚未实现（后续版本）：** Web 管理后台 / Outbox 可视化、对用户可见的结果回放命令。
+**尚未实现（后续版本）：** Web 管理后台 / Outbox 可视化、对用户可见的结果回放命令、简单文字等全部写入都强制审批的完整财务审批流。
 
 ### 高风险确认（v0.3.0 / P07）
 

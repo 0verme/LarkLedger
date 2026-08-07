@@ -22,6 +22,8 @@ Detailed user, deployment, and architecture docs are **Chinese-first**. This REA
 - **Reliable delivery**: background Event / Reply Workers, transactional reply outbox, PostgreSQL lease and exponential-backoff retry, readiness probes, terminal retention cleanup, and guarded manual event replay
 - Self-hosted stack: FastAPI, PostgreSQL, Docker Compose
 
+Simple single text remains a direct write: `午饭32元` immediately creates the ledger entry. Image, voice, batch, and likely-duplicate writes follow `media → preview card → user confirmation → ledger`. Text fallbacks are `确认 #C-A83F2`, `取消 #C-A83F2`, and `查看待确认` (or `确认列表`).
+
 ## Who it is for
 
 Technical self-hosters who use Feishu heavily and want a **private** ledger. The first-run goal is one successful **text-only** entry—not a full multi-modal production rollout.
@@ -141,10 +143,10 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 
 Roadmap themes (no promised ship dates): `v0.3.x` maintenance and increments (shared ledgers / web admin are not currently promised).
 
-Current release: **v0.2.1**. Prebuilt image: `ghcr.io/0verme/larkledger:0.2.1` (also `0.2` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.3.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.3.0` (also `0.3` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.2.1
+export LARK_LEDGER_IMAGE_TAG=0.3.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d

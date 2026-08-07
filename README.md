@@ -22,6 +22,16 @@
 
 完整消息示例见[用户手册](docs/help.md)。
 
+## 文字直写与高风险确认
+
+简单明确的单笔文字保持直写：`午饭32元` → 直接入账并返回账目短 ID。图片、语音、批量或疑似重复则先确认：
+
+```text
+发送小票图片 → 飞账识别 → 返回确认卡片 → 用户确认 → 才写入账本
+```
+
+卡片不可用时可发送 `确认 #C-A83F2`、`取消 #C-A83F2`；发送 `查看待确认`（或 `确认列表`）可列出当前待确认单。确认使用创建 pending 时冻结的结构化命令，不会重新调用 AI。
+
 ## 适合谁
 
 - 技术用户，能配置 Docker 与 PostgreSQL
@@ -177,7 +187,7 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 
 路线（无具体发布日期承诺）：`v0.3.x` 维护与增量（共享账本 / Web 管理端等不在当前承诺内）。
 
-镜像与版本：当前正式版本为 **v0.2.1**。预构建镜像：`ghcr.io/0verme/larkledger:0.2.1`（亦有 `0.2` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.3.0**。预构建镜像：`ghcr.io/0verme/larkledger:0.3.0`（亦有 `0.3` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -227,8 +237,8 @@ pytest --cov
 ## 使用预构建镜像（可选）
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.2.1
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.2.1"
+export LARK_LEDGER_IMAGE_TAG=0.3.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.3.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -243,7 +253,7 @@ curl http://127.0.0.1:8000/healthz
 - [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
 - [架构说明](docs/architecture.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md) · [v0.2.1 发布说明](.github/release-notes/v0.2.1.md) · [v0.2.0 发布说明](.github/release-notes/v0.2.0.md)
+- [变更日志](CHANGELOG.md) · [v0.3.0 发布说明](.github/release-notes/v0.3.0.md) · [v0.2.1 发布说明](.github/release-notes/v0.2.1.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 

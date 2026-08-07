@@ -4,7 +4,9 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
-### Added (v0.3.0 — high-risk command confirmation; P07)
+## [0.3.0] - 2026-08-07
+
+### Added (v0.3.0 — High-risk Confirmation / 高风险确认; P07)
 
 - **Risk routing (`risky_only`)** decides per write: simple, unambiguous single-entry text writes go straight to the ledger; image / voice / batch / likely-duplicate writes first create a **pending confirmation** and wait for the user. Read, query, and short-ID mutation commands are never confirmed.
 - **`pending_commands`** table (migration `20260806_0012`) stores a **frozen** `ParsedCommand` (`payload_json`) plus a frozen user preview (`preview_json`) — confirming never re-calls AI or re-recognizes media. `confirmation_code` is user-unique, never reused, case-insensitive, and parsed by regex only.
@@ -25,11 +27,13 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 - Pending payloads and previews are treated like ledger data; logs and the operator CLI output only the confirmation code, status, risk reason, and aggregate counts — never the frozen payload, OCR text, transcripts, or `open_id`.
 
-### Known limitations (v0.3.0 is not finished)
+### Known limitations (v0.3.0)
 
 - Confirmation codes are not security credentials: they only select the requesting user's own pendings, and every action re-verifies `user_open_id`.
 - No multi-level approval, no shared/multi-user confirmation, no web admin; v0.3.0 is not a full finance approval system.
 - Card action callbacks require the Feishu interactive-card capability; text commands are the guaranteed fallback.
+- This is not a complete financial approval flow: there is no multi-level approval, multi-person approval, web admin, shared ledger, Redis-backed queue, or multi-IM integration.
+- Some transient pre-notifications remain best-effort. Outside Feishu's reply-UUID idempotency window, an extreme crash timing can duplicate a reply, but never re-execute the accounting business operation.
 
 ## [0.2.1] - 2026-08-06
 

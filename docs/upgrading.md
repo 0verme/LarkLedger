@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.2.1** |
-| 包版本 / `__version__` | `0.2.1` |
-| Git tag | `v0.2.1` |
-| GHCR | `ghcr.io/0verme/larkledger:0.2.1`（亦有 `0.2` / `latest` 由发布流水线写入） |
-| Alembic head | `20260806_0012`（main / v0.3.0 开发；v0.2.1 为 `20260806_0011`，v0.2.0 为 `20260806_0007`） |
+| 最新正式版本 | **v0.3.0** |
+| 包版本 / `__version__` | `0.3.0` |
+| Git tag | `v0.3.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.3.0`（亦有 `0.3` / `latest` 由发布流水线写入） |
+| Alembic head | `20260806_0012`（v0.3.0；v0.2.1 为 `20260806_0011`，v0.2.0 为 `20260806_0007`） |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -20,6 +20,19 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
+
+## 从 v0.2.1 升级到 v0.3.0
+
+v0.3.0「高风险确认」新增迁移 `20260806_0012` 和 `pending_commands` 表。升级前请备份 PostgreSQL，并确认备份可以恢复；不要把事件清理或尚未实现的 P10 备份脚本当作数据库备份。
+
+1. 拉取 `v0.3.0` 源码或固定镜像 `ghcr.io/0verme/larkledger:0.3.0`。
+2. 在启动新应用前执行 `alembic upgrade head`；唯一新 head 必须是 `20260806_0012`。
+3. 核对确认配置：`LARK_LEDGER_PENDING_ENABLED`（默认 `true`）、`PENDING_EXPIRES_SECONDS`（默认 86400）、`PENDING_RETENTION_DAYS`（默认 7）、`PENDING_DUPLICATE_WINDOW_MINUTES`（默认 60）和 `PENDING_MAX_LIST`（默认 10）。
+4. 重启并检查 `/healthz`、`/readyz`，再验证一笔简单文字直写和一条图片/语音/批量待确认路径。
+
+简单明确的单笔文字（如 `午饭32元`）行为不变，仍然直接入账。图片、语音、批量和疑似重复写入会先建立待确认预览，使用 `确认 #C-XXXXX` 或卡片按钮后才写账；`取消 #C-XXXXX` 不写账。确认执行冻结的结构化命令，不重新调用 AI。
+
+回滚代码前应停止应用并再次备份数据库。若仅回退应用代码而保留数据库，旧代码不会使用 `pending_commands`；若执行 `alembic downgrade 20260806_0011`，会删除 `pending_commands` 表及其中全部 pending / executed / cancelled / expired / failed 确认记录、冻结命令和预览。已经确认后写入的账目不会因该 downgrade 自动删除。需要审计或恢复这些确认数据时，不得执行该 downgrade。
 
 ## 从 v0.2.0 升级到 v0.2.1
 
@@ -195,7 +208,7 @@ Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 
 ## 迁移 `20260806_0012`（高风险确认 pending_commands）
 
 - **升级：** 新增 `pending_commands` 表，保存**冻结**的高风险命令（图片 / 语音 / 批量 / 疑似重复）等待用户确认。`payload_json` 是冻结的 `ParsedCommand`（确认绝不重新调用 AI）；`preview_json` 是冻结的用户预览聚合。确认单编号存储为 `CA83F2`（展示 `#C-A83F2`），用户内唯一、不复用。`source_event_id` 无外键，事件清理不会级联删除待确认单。
-- **行为变化（v0.3.0 开发中 main）：** `LARK_LEDGER_PENDING_ENABLED` 默认 `true`，图片 / 语音 / 批量 / 疑似重复写入先进入待确认；简单单笔文字仍直写。确认 / 取消可用文本命令 `确认 #C-XXXXX` / `取消 #C-XXXXX` 或预览卡片按钮。确认单默认 24 小时过期，终态确认单默认保留 7 天后由 Cleanup Worker 清理。
+- **行为变化（v0.3.0）：** `LARK_LEDGER_PENDING_ENABLED` 默认 `true`，图片 / 语音 / 批量 / 疑似重复写入先进入待确认；简单单笔文字仍直写。确认 / 取消可用文本命令 `确认 #C-XXXXX` / `取消 #C-XXXXX` 或预览卡片按钮。确认单默认 24 小时过期，终态确认单默认保留 7 天后由 Cleanup Worker 清理。
 - **回退：** `alembic downgrade 20260806_0011` 删除 `pending_commands` 表及全部待确认单（已确认执行写入的账目不受影响）。需要保留待确认数据时不得执行该 downgrade。
 
 当前 Alembic head：`20260806_0012`。
