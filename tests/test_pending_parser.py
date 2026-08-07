@@ -22,7 +22,13 @@ def test_confirm_directive_variants() -> None:
 
 
 def test_cancel_directive_variants() -> None:
-    for text in ("取消 #C-A83F2", "放弃 C-A83F2", "取消 #ca83f2"):
+    for text in (
+        "取消 #C-A83F2",
+        "放弃 C-A83F2",
+        "取消 #ca83f2",
+        "撤销 #C-A83F2",
+        "撤销 C-A83F2",
+    ):
         assert try_parse_pending_directive(text) == PendingDirective(
             action="cancel", confirmation_code="CA83F2"
         ), text
@@ -39,6 +45,10 @@ def test_invalid_confirmation_code_returns_error_text() -> None:
     result = try_parse_pending_directive("确认 #C-I83F2")
     assert isinstance(result, str)
     assert "格式无效" in result
+
+    cancelled = try_parse_pending_directive("撤销 #C-I83F2")
+    assert isinstance(cancelled, str)
+    assert "格式无效" in cancelled
 
 
 def test_bookkeeping_and_entry_messages_fall_through() -> None:

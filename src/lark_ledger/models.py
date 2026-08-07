@@ -19,6 +19,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -313,6 +314,11 @@ class PendingCommand(Base):
     transcripts). ``confirmation_code`` is the user-facing ``#C-A83F2`` form
     minus the ``#``/``-`` (stored as ``CA83F2``), user-unique and never reused.
 
+    ``source_fingerprint`` is a privacy-safe SHA-256 of the ordered visual
+    request. A partial unique index permits only one active row for the same
+    user and exact media while allowing a deliberate resend after terminal
+    status. Historical rows remain NULL because their media is not retained.
+
     ``source_event_id`` intentionally has no foreign key: terminal event
     cleanup must not cascade-delete a pending confirmation that a user may still
     act on. The unique constraint backs "one logical pending per source event"
@@ -326,6 +332,20 @@ class PendingCommand(Base):
             "user_open_id", "confirmation_code", name="uq_pending_user_code"
         ),
         UniqueConstraint("source_event_id", name="uq_pending_source_event"),
+        Index(
+            "uq_pending_user_active_fingerprint",
+            "user_open_id",
+            "source_fingerprint",
+            unique=True,
+            postgresql_where=text(
+                "source_fingerprint IS NOT NULL "
+                "AND status IN ('pending', 'executing')"
+            ),
+            sqlite_where=text(
+                "source_fingerprint IS NOT NULL "
+                "AND status IN ('pending', 'executing')"
+            ),
+        ),
         Index("ix_pending_status_expires", "status", "expires_at"),
         Index("ix_pending_user_status", "user_open_id", "status"),
         Index("ix_pending_source_event", "source_event_id"),
@@ -336,6 +356,7 @@ class PendingCommand(Base):
     user_open_id: Mapped[str] = mapped_column(String(128), nullable=False)
     source_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     transport: Mapped[str] = mapped_column(String(16), nullable=False, default="feishu")
     source_type: Mapped[str] = mapped_column(String(16), nullable=False, default="text")
     command_type: Mapped[str] = mapped_column(String(32), nullable=False)

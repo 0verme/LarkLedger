@@ -388,6 +388,7 @@ class PendingCommandStore:
         session: AsyncSession,
         event_id: str | None,
         message_id: str,
+        source_fingerprint: str | None,
         user_open_id: str,
         command: ParsedCommand,
         source_type: str,
@@ -415,6 +416,7 @@ class PendingCommandStore:
             user_open_id=user_open_id,
             source_event_id=event_id,
             source_message_id=message_id,
+            source_fingerprint=source_fingerprint,
             transport="feishu",
             source_type=source_type,
             command_type=command.action.value,
@@ -427,6 +429,27 @@ class PendingCommandStore:
         )
         session.add(pending)
         return pending
+
+    async def has_active_fingerprint(
+        self, user_open_id: str, source_fingerprint: str
+    ) -> bool:
+        """Return whether this user's exact media already awaits a decision."""
+        async with self._factory() as session:
+            pending_id = await session.scalar(
+                select(PendingCommand.id)
+                .where(
+                    PendingCommand.user_open_id == user_open_id,
+                    PendingCommand.source_fingerprint == source_fingerprint,
+                    PendingCommand.status.in_(
+                        [
+                            PendingStatus.PENDING.value,
+                            PendingStatus.EXECUTING.value,
+                        ]
+                    ),
+                )
+                .limit(1)
+            )
+            return pending_id is not None
 
     async def _allocate_code(self, session: AsyncSession, user_open_id: str) -> str:
         for _ in range(MAX_SHORT_ID_ALLOCATION_ATTEMPTS):

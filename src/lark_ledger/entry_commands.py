@@ -52,7 +52,7 @@ _MUTATION_ACTIONS = frozenset(
 # confirmation with a bad code" message returns an error instead of silently
 # falling into bookkeeping.
 _CONFIRM_VERBS = "确认|同意|执行"
-_CANCEL_VERBS = "取消|放弃"
+_CANCEL_VERBS = "取消|放弃|撤销"
 
 _PENDING_CONFIRM_RE: Final[re.Pattern[str]] = re.compile(
     rf"^(?:{_CONFIRM_VERBS})\s*#?{CONFIRMATION_PREFIX}-?(?P<code>\S{{1,12}})$",

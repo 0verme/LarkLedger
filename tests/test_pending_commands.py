@@ -128,13 +128,19 @@ def _message_event(message_id: str, text: str, *, event_id: str | None = None) -
     return event
 
 
-def _image_event(message_id: str, *, event_id: str | None = None) -> dict[str, Any]:
+def _image_event(
+    message_id: str,
+    *,
+    event_id: str | None = None,
+    image_key: str = "img_1",
+    user_open_id: str = "ou_user",
+) -> dict[str, Any]:
     event: dict[str, Any] = {
-        "sender": {"sender_id": {"open_id": "ou_user"}},
+        "sender": {"sender_id": {"open_id": user_open_id}},
         "message": {
             "message_id": message_id,
             "message_type": "image",
-            "content": json.dumps({"image_key": "img_1"}),
+            "content": json.dumps({"image_key": image_key}),
         },
     }
     if event_id is not None:
@@ -370,6 +376,88 @@ async def test_redelivered_event_does_not_create_second_pending() -> None:
     await engine.dispose()
 
 
+async def test_same_image_with_different_event_and_message_is_suppressed() -> None:
+    engine, factory = await _sqlite_factory()
+    feishu = RecordingFeishu()
+    interpreter = FixedInterpreter(_create_command())
+
+    from lark_ledger.services.feishu import MessageProcessor
+
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        feishu,  # type: ignore[arg-type]
+        interpreter,
+    )
+    await processor.process(_image_event("om_img_1", event_id="evt_img_1"))
+    await processor.process(_image_event("om_img_2", event_id="evt_img_2"))
+
+    pending = await _pending_rows(factory)
+    rows = await _outbox_rows(factory)
+    assert len(pending) == 1
+    assert pending[0].source_fingerprint is not None
+    assert len(rows) == 1
+    assert len(feishu.cards) == 1
+    assert len(interpreter.calls) == 1
+    await engine.dispose()
+
+
+async def test_same_image_can_be_sent_again_after_cancellation() -> None:
+    engine, factory = await _sqlite_factory()
+    feishu = RecordingFeishu()
+    processor = await _processor(factory, feishu, _create_command())
+    await processor.process(_image_event("om_img_1", event_id="evt_img_1"))
+    first = (await _pending_rows(factory))[0]
+
+    from lark_ledger.services.pending import PendingCommandStore
+
+    await PendingCommandStore(factory, Settings(_env_file=None)).cancel(
+        user_open_id="ou_user",
+        confirmation_code=first.confirmation_code,
+        reply_to_message_id="om_cancel",
+        cancel_event_id=None,
+        now=T0,
+    )
+    await processor.process(_image_event("om_img_2", event_id="evt_img_2"))
+
+    pending = await _pending_rows(factory)
+    assert len(pending) == 2
+    assert {row.status for row in pending} == {"cancelled", "pending"}
+    await engine.dispose()
+
+
+async def test_different_image_or_user_creates_separate_pending() -> None:
+    class KeyedFeishu(RecordingFeishu):
+        async def download_resource(
+            self, message_id: str, file_key: str, kind: str
+        ) -> bytes:
+            self.downloaded.append((message_id, file_key, kind))
+            return file_key.encode()
+
+    engine, factory = await _sqlite_factory()
+    feishu = KeyedFeishu()
+    processor = await _processor(factory, feishu, _create_command())
+    await processor.process(
+        _image_event("om_img_1", event_id="evt_img_1", image_key="img_1")
+    )
+    await processor.process(
+        _image_event("om_img_2", event_id="evt_img_2", image_key="img_2")
+    )
+    await processor.process(
+        _image_event(
+            "om_img_3",
+            event_id="evt_img_3",
+            image_key="img_1",
+            user_open_id="ou_other",
+        )
+    )
+
+    pending = await _pending_rows(factory)
+    assert len(pending) == 3
+    assert len({(row.user_open_id, row.source_fingerprint) for row in pending}) == 3
+    await engine.dispose()
+
+
 async def test_pending_row_frozen_payload_and_code() -> None:
     engine, factory = await _sqlite_factory()
     feishu = RecordingFeishu()
@@ -513,6 +601,33 @@ async def test_cancel_pending_writes_no_entry() -> None:
     assert entries == 0
     assert pending[0].status == "cancelled"
     assert pending[0].cancelled_at is not None
+    await engine.dispose()
+
+
+async def test_undo_confirmation_code_cancels_pending_without_touching_ledger() -> None:
+    engine, factory = await _sqlite_factory()
+    await _seed_entry(factory, short_id="5487J")
+    code = await _create_pending_via_image(factory)
+
+    from lark_ledger.services.feishu import MessageProcessor
+
+    interpreter = FixedInterpreter()
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        factory,
+        RecordingFeishu(),  # type: ignore[arg-type]
+        interpreter,
+    )
+    await processor.process(
+        _message_event("om_cancel", f"撤销 #C-{code[1:]}", event_id="evt_cancel")
+    )
+
+    async with factory() as session:
+        entry = (await session.scalars(select(LedgerEntry))).one()
+    pending = await _pending_rows(factory)
+    assert entry.deleted_at is None
+    assert pending[0].status == "cancelled"
+    assert interpreter.calls == []
     await engine.dispose()
 
 

@@ -48,7 +48,7 @@ class HealthyReceiver(HealthyTask):
 
 
 async def sqlite_factory(
-    revision: str | None = "20260806_0012",
+    revision: str | None = "20260807_0013",
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
     engine = create_async_engine("sqlite+aiosqlite://")
     async with engine.begin() as connection:
@@ -65,7 +65,7 @@ def build_app(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    expected_revision: str = "20260806_0012",
+    expected_revision: str = "20260807_0013",
 ) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
@@ -140,8 +140,8 @@ async def test_readyz_returns_200_with_independent_component_checks() -> None:
     assert body["checks"]["database"] == {"status": "ok"}
     assert body["checks"]["migration"] == {
         "status": "ok",
-        "current": "20260806_0012",
-        "expected": "20260806_0012",
+        "current": "20260807_0013",
+        "expected": "20260807_0013",
     }
     assert body["checks"]["event_worker"]["running"] is True
     assert body["checks"]["reply_worker"]["running"] is True
@@ -174,7 +174,7 @@ async def test_readyz_returns_503_for_database_failure_without_leaking_details()
     app.state.readiness = ReadinessService(
         settings,
         BrokenFactory(),  # type: ignore[arg-type]
-        expected_revision="20260806_0012",
+        expected_revision="20260807_0013",
     )
 
     response = await get(app, "/readyz")
@@ -358,11 +358,11 @@ def test_code_revision_is_resolved_from_alembic_configuration() -> None:
     revision, error = resolve_code_revision()
 
     assert error is None
-    assert revision == "20260806_0012"
+    assert revision == "20260807_0013"
 
 
 async def test_cleanup_worker_failure_is_degraded_but_not_a_readiness_failure() -> None:
-    engine, factory = await sqlite_factory("20260806_0012")
+    engine, factory = await sqlite_factory("20260807_0013")
     settings = Settings(
         _env_file=None,
         event_mode="webhook",

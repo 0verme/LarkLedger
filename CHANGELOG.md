@@ -4,6 +4,14 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Fixed
+
+- `撤销 #C-XXXXX` now deterministically cancels the pending confirmation instead of
+  falling through to AI and potentially undoing the latest ledger entry.
+- Exact duplicate visual messages now share a privacy-safe SHA-256 fingerprint while a
+  confirmation is active, preventing repeated deliveries from creating multiple confirmation
+  codes or cards. Terminal confirmations do not block an intentional later resend.
+
 ## [0.3.0] - 2026-08-07
 
 ### Added (v0.3.0 — High-risk Confirmation / 高风险确认; P07)

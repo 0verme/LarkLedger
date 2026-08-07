@@ -32,6 +32,7 @@ from lark_ledger.models import (
     LedgerEntry,
     PendingCommand,
     ProcessedEvent,
+    ReplyOutbox,
 )
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.pending import PendingCommandStore
@@ -262,10 +263,98 @@ async def test_confirm_directive_event_sets_business_committed_at(
     assert entry.category == "餐饮"
 
 
-async def test_pending_migration_roundtrip_0012(
+async def test_concurrent_identical_images_create_one_pending(
+    postgres_engine: AsyncEngine, postgres_session_factory: async_sessionmaker[AsyncSession]
+) -> None:
+    import json
+
+    from lark_ledger.services.feishu import MessageProcessor
+
+    class RecordingFeishu:
+        async def reply_text(self, message_id, text, *, uuid=None):
+            return None
+
+        async def reply_card(self, message_id, card, *, uuid=None):
+            return None
+
+        async def reply_file(self, message_id, file_key, *, uuid=None):
+            return None
+
+        async def upload_file(self, content, filename):
+            return "file_key"
+
+        async def upload_image(self, png):
+            return "image_key"
+
+        async def download_resource(self, message_id, file_key, kind):
+            return b"exact-same-image"
+
+    class Interpreter:
+        transcription_configured = False
+        vision_configured = True
+
+        async def interpret(self, text, *, now, images):
+            return ParsedCommand(
+                action=Action.CREATE,
+                amount=Decimal("32.00"),
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                note="午饭",
+                occurred_at=T0,
+            )
+
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        postgres_session_factory,
+        RecordingFeishu(),  # type: ignore[arg-type]
+        Interpreter(),  # type: ignore[arg-type]
+    )
+    async with postgres_session_factory() as session:
+        session.add_all(
+            [
+                ProcessedEvent(event_id="evt_same_1", status="received"),
+                ProcessedEvent(event_id="evt_same_2", status="received"),
+            ]
+        )
+        await session.commit()
+
+    def image_event(event_id: str, message_id: str) -> dict[str, Any]:
+        return {
+            "sender": {"sender_id": {"open_id": "ou_user"}},
+            "message": {
+                "message_id": message_id,
+                "message_type": "image",
+                "content": json.dumps({"image_key": "img_same"}),
+            },
+            "event_id": event_id,
+        }
+
+    await asyncio.gather(
+        processor.process(image_event("evt_same_1", "om_same_1")),
+        processor.process(image_event("evt_same_2", "om_same_2")),
+    )
+
+    async with postgres_session_factory() as session:
+        pending_count = await session.scalar(
+            select(func.count()).select_from(PendingCommand)
+        )
+        outbox_count = await session.scalar(select(func.count()).select_from(ReplyOutbox))
+        events = (
+            await session.scalars(
+                select(ProcessedEvent).where(
+                    ProcessedEvent.event_id.in_(["evt_same_1", "evt_same_2"])
+                )
+            )
+        ).all()
+    assert pending_count == 1
+    assert outbox_count == 1
+    assert all(event.business_committed_at is not None for event in events)
+
+
+async def test_pending_migration_roundtrip_0012_and_0013(
     postgres_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Upgrade 0011→0012 creates pending_commands; downgrade drops it."""
+    """0012 creates pending_commands; 0013 adds and removes media dedupe."""
     from alembic.config import Config
 
     from alembic import command
@@ -307,6 +396,40 @@ async def test_pending_migration_roundtrip_0012(
                 "expires_at",
             ):
                 assert expected in names, f"pending_commands missing column {expected}"
+
+        await asyncio.to_thread(
+            command.upgrade, Config(str(_ALEMBIC_INI)), "20260807_0013"
+        )
+        async with scratch_engine.connect() as conn:
+            revision = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+            assert revision == "20260807_0013"
+            fingerprint_column = await conn.scalar(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'pending_commands' "
+                    "AND column_name = 'source_fingerprint'"
+                )
+            )
+            fingerprint_index = await conn.scalar(
+                text("SELECT to_regclass('public.uq_pending_user_active_fingerprint')")
+            )
+            assert fingerprint_column == "source_fingerprint"
+            assert fingerprint_index == "uq_pending_user_active_fingerprint"
+
+        await asyncio.to_thread(
+            command.downgrade, Config(str(_ALEMBIC_INI)), "20260806_0012"
+        )
+        async with scratch_engine.connect() as conn:
+            revision = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+            fingerprint_column = await conn.scalar(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = 'pending_commands' "
+                    "AND column_name = 'source_fingerprint'"
+                )
+            )
+            assert revision == "20260806_0012"
+            assert fingerprint_column is None
 
         await asyncio.to_thread(
             command.downgrade, Config(str(_ALEMBIC_INI)), "20260806_0011"

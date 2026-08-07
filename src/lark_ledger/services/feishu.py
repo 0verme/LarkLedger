@@ -16,6 +16,7 @@ import httpx
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives.padding import PKCS7
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
@@ -60,6 +61,21 @@ from lark_ledger.services.worker import generate_owner_id
 logger = logging.getLogger(__name__)
 
 MAX_POST_IMAGES = 5
+
+
+def _media_fingerprint(source_type: str, text: str, images: list[bytes]) -> str:
+    """Hash an ordered visual payload without retaining its private contents."""
+    digest = hashlib.sha256()
+    digest.update(b"lark-ledger:visual-fingerprint:v1\0")
+    digest.update(source_type.encode("utf-8"))
+    digest.update(b"\0")
+    encoded_text = text.encode("utf-8")
+    digest.update(len(encoded_text).to_bytes(8, "big"))
+    digest.update(encoded_text)
+    for image in images:
+        digest.update(len(image).to_bytes(8, "big"))
+        digest.update(image)
+    return digest.hexdigest()
 
 
 def _feishu_error_details(response: httpx.Response) -> tuple[str, str]:
@@ -442,6 +458,23 @@ class MessageProcessor:
                 )
                 return
             stage = "vision_interpretation" if images else "interpretation"
+            source_fingerprint = (
+                _media_fingerprint(source_type, text, images) if images else None
+            )
+            if (
+                self.settings.pending_enabled
+                and source_fingerprint is not None
+                and await self._pending_store.has_active_fingerprint(
+                    user_open_id, source_fingerprint
+                )
+            ):
+                await self._mark_event_business_committed(event_id)
+                logger.info(
+                    "duplicate active media pending suppressed event_id=%s message_id=%s",
+                    event_id,
+                    message_id,
+                )
+                return
             if not images:
                 # Confirmation directives (P07) are deterministic and must never
                 # reach the AI interpreter: 确认/取消/查看待确认 #C-A83F2.
@@ -505,6 +538,7 @@ class MessageProcessor:
                         command=command,
                         source_type=source_type,
                         source_message_id=write_source_message_id,
+                        source_fingerprint=source_fingerprint,
                         risk=risk,
                     )
                     stage = "reply"
@@ -708,6 +742,7 @@ class MessageProcessor:
         command: ParsedCommand,
         source_type: str,
         source_message_id: str | None,
+        source_fingerprint: str | None,
         risk: RiskAssessment,
     ) -> list[ReplyOutbox]:
         """Create a pending confirmation + its preview card in ONE transaction.
@@ -722,6 +757,7 @@ class MessageProcessor:
                 session=session,
                 event_id=event_id,
                 message_id=message_id,
+                source_fingerprint=source_fingerprint,
                 user_open_id=user_open_id,
                 command=command,
                 source_type=source_type,
@@ -743,10 +779,35 @@ class MessageProcessor:
             )
             session.add(row)
             if event_id is not None:
-                parent = await session.get(ProcessedEvent, event_id)
+                # Keep the fingerprint race inside the explicit commit below;
+                # this lookup must not autoflush the pending insert first.
+                with session.no_autoflush:
+                    parent = await session.get(ProcessedEvent, event_id)
                 if parent is not None:
                     parent.business_committed_at = datetime.now(UTC)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                duplicate_exists = (
+                    source_fingerprint is not None
+                    and await self._pending_store.has_active_fingerprint(
+                        user_open_id, source_fingerprint
+                    )
+                )
+                if not duplicate_exists:
+                    raise
+                if event_id is not None:
+                    parent = await session.get(ProcessedEvent, event_id)
+                    if parent is not None:
+                        parent.business_committed_at = datetime.now(UTC)
+                        await session.commit()
+                logger.info(
+                    "concurrent duplicate media pending suppressed event_id=%s message_id=%s",
+                    event_id,
+                    message_id,
+                )
+                return []
         logger.info(
             "pending confirmation created confirmation_code=%s event_id=%s "
             "risk_reason=%s",
@@ -755,6 +816,15 @@ class MessageProcessor:
             pending.risk_reason,
         )
         return [row]
+
+    async def _mark_event_business_committed(self, event_id: str | None) -> None:
+        if event_id is None:
+            return
+        async with self.session_factory() as session:
+            parent = await session.get(ProcessedEvent, event_id)
+            if parent is not None:
+                parent.business_committed_at = datetime.now(UTC)
+                await session.commit()
 
     async def _signal_or_deliver(self, outbox_rows: list[ReplyOutbox]) -> None:
         """Deliver committed outbox rows: wake the Reply Worker or send inline."""

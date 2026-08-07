@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.3.0` |
 | Git tag | `v0.3.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.3.0`（亦有 `0.3` / `latest` 由发布流水线写入） |
-| Alembic head | `20260806_0012`（v0.3.0；v0.2.1 为 `20260806_0011`，v0.2.0 为 `20260806_0007`） |
+| Alembic head | `20260807_0013`（v0.3.0 初版为 `20260806_0012`） |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -26,7 +26,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 v0.3.0「高风险确认」新增迁移 `20260806_0012` 和 `pending_commands` 表。升级前请备份 PostgreSQL，并确认备份可以恢复；不要把事件清理或尚未实现的 P10 备份脚本当作数据库备份。
 
 1. 拉取 `v0.3.0` 源码或固定镜像 `ghcr.io/0verme/larkledger:0.3.0`。
-2. 在启动新应用前执行 `alembic upgrade head`；唯一新 head 必须是 `20260806_0012`。
+2. 在启动新应用前执行 `alembic upgrade head`；唯一新 head 必须是 `20260807_0013`。
 3. 核对确认配置：`LARK_LEDGER_PENDING_ENABLED`（默认 `true`）、`PENDING_EXPIRES_SECONDS`（默认 86400）、`PENDING_RETENTION_DAYS`（默认 7）、`PENDING_DUPLICATE_WINDOW_MINUTES`（默认 60）和 `PENDING_MAX_LIST`（默认 10）。
 4. 重启并检查 `/healthz`、`/readyz`，再验证一笔简单文字直写和一条图片/语音/批量待确认路径。
 
@@ -211,4 +211,11 @@ Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 
 - **行为变化（v0.3.0）：** `LARK_LEDGER_PENDING_ENABLED` 默认 `true`，图片 / 语音 / 批量 / 疑似重复写入先进入待确认；简单单笔文字仍直写。确认 / 取消可用文本命令 `确认 #C-XXXXX` / `取消 #C-XXXXX` 或预览卡片按钮。确认单默认 24 小时过期，终态确认单默认保留 7 天后由 Cleanup Worker 清理。
 - **回退：** `alembic downgrade 20260806_0011` 删除 `pending_commands` 表及全部待确认单（已确认执行写入的账目不受影响）。需要保留待确认数据时不得执行该 downgrade。
 
-当前 Alembic head：`20260806_0012`。
+## 迁移 `20260807_0013`（图片待确认去重）
+
+- **升级：** `pending_commands` 新增可空的 `source_fingerprint`，并为同一用户的活跃指纹增加部分唯一索引。指纹是带版本与边界的 SHA-256，只保存摘要，不保存图片字节。
+- **行为变化：** 完全相同的单图或富文本多图在已有 `pending` / `executing` 确认单时不再重复识别、建单或发卡。确认单进入终态后可以再次发送。`撤销 #C-XXXXX` 等同于取消确认单，不会撤销最近账目。
+- **存量数据：** 旧行没有原始图片可用于安全回填指纹，因此保持 `NULL`，不自动合并或删除。
+- **回退：** 降级到 `20260806_0012` 会删除指纹索引和字段，不修改待确认状态或账本。
+
+当前 Alembic head：`20260807_0013`。
