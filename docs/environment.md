@@ -358,6 +358,11 @@ curl http://127.0.0.1:8000/healthz
 curl -f http://127.0.0.1:8000/readyz
 ```
 
+使用 `docker compose logs --timestamps` 时，Docker 附加的时间戳以 `Z` 结尾，表示
+UTC，例如 `2026-08-07T07:28:09Z` 对应北京时间 `2026-08-07 15:28:09`。这是
+Docker 日志元数据的正常格式，不表示飞牛 NAS 或容器系统时区配置错误；
+`LARK_LEDGER_TIMEZONE` 仍用于机器人消息、账目和报告中的业务时间展示。
+
 `/healthz` 是 liveness，只确认 HTTP 进程能够响应，不访问数据库、飞书或 AI；即使
 PostgreSQL 不可用也仍返回 200。`/readyz` 是 readiness，会执行 `SELECT 1`、核对数据库
 revision 与代码唯一 Alembic head，并读取已启用 Event / Reply Worker 和 WebSocket receiver

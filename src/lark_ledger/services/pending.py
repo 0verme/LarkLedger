@@ -19,6 +19,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -122,6 +123,16 @@ def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value
+
+
+def _format_local_datetime(
+    value: datetime | str, timezone: str, format_string: str
+) -> str:
+    """Format a stored UTC timestamp in the configured application timezone."""
+    if not value:
+        return ""
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    return _as_utc(parsed).astimezone(ZoneInfo(timezone)).strftime(format_string)
 
 
 def _direction_label(value: Direction | str | None) -> str:
@@ -252,7 +263,9 @@ def build_pending_preview(
     )
 
 
-def build_pending_preview_card(preview: PendingPreview) -> dict[str, Any]:
+def build_pending_preview_card(
+    preview: PendingPreview, *, timezone: str
+) -> dict[str, Any]:
     """Render a confirmation preview card (schema 2.0) with 确认 / 取消 buttons.
 
     Each button uses the JSON 2.0 callback behavior to carry the storage
@@ -263,7 +276,7 @@ def build_pending_preview_card(preview: PendingPreview) -> dict[str, Any]:
     header_lines = [
         f"**确认单 {preview.display_code}**",
         f"原因：{preview.risk_reason}",
-        f"过期时间：{preview.expires_at[:16]}",
+        f"过期时间：{_format_local_datetime(preview.expires_at, timezone, '%Y-%m-%d %H:%M')}",
     ]
     if preview.entries_total:
         header_lines.append(
@@ -722,7 +735,11 @@ class PendingCommandStore:
             for pending in rows:
                 preview = PendingPreview.from_json(pending.preview_json)
                 expires = (
-                    pending.expires_at.strftime("%m-%d %H:%M")
+                    _format_local_datetime(
+                        pending.expires_at,
+                        self._settings.timezone,
+                        "%m-%d %H:%M",
+                    )
                     if pending.expires_at
                     else "未知"
                 )

@@ -209,7 +209,8 @@ async def _processor(
 
 def test_pending_preview_card_uses_native_json_v2_callbacks() -> None:
     card = build_pending_preview_card(
-        PendingPreview(code="CA83F2", display_code="#C-A83F2")
+        PendingPreview(code="CA83F2", display_code="#C-A83F2"),
+        timezone="Asia/Shanghai",
     )
 
     assert card["schema"] == "2.0"
@@ -244,6 +245,20 @@ def test_pending_preview_card_uses_native_json_v2_callbacks() -> None:
             }
         ],
     ]
+
+
+def test_pending_preview_card_formats_utc_expiry_in_configured_timezone() -> None:
+    card = build_pending_preview_card(
+        PendingPreview(
+            code="CA83F2",
+            display_code="#C-A83F2",
+            expires_at="2026-08-08T07:36:00+00:00",
+        ),
+        timezone="Asia/Shanghai",
+    )
+
+    header = card["body"]["elements"][0]["content"]
+    assert "过期时间：2026-08-08 15:36" in header
 
 
 # ---------------------------------------------------------------------------
@@ -583,6 +598,12 @@ async def test_list_pending_shows_open_confirmations() -> None:
     engine, factory = await _sqlite_factory()
     await _create_pending_via_image(factory)
 
+    async with factory() as session:
+        pending = (await session.execute(select(PendingCommand))).scalar_one()
+        # SQLite returns DateTime(timezone=True) values without tzinfo. They are UTC.
+        pending.expires_at = datetime(2026, 8, 8, 7, 36)
+        await session.commit()
+
     from lark_ledger.services.feishu import MessageProcessor
 
     feishu = RecordingFeishu()
@@ -597,5 +618,6 @@ async def test_list_pending_shows_open_confirmations() -> None:
     )
 
     assert any("待确认列表" in text for text in feishu.texts)
+    assert any("过期 08-08 15:36" in text for text in feishu.texts)
     assert len(feishu.texts) == 1
     await engine.dispose()

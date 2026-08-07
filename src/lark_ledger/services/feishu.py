@@ -735,7 +735,8 @@ class MessageProcessor:
                 sequence=0,
                 payload=build_card_payload(
                     card=build_pending_preview_card(
-                        PendingPreview.from_json(pending.preview_json)
+                        PendingPreview.from_json(pending.preview_json),
+                        timezone=self.settings.timezone,
                     )
                 ),
                 blob=None,
