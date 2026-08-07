@@ -82,17 +82,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             worker.start()
         if settings.reply_worker_enabled:
             reply_outbox_store = ReplyOutboxStore(SessionFactory)
+            reply_owner_id = generate_owner_id()
             reply_worker = ReplyWorker(
                 reply_outbox_store,
                 ReplyDeliverer(
                     reply_outbox_store,
                     FeishuClient(settings),
-                    owner_id=generate_owner_id(),
+                    owner_id=reply_owner_id,
                     max_attempts=settings.reply_max_attempts,
                     retry_base_seconds=settings.reply_retry_base_seconds,
                     retry_max_seconds=settings.reply_retry_max_seconds,
                 ),
-                owner_id=generate_owner_id(),
+                owner_id=reply_owner_id,
                 batch_size=settings.reply_worker_batch_size,
                 poll_interval_seconds=settings.reply_worker_poll_interval_seconds,
                 lease_seconds=settings.reply_lease_seconds,

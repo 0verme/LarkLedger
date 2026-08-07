@@ -74,6 +74,28 @@ class ClaimedReply:
     remote_image_key: str | None
 
 
+@dataclass(frozen=True)
+class LegacyReplyCandidate:
+    """Safe metadata for a legacy reply whose delivery state is indeterminate."""
+
+    id: uuid.UUID
+    event_id: str | None
+    attempt_count: int
+    created_at: datetime
+    updated_at: datetime
+    lease_expires_at: datetime
+
+    def to_safe_dict(self) -> dict[str, object]:
+        return {
+            "outbox_id": str(self.id),
+            "event_id": self.event_id,
+            "attempt_count": self.attempt_count,
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat(),
+            "lease_expires_at": self.lease_expires_at.isoformat(),
+        }
+
+
 def _datetime_lte(a: datetime, b: datetime) -> bool:
     """``a <= b`` tolerating the SQLite naive-datetime artifact.
 
@@ -140,6 +162,63 @@ class ReplyOutboxStore:
                 .all()
             )
             return list(rows)
+
+    async def reconcile_legacy_owner_mismatch(
+        self,
+        *,
+        before: datetime,
+        now: datetime,
+        execute: bool = False,
+    ) -> list[LegacyReplyCandidate]:
+        """Find or suppress expired replies affected by the v0.2.1 owner bug.
+
+        Only pre-cutoff ``sending`` rows with an expired lease and no recorded
+        remote message ID qualify. The default is a read-only dry-run. Execute
+        mode marks the locked rows ``dead`` because their actual delivery state
+        cannot be proven, preventing another user-visible retry.
+        """
+        if before > now:
+            raise ValueError("reconciliation cutoff cannot be in the future")
+        async with self._factory() as session:
+            stmt = (
+                select(ReplyOutbox)
+                .where(
+                    ReplyOutbox.status == ReplyStatus.SENDING.value,
+                    ReplyOutbox.remote_message_id.is_(None),
+                    ReplyOutbox.lease_expires_at.is_not(None),
+                    ReplyOutbox.lease_expires_at <= now,
+                    ReplyOutbox.updated_at <= before,
+                )
+                .order_by(ReplyOutbox.updated_at.asc(), ReplyOutbox.id.asc())
+            )
+            if execute:
+                stmt = stmt.with_for_update(skip_locked=True)
+            rows = (await session.execute(stmt)).scalars().all()
+            candidates = [
+                LegacyReplyCandidate(
+                    id=row.id,
+                    event_id=row.event_id,
+                    attempt_count=row.attempt_count or 0,
+                    created_at=row.created_at,
+                    updated_at=row.updated_at,
+                    lease_expires_at=cast(datetime, row.lease_expires_at),
+                )
+                for row in rows
+            ]
+            if execute:
+                for row in rows:
+                    row.status = ReplyStatus.DEAD.value
+                    row.next_attempt_at = None
+                    row.lease_owner = None
+                    row.lease_expires_at = None
+                    row.last_error_code = "LegacyOwnerMismatch"
+                    row.result_summary = (
+                        "delivery state indeterminate after legacy reply owner mismatch; "
+                        "suppressed to prevent duplicate reply"
+                    )
+                    row.updated_at = now
+                await session.commit()
+            return candidates
 
     @staticmethod
     def _is_claimable(row: ReplyOutbox, now: datetime) -> bool:

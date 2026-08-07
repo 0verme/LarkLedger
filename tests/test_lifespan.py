@@ -147,14 +147,20 @@ async def test_lifespan_starts_and_stops_reply_worker_when_enabled(
         reply_worker_enabled=True,
     )
     lifecycle: list[str] = []
+    owners: list[str] = []
 
     class FakeReplyDeliverer:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             lifecycle.append("deliverer-constructed")
+            self.owner_id = str(kwargs["owner_id"])
+            owners.append(self.owner_id)
 
     class FakeReplyWorker:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             lifecycle.append("constructed")
+            deliverer = args[1]
+            owners.append(str(kwargs["owner_id"]))
+            assert deliverer.owner_id == kwargs["owner_id"]
 
         def start(self) -> None:
             lifecycle.append("started")
@@ -169,6 +175,7 @@ async def test_lifespan_starts_and_stops_reply_worker_when_enabled(
     app = FastAPI()
     async with main.lifespan(app):
         assert lifecycle == ["deliverer-constructed", "constructed", "started"]
+        assert len(owners) == 2 and owners[0] == owners[1]
         assert isinstance(app.state.reply_worker, FakeReplyWorker)
     assert lifecycle == ["deliverer-constructed", "constructed", "started", "stopped"]
 

@@ -317,6 +317,7 @@ async def test_event_and_reply_workers_capture_unexpected_task_exits() -> None:
             raise AssertionError("no event should be claimed")
 
     class Deliverer:
+        owner_id = "host:1:secret-nonce"
         max_attempts = 3
         retry_base_seconds = 2.0
         retry_max_seconds = 3600.0

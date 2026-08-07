@@ -14,6 +14,7 @@ import asyncio
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -199,6 +200,13 @@ def _worker(
         owner_id=owner_id,
         **kwargs,
     )
+
+
+def test_worker_rejects_mismatched_deliverer_owner() -> None:
+    store = object()
+    deliverer = _deliverer(store, RecordingFeishu(), owner_id="deliverer-owner")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="same owner_id"):
+        ReplyWorker(store, deliverer, owner_id="worker-owner")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -989,6 +997,31 @@ async def test_worker_stop_prevents_new_claims() -> None:
     assert await worker.run_once(now=T0) == 0
     reloaded = await _row(factory, row.id)
     assert reloaded.status == ReplyStatus.PENDING.value
+    await engine.dispose()
+
+
+async def test_worker_delivery_marks_sent_and_cannot_be_reclaimed_after_lease() -> None:
+    class RemoteIdFeishu(RecordingFeishu):
+        async def reply_text(
+            self, message_id: str, text: str, *, uuid: str | None = None
+        ) -> str:
+            await super().reply_text(message_id, text, uuid=uuid)
+            return "om_remote_reply"
+
+    engine, factory = await _sqlite_factory()
+    row = await _insert(factory, event_id="evt_worker_once", message_id="om_source")
+    feishu = RemoteIdFeishu()
+    worker = _worker(_store(factory), feishu, owner_id="shared-owner")
+
+    assert await worker.run_once(now=T0) == 1
+    reloaded = await _row(factory, row.id)
+    assert reloaded.status == ReplyStatus.SENT.value
+    assert reloaded.remote_message_id == "om_remote_reply"
+    assert reloaded.lease_owner is None
+    assert reloaded.lease_expires_at is None
+
+    assert await worker.run_once(now=T0 + timedelta(seconds=301)) == 0
+    assert feishu.text_calls == [("om_source", "hello", row.id.hex)]
     await engine.dispose()
 
 

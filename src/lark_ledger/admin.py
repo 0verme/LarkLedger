@@ -13,7 +13,18 @@ from lark_ledger.db import SessionFactory, engine
 from lark_ledger.models import PendingCommand
 from lark_ledger.services.cleanup import CleanupStore
 from lark_ledger.services.event_replay import EventReplayService
+from lark_ledger.services.outbox import ReplyOutboxStore
 from lark_ledger.services.pending import PendingCommandStore, PendingPreview
+
+
+def _aware_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be an ISO 8601 datetime") from exc
+    if parsed.tzinfo is None:
+        raise argparse.ArgumentTypeError("datetime must include a UTC offset")
+    return parsed.astimezone(UTC)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -41,6 +52,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="mark due pending confirmations as expired (idempotent sweep)",
     )
     expire_pending.add_argument("--batch-size", type=int, default=500)
+    reconcile_replies = subparsers.add_parser(
+        "reconcile-reply-outbox",
+        help="find legacy stuck replies; use --execute to suppress redelivery",
+    )
+    reconcile_replies.add_argument(
+        "--before",
+        required=True,
+        type=_aware_datetime,
+        help="deployment cutoff as an ISO 8601 datetime with UTC offset",
+    )
+    reconcile_replies.add_argument(
+        "--execute",
+        action="store_true",
+        help="mark matching replies dead (default is dry-run)",
+    )
     return parser
 
 
@@ -99,6 +125,29 @@ async def _run(args: argparse.Namespace) -> int:
                     {"status": "ok", "expired": expired},
                     ensure_ascii=False,
                     indent=2,
+                )
+            )
+            return 0
+        if args.command == "reconcile-reply-outbox":
+            now = datetime.now(UTC)
+            candidates = await ReplyOutboxStore(
+                SessionFactory
+            ).reconcile_legacy_owner_mismatch(
+                before=args.before,
+                now=now,
+                execute=args.execute,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": "ok",
+                        "mode": "execute" if args.execute else "dry-run",
+                        "count": len(candidates),
+                        "replies": [item.to_safe_dict() for item in candidates],
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
                 )
             )
             return 0

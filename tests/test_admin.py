@@ -61,3 +61,19 @@ def test_expire_pending_cli_parses() -> None:
     assert args.batch_size == 500
     args = parser.parse_args(["expire-pending", "--batch-size", "100"])
     assert args.batch_size == 100
+
+
+def test_reconcile_reply_outbox_cli_defaults_to_dry_run() -> None:
+    args = build_parser().parse_args(
+        ["reconcile-reply-outbox", "--before", "2026-08-07T10:00:00+08:00"]
+    )
+    assert args.command == "reconcile-reply-outbox"
+    assert args.execute is False
+    assert args.before.isoformat() == "2026-08-07T02:00:00+00:00"
+
+
+def test_reconcile_reply_outbox_cli_requires_timezone() -> None:
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(
+            ["reconcile-reply-outbox", "--before", "2026-08-07T10:00:00"]
+        )

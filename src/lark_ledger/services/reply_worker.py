@@ -422,6 +422,8 @@ class ReplyWorker:
     ) -> None:
         from lark_ledger.services.worker import default_clock
 
+        if deliverer.owner_id != owner_id:
+            raise ValueError("reply worker and deliverer must use the same owner_id")
         self._store = store
         self._deliverer = deliverer
         self._owner_id = owner_id
