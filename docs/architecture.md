@@ -2,13 +2,13 @@
 
 > Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
 
-本文说明 LarkLedger `0.1.x` / 向 `0.2.x` 演进中的运行组件、消息数据流和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
+本文说明 LarkLedger v0.4.0 的运行组件、消息数据流、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
 ## 组件
 
 | 组件 | 职责 |
 | --- | --- |
-| FastAPI 应用 | 管理生命周期，提供 `GET /healthz`、`GET /readyz` 和 Webhook 入口 |
+| FastAPI 应用 | 管理生命周期，提供 `GET /healthz`、`GET /readyz`、Webhook、可选 Web API 与 Dashboard 静态资源 |
 | Webhook / 长连接接收器 | 接收飞书事件并转换为统一事件结构 |
 | `EventService` | 按 `event_id` 抢占并去重事件；Worker 模式下只领取，同步模式下调用消息处理器 |
 | `EventWorker` | 后台事件 Worker（P05b）：`FOR UPDATE SKIP LOCKED` 领取、数据库租约、指数退避重试与 dead 处理 |

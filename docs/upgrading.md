@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.3.0** |
-| 包版本 / `__version__` | `0.3.0` |
-| Git tag | `v0.3.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.3.0`（亦有 `0.3` / `latest` 由发布流水线写入） |
-| Alembic head | `20260807_0013`（v0.3.0 初版为 `20260806_0012`） |
+| 最新正式版本 | **v0.4.0** |
+| 包版本 / `__version__` | `0.4.0` |
+| Git tag | `v0.4.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest` 由发布流水线写入） |
+| Alembic head | `20260808_0014` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -23,7 +23,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 ## 从 v0.3.0 升级到 v0.4.0
 
-v0.4.0 新增可选 Web Dashboard 与迁移 `20260808_0014`（`dashboard_sessions`）。先备份 PostgreSQL，再执行 `alembic upgrade head`。Dashboard 默认关闭，所以只升级代码和 migration 不会改变机器人、Worker 或现有公网路由。
+v0.4.0 新增可选 Web Dashboard 与迁移 `20260808_0014`（`dashboard_sessions`）。先备份 PostgreSQL，再拉取 `v0.4.0` 或固定镜像 `ghcr.io/0verme/larkledger:0.4.0`，然后执行 `alembic upgrade head`。Dashboard 默认关闭，所以只升级代码和 migration 不会改变机器人、Worker 或现有公网路由。
 
 需要启用 Dashboard 时，再配置 HTTPS origin、强随机 Session Secret、飞书 OAuth 回调与管理员 open_id；完整清单见[环境与部署指南 · Web Dashboard](environment.md#web-dashboard可选)。生产镜像已经通过 Node build stage 嵌入静态资源，运行容器不包含 Node server。
 

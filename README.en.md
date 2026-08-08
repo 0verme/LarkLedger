@@ -10,7 +10,7 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works in v0.3.0
+## What works in v0.4.0
 
 - **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies; simple single text entries still write straight through
 - **Recent list / single-entry detail** (`最近10笔`, `查看 #XXXXX`)
@@ -20,7 +20,8 @@ Detailed user, deployment, and architecture docs are **Chinese-first**. This REA
 - **High-risk confirmation**: image / voice / batch / likely-duplicate writes first create a pending confirmation (`#C-XXXXX`) — confirm or cancel by text or card button; confirmation always uses the frozen parse result, never re-calls AI
 - User isolation by Feishu `open_id` and claim-first `event_id` idempotency
 - **Reliable delivery**: background Event / Reply Workers, transactional reply outbox, PostgreSQL lease and exponential-backoff retry, readiness probes, terminal retention cleanup, and guarded manual event replay
-- Self-hosted stack: FastAPI, PostgreSQL, Docker Compose
+- **Web Dashboard**: Feishu OAuth, financial overview, ledger and revisions, pending confirmations, analytics, budgets, reports, CSV downloads, and an administrator reliability console
+- Self-hosted stack: FastAPI, React / TypeScript / Vite, PostgreSQL, Docker Compose
 
 Simple single text remains a direct write: `午饭32元` immediately creates the ledger entry. Image, voice, batch, and likely-duplicate writes follow `media → preview card → user confirmation → ledger`. Text fallbacks are `确认 #C-A83F2`, `取消 #C-A83F2`, and `查看待确认` (or `确认列表`).
 
@@ -151,17 +152,17 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - Failed replies **are** auto-retried by the background **Reply Worker** (P06b): committed outbox intents are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, delivered with a database lease, retried with exponential backoff, and dead-lettered after permanent errors or exhausted attempts. A failed reply never re-runs business, and pending / failed replies are re-delivered after a restart.
 - Each reply carries a stable Feishu `uuid` idempotency key (the outbox row id): within the 1-hour dedup window a re-send after a crash is deduplicated by Feishu. In the extreme case (Feishu sent, local mark lost, and the re-send is more than 1 hour later) a duplicate reply may reach the user — it can **never** cause duplicate business execution or double bookkeeping.
 - A lightweight Cleanup Worker deletes only terminal delivery records in bounded batches: successful events / sent replies default to 30 days, while dead records default to 90 days. Ledger entries and revisions are never deleted. Cleanup is not a database backup; review audit requirements before shortening retention.
-- Operators can use the dry-run-by-default `python -m lark_ledger.admin replay-event` CLI to replay provably safe `dead` / `failed` events; only explicit `--execute` reruns business, and every accepted replay writes an audit. Events with an Outbox, source ledger results, or unproven historical atomicity are refused. Result replay remains internal.
+- Administrators can use the Dashboard or the dry-run-by-default `python -m lark_ledger.admin replay-event` CLI to replay provably safe `dead` / `failed` events; only an explicit second confirmation or `--execute` reruns business, and every accepted replay writes an audit. Events with an Outbox, source ledger results, or unproven historical atomicity are refused. Result replay consumes only the existing Outbox and never reruns business.
 - **High-risk confirmation (v0.3.0)**: image / voice / batch / likely-duplicate writes wait for a user `确认 #C-XXXXX` (or a card button) before writing. Confirmations expire (default 24h) and are per-user only; no multi-level approval or shared confirmation.
-- No web admin UI, no shared ledgers
+- The Dashboard has only `USER` and `ADMIN`; there is no enterprise multi-tenancy, organization tree, complex RBAC, or shared ledger
 - **JSON export is not a formal capability** (CSV only)
 
-Roadmap themes (no promised ship dates): `v0.3.x` maintenance and increments (shared ledgers / web admin are not currently promised).
+Future roadmap themes are outside this release commitment; v0.4.0 does not expand into a multi-tenant finance ERP.
 
-Current release: **v0.3.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.3.0` (also `0.3` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.4.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.4.0` (also `0.4` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.3.0
+export LARK_LEDGER_IMAGE_TAG=0.4.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d

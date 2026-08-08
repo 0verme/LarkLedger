@@ -4,13 +4,39 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-08
+
+### Added (v0.4.0 — Web Dashboard / 可视化账本与运维控制台; P11)
+
+- **Optional Web Dashboard** built with React, TypeScript, Vite, React Router, TanStack Query, and lightweight SVG charts. FastAPI serves the production build from the same application image; no Node.js production server or second backend is introduced.
+- **Feishu OAuth and server-side sessions** map the signed-in identity to `user_open_id`. Sessions use revocable PostgreSQL records, HttpOnly Secure cookies, explicit TTL, OAuth state validation, CSRF protection, redirect-origin validation, fixation resistance, and logout revocation. Roles remain deliberately small: `USER` and environment-configured `ADMIN`.
+- **Ledger management** provides a financial overview, server-side pagination and filtering, entry detail, revision timeline, service-layer update, soft-delete, and restore. Every operation forces the authenticated session user and preserves existing revision and transaction rules.
+- **Pending console** lists frozen confirmation previews and reuses the existing locked, idempotent confirmation/cancellation path. Web confirmation never re-calls AI and cannot bypass expiry, ownership, or concurrent-execution guards.
+- **Analytics and finance views** provide backend-aggregated trend, category, and monthly data, budgets, existing reports, and constrained CSV downloads with the same user isolation, formula-injection defense, 5,000-row limit, 5 MiB limit, and UTF-8 BOM as the bot path.
+- **Administrator operations console** exposes redacted Event and Reply Outbox metadata, Dead lists, result replay, guarded event replay with dry-run and explicit second confirmation, readiness-derived health, and a read-only secret-safe configuration view. Payloads, reply bodies, blobs, credentials, database URLs, and worker nonces are never returned.
+- **Dashboard session migration** `20260808_0014` adds revocable `dashboard_sessions` without changing ledger, pending, Event, or Outbox state machines.
+
+### Changed
+
+- The production Dockerfile now builds Vite assets in a Node stage and copies only `dist` into the Python runtime image. `DASHBOARD_ENABLED=false` leaves the original bot, workers, migrations, and API paths independent of the Dashboard.
+- CI now includes a locked frontend job (`npm ci`, ESLint, TypeScript, unit tests, production build) alongside Python 3.11/3.12, PostgreSQL integration, documentation, and security jobs. Tag releases continue to build multi-architecture `linux/amd64` and `linux/arm64` images.
+- Documentation now covers Dashboard OAuth, HTTPS and trusted-proxy deployment, administrator mapping, session security, disabled mode, upgrades, architecture, and production image delivery.
+
 ### Fixed
 
-- `撤销 #C-XXXXX` now deterministically cancels the pending confirmation instead of
-  falling through to AI and potentially undoing the latest ledger entry.
-- Exact duplicate visual messages now share a privacy-safe SHA-256 fingerprint while a
-  confirmation is active, preventing repeated deliveries from creating multiple confirmation
-  codes or cards. Terminal confirmations do not block an intentional later resend.
+- `撤销 #C-XXXXX` now deterministically cancels the pending confirmation instead of falling through to AI and potentially undoing the latest ledger entry.
+- Exact duplicate visual messages now share a privacy-safe SHA-256 fingerprint while a confirmation is active, preventing repeated deliveries from creating multiple confirmation codes or cards. Terminal confirmations do not block an intentional later resend.
+- Create commands whose JSON provider returns `occurred_at: null` now use the request timestamp, preserving the established “book it now” behavior for voice and other undated input while retaining strict validation for every other field.
+
+### Security
+
+- Web API tests cover OAuth state, session expiry and logout, CSRF, user/admin authorization, IDOR resistance, cross-user short-ID collisions, pending ownership, replay permissions, export isolation, and safe error responses.
+- Dashboard startup fails when enabled without a strong session secret, a valid HTTPS production origin, or required Feishu OAuth credentials; access tokens and long-lived authentication material are never exposed to browser storage.
+
+### Validation
+
+- The complete P11 series passed Python lint/type/unit coverage gates, real PostgreSQL integration tests, Alembic single-head checks, frontend lint/type/unit/build, documentation links, dependency audit, and production Docker builds.
+- Real NAS acceptance verified OAuth login, user/admin roles, Dashboard overview, ledger detail/edit/revision/delete/restore, voice pending confirmation, CSV download, analytics, budgets, reports, health, Event, and Outbox views while the Feishu WebSocket bot remained connected. Dashboard-disabled bot operation was also verified. Event Replay Dry Run was not executed because the production database contained no Dead Event; no synthetic failure row was inserted.
 
 ## [0.3.0] - 2026-08-07
 

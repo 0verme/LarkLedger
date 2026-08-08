@@ -376,11 +376,11 @@ curl http://127.0.0.1:8000/healthz
 
 ### 使用 GHCR 预构建镜像（可选）
 
-`compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}`。当前正式版本为 **0.3.0**：
+`compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}`。当前正式版本为 **0.4.0**：
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.3.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.3.0"
+export LARK_LEDGER_IMAGE_TAG=0.4.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.4.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -501,10 +501,10 @@ uvicorn lark_ledger.main:app --reload
 
 - 事件处理失败会由事件 Worker 自动重试（指数退避）并最终进入 `dead`；业务变更与回复意图通过 **Transactional Outbox**（P06a）同一事务提交，崩溃重试不会重复执行业务，但仍不宣称"绝不重复记账"，来源唯一约束为兜底
 - 回复发送失败（P06b）由后台 Reply Worker 自动重试（指数退避）并最终进入回复 `dead`；发送失败**绝不**重新执行业务。进程重启后继续投递 `pending` / `failed` 回复
-- 没有用户可见的结果回放 / 人工重发命令（`OutboxReplayService` 是内部可测试能力）；`dead` 事件重放仅提供受控管理员 CLI，没有 Web 管理界面
+- Dashboard 管理员可以重发现有 `dead` / `failed` Outbox 结果，也可对 `dead` / `failed` Event 先 dry-run 再二次确认重放；普通用户无权访问，且没有批量重放
 - 极端窗口下（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过飞书 `uuid` 幂等的 1 小时窗口）用户可能收到重复回复；该窗口**不会**导致重复执行业务或重复记账
-- 图片 / 语音 / 批量尚无写入前确认
-- 无 Web 管理页面、无共享账本
+- 图片 / 语音 / 批量 / 疑似重复使用冻结结果进行写入前确认；没有多级审批或多人共享确认
+- Dashboard 只有 `USER` / `ADMIN`，无企业多租户、组织树、复杂 RBAC 或共享账本
 - JSON 导出不是正式能力
 
 路线主题（**无发布日期承诺**）：
@@ -513,6 +513,7 @@ uvicorn lark_ledger.main:app --reload
 v0.2.1：可靠投递（事件 Worker / 租约 / 重试 / dead 已完成；Transactional Outbox 已完成；
         后台回复 Worker / 回复租约 / 回复重试 / 回复 dead 已完成；结果回放为内部能力）
 v0.3.0：高风险确认
+v0.4.0：Web Dashboard（账目、确认、分析与可靠性运维）
 ```
 
 ---
@@ -527,4 +528,6 @@ v0.3.0：高风险确认
 - [ ] `午饭32元` 可记账且回复含 `#XXXXX`；`最近10笔` 可核对
 - [ ] （可选）CSV 导出在真实飞书确认文件权限后可用
 - [ ] （可选）图片 / 语音 Key 与资源权限仅在需要时配置并验证
+- [ ] （可选）Dashboard 使用 HTTPS，OAuth 回调、强 Session Secret、管理员 open_id 与 Secure Cookie 已配置
+- [ ] （启用 Dashboard 时）OAuth 登录、用户隔离、账目 revision、Pending、CSV 与管理员健康页面已验证
 - [ ] 已建立备份、恢复与凭据轮换流程

@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-## 当前能力（v0.3.0）
+## 当前能力（v0.4.0）
 
 - **文字记账**，成功回复含用户内唯一五位短 ID（`#XXXXX`）；简单明确的单笔文字仍直接入账
 - **最近账目 / 单笔详情**（例如 `最近10笔`、`查看 #XXXXX`）
@@ -18,7 +18,8 @@
 - **高风险确认**：图片 / 语音 / 批量 / 疑似重复先进入待确认（`#C-XXXXX`），可文本 `确认`/`取消` 或点卡片按钮，确认时才用冻结结果写账
 - 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
 - **可靠投递**：事件 / 回复后台 Worker、事务性回复 Outbox、PostgreSQL 租约与指数退避重试、readiness、终态清理与受控人工事件重放
-- 自托管：FastAPI、PostgreSQL、Docker Compose
+- **Web Dashboard**：飞书 OAuth、财务总览、账目与 revision、Pending、分析、预算、报表、CSV 下载及管理员可靠性控制台
+- 自托管：FastAPI、React / TypeScript / Vite、PostgreSQL、Docker Compose
 
 完整消息示例见[用户手册](docs/help.md)。
 
@@ -200,14 +201,14 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 - 回复发送失败**会自动重试**（P06b）：后台 Reply Worker 用 `FOR UPDATE SKIP LOCKED` 领取已提交的 Outbox、数据库租约、指数退避重试、永久错误或重试耗尽进入回复 `dead`；发送失败**绝不**重新执行业务，进程重启后继续投递 `pending` / `failed` 回复
 - 每次回复携带稳定的飞书 `uuid` 幂等键（Outbox 行 ID）：1 小时内崩溃重发由飞书去重；极端情况（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过 1 小时）用户可能收到重复回复，但**绝不会**导致重复执行业务或重复记账
 - 轻量 Cleanup Worker 默认按小批次清理终态投递记录：成功 Event / 已发送 Outbox 默认保留 30 天，dead 默认保留 90 天；不会删除账本或 revision。清理不是数据库备份，调整保留期前应评估审计要求
-- 管理员可通过默认 dry-run 的 `python -m lark_ledger.admin replay-event` 受控重放安全的 `dead` / `failed` 事件；显式 `--execute` 才会重新执行业务并写独立审计。存在 Outbox、已有账目结果或历史原子性无法证明时一律拒绝；结果回放仍是内部能力
+- 管理员可通过 Dashboard 或默认 dry-run 的 `python -m lark_ledger.admin replay-event` 受控重放安全的 `dead` / `failed` 事件；显式二次确认或 `--execute` 才会重新执行业务并写独立审计。存在 Outbox、已有账目结果或历史原子性无法证明时一律拒绝；结果重发只消费已有 Outbox，绝不重新执行业务
 - **高风险确认（v0.3.0）**：图片 / 语音 / 批量 / 疑似重复先进入待确认 `#C-XXXXX`，确认或取消才结束。确认单 24 小时过期；确认使用冻结解析结果，绝不重新调用 AI。确认单只属于当前用户，无多级审批或多人共享确认
-- 无 Web 管理页面、无共享账本
+- Dashboard 仅提供 `USER` / `ADMIN` 两种角色；无企业多租户、组织树、复杂 RBAC 或共享账本
 - JSON 导出**不是**正式能力（当前仅 CSV）
 
-路线（无具体发布日期承诺）：`v0.3.x` 维护与增量（共享账本 / Web 管理端等不在当前承诺内）。
+后续路线不在本次发布承诺内；v0.4.0 不扩展为多租户财务 ERP。
 
-镜像与版本：当前正式版本为 **v0.3.0**。预构建镜像：`ghcr.io/0verme/larkledger:0.3.0`（亦有 `0.3` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.4.0**。预构建镜像：`ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -257,8 +258,8 @@ pytest --cov
 ## 使用预构建镜像（可选）
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.3.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.3.0"
+export LARK_LEDGER_IMAGE_TAG=0.4.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.4.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -273,7 +274,7 @@ curl http://127.0.0.1:8000/healthz
 - [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
 - [架构说明](docs/architecture.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md) · [v0.3.0 发布说明](.github/release-notes/v0.3.0.md) · [v0.2.1 发布说明](.github/release-notes/v0.2.1.md)
+- [变更日志](CHANGELOG.md) · [v0.4.0 发布说明](.github/release-notes/v0.4.0.md) · [v0.3.0 发布说明](.github/release-notes/v0.3.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 
