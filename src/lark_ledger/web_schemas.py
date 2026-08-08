@@ -189,6 +189,79 @@ class ResultReplayResponse(BaseModel):
     not_found: int
 
 
+class AnalyticsSummary(BaseModel):
+    range_start: datetime
+    range_end: datetime
+    income: Decimal
+    expense: Decimal
+    balance: Decimal
+    entry_count: int
+
+
+class AnalyticsTrendPoint(BaseModel):
+    period: date
+    income: Decimal
+    expense: Decimal
+    balance: Decimal
+
+
+class AnalyticsCategory(BaseModel):
+    category: str
+    amount: Decimal
+    ratio: Decimal
+
+
+class AnalyticsMonthlyPoint(BaseModel):
+    period: str
+    income: Decimal
+    expense: Decimal
+    balance: Decimal
+
+
+class AnalyticsOverview(BaseModel):
+    summary: AnalyticsSummary
+    trend: list[AnalyticsTrendPoint]
+    categories: list[AnalyticsCategory]
+
+
+class BudgetItem(BaseModel):
+    category: str
+    amount: Decimal
+    spent: Decimal
+    remaining: Decimal
+    usage_rate: Decimal
+
+
+class BudgetOverview(BaseModel):
+    currency: str
+    total_budget: Decimal
+    total_spent: Decimal
+    total_remaining: Decimal
+    usage_rate: Decimal
+    items: list[BudgetItem]
+
+
+class BudgetUpdateRequest(BaseModel):
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+
+class ExportRequestBody(BaseModel):
+    preset: Literal["last_90_days", "this_month", "all", "custom"]
+    start_date: date | None = None
+    end_date: date | None = None
+    include_deleted: bool = False
+
+    @model_validator(mode="after")
+    def validate_custom_range(self) -> ExportRequestBody:
+        if self.preset == "custom":
+            if self.start_date is None or self.end_date is None:
+                raise ValueError("custom export requires start_date and end_date")
+            if self.start_date > self.end_date:
+                raise ValueError("start_date must not be after end_date")
+        return self
+
+
 DeletedFilter = Literal["active", "deleted", "all"]
 EntrySort = Literal["occurred_at", "amount", "updated_at"]
 SortOrder = Literal["asc", "desc"]
@@ -197,3 +270,4 @@ AdminEventStatus = Literal[
     "received", "processing", "failed", "succeeded", "dead", "legacy", "legacy_succeeded"
 ]
 AdminOutboxStatus = Literal["pending", "sending", "failed", "sent", "dead"]
+AnalyticsPeriod = Literal["7d", "30d", "90d", "year", "custom"]

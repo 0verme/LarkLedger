@@ -87,6 +87,29 @@ describe("dashboard routing and protection", () => {
     expect(JSON.parse(String(requests[1][1]?.body)).confirmation_event_id).toBe("evt-dead");
   });
 
+  it("renders analytics and updates a category budget", async () => {
+    const me = { open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" };
+    const budget = { currency: "CNY", total_budget: "200", total_spent: "40", total_remaining: "160", usage_rate: "20", items: [{ category: "餐饮", amount: "200", spent: "40", remaining: "160", usage_rate: "20" }] };
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json(me));
+      if (url.includes("analytics/monthly")) return Promise.resolve(Response.json([{ period: "2026-08", income: "100", expense: "40", balance: "60" }]));
+      if (url.includes("/analytics?")) return Promise.resolve(Response.json({ summary: { range_start: "2026-08-01T00:00:00Z", range_end: "2026-08-09T00:00:00Z", income: "100", expense: "40", balance: "60", entry_count: 2 }, trend: [{ period: "2026-08-08", income: "100", expense: "40", balance: "60" }], categories: [{ category: "餐饮", amount: "40", ratio: "100" }] }));
+      if (url.includes("/budgets")) return Promise.resolve(Response.json(init?.method === "PUT" ? { ...budget, total_budget: "300", total_remaining: "260", usage_rate: "13.333", items: [{ ...budget.items[0], amount: "300", remaining: "260", usage_rate: "13.333" }] } : budget));
+      return Promise.resolve(Response.json({}));
+    }));
+    const view = renderApp("/analytics");
+    expect(await screen.findByRole("heading", { name: "看懂钱花去了哪里。" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /餐饮/ })).toHaveAttribute("href", "/entries?category=%E9%A4%90%E9%A5%AE");
+    view.unmount();
+    renderApp("/budgets");
+    fireEvent.click(await screen.findByRole("button", { name: "修改 餐饮" }));
+    fireEvent.change(screen.getByLabelText("每月预算"), { target: { value: "300" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("预算已更新")).toBeInTheDocument();
+    expect(screen.getAllByText(/¥300\.00/).length).toBeGreaterThan(0);
+  });
+
   it("confirms and cancels frozen pending previews", async () => {
     const base = { status: "pending", source_type: "image", transport: "feishu", risk_reason: "图片识别", entries_total: 1, income_total: "0", expense_total: "32", currency: "CNY", created_at: "2026-08-08T04:00:00Z", expires_at: "2026-08-08T05:00:00Z", completed_at: null };
     const rows = [{ ...base, confirmation_id: "#C-A83F2" }, { ...base, confirmation_id: "#C-B83F2" }];

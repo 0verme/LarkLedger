@@ -127,6 +127,15 @@ export type ReplayPreflight = {
 export type EventReplayResult = { mode: string; outcome: string; audit_id: string | null; resulting_status: string | null; preflight: ReplayPreflight };
 export type HealthSnapshot = { status: string; checks: Record<string, { status: string; reason?: string; current?: string; enabled?: boolean; running?: boolean; last_error_code?: string | null }> };
 
+export type AnalyticsSummary = { range_start: string; range_end: string; income: string; expense: string; balance: string; entry_count: number };
+export type AnalyticsTrendPoint = { period: string; income: string; expense: string; balance: string };
+export type AnalyticsCategory = { category: string; amount: string; ratio: string };
+export type AnalyticsMonthlyPoint = { period: string; income: string; expense: string; balance: string };
+export type AnalyticsOverview = { summary: AnalyticsSummary; trend: AnalyticsTrendPoint[]; categories: AnalyticsCategory[] };
+export type BudgetItem = { category: string; amount: string; spent: string; remaining: string; usage_rate: string };
+export type BudgetOverview = { currency: string; total_budget: string; total_spent: string; total_remaining: string; usage_rate: string; items: BudgetItem[] };
+export type ReportData = { range_start: string; range_end: string; currency: string; income_total: string; expense_total: string; balance: string; entry_count: number; categories: Array<{ category: string; amount: string }>; trend: Array<{ period: string; amount: string }>; trend_granularity: "day" | "month" };
+
 export const money = (value: string | number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
 
@@ -170,4 +179,20 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+export async function downloadExport(payload: unknown): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch("/api/web/v1/exports", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": cookie("lark_ledger_csrf") },
+    credentials: "same-origin",
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const error = (await response.json().catch(() => null)) as { detail?: string } | null;
+    throw new ApiError(response.status, error?.detail ?? "导出失败，请稍后重试");
+  }
+  const disposition = response.headers.get("Content-Disposition") ?? "";
+  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "larkledger-export.csv";
+  return { blob: await response.blob(), filename };
 }

@@ -24,6 +24,7 @@ import { ApiError, api, type Me } from "./api";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DeadPage, EventsPage, HealthPage, OutboxPage } from "./pages/AdminPages";
 import { EntriesPage } from "./pages/EntriesPage";
+import { AnalyticsPage, BudgetsPage, ExportsPage, ReportsPage } from "./pages/FinancePages";
 import { PendingPage } from "./pages/PendingPage";
 
 type NavItem = { label: string; path: string; icon: typeof Activity; admin?: boolean };
@@ -105,6 +106,10 @@ function pageElement(item: NavItem) {
   if (item.path === "/") return <DashboardPage />;
   if (item.path === "/entries") return <EntriesPage />;
   if (item.path === "/pending") return <PendingPage />;
+  if (item.path === "/budgets") return <BudgetsPage />;
+  if (item.path === "/analytics") return <AnalyticsPage />;
+  if (item.path === "/reports") return <ReportsPage />;
+  if (item.path === "/exports") return <ExportsPage />;
   if (item.path === "/admin/events") return <EventsPage />;
   if (item.path === "/admin/outbox") return <OutboxPage />;
   if (item.path === "/admin/dead") return <DeadPage />;

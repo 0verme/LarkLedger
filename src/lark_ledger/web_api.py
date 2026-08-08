@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Annotated, cast
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse, Response
@@ -15,7 +16,7 @@ from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
 from lark_ledger.models import Direction
 from lark_ledger.readiness import ReadinessService
-from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.dashboard_auth import (
     CSRF_COOKIE,
     CSRF_HEADER,
@@ -30,6 +31,7 @@ from lark_ledger.services.ledger import EntryConflictError, LedgerService
 from lark_ledger.services.pending import PendingCommandStore
 from lark_ledger.services.replay import OutboxReplayService
 from lark_ledger.services.web_admin import WebAdminQueryService
+from lark_ledger.services.web_analytics import WebAnalyticsQueryService, local_date_bounds
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 from lark_ledger.services.web_pending import WebPendingQueryService
 from lark_ledger.web_schemas import (
@@ -38,6 +40,14 @@ from lark_ledger.web_schemas import (
     AdminEventStatus,
     AdminOutboxPage,
     AdminOutboxStatus,
+    AnalyticsCategory,
+    AnalyticsMonthlyPoint,
+    AnalyticsOverview,
+    AnalyticsPeriod,
+    AnalyticsSummary,
+    AnalyticsTrendPoint,
+    BudgetOverview,
+    BudgetUpdateRequest,
     DashboardData,
     DeletedFilter,
     EntryDetail,
@@ -46,6 +56,7 @@ from lark_ledger.web_schemas import (
     EntryUpdateRequest,
     EntryVersionRequest,
     EventReplayRequest,
+    ExportRequestBody,
     PendingActionResponse,
     PendingDetail,
     PendingGroup,
@@ -607,3 +618,249 @@ async def admin_health(
     if service is None:
         raise HTTPException(status_code=503, detail="系统尚未完成启动")
     return cast(dict[str, object], await service.check(request.app.state))
+
+
+def _analytics_dates(
+    settings: Settings,
+    period: AnalyticsPeriod,
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[date, date]:
+    today = datetime.now(ZoneInfo(settings.timezone)).date()
+    if period == "custom":
+        if start_date is None or end_date is None:
+            raise HTTPException(status_code=422, detail="自定义范围需要开始和结束日期")
+        result = (start_date, end_date)
+    elif period == "year":
+        result = (today.replace(month=1, day=1), today)
+    else:
+        days = {"7d": 7, "30d": 30, "90d": 90}[period]
+        result = (today - timedelta(days=days - 1), today)
+    try:
+        local_date_bounds(result[0], result[1], ZoneInfo(settings.timezone))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return result
+
+
+async def _analytics_data(
+    request: Request,
+    principal: DashboardPrincipal,
+    period: AnalyticsPeriod,
+    start_date: date | None,
+    end_date: date | None,
+) -> tuple[
+    AnalyticsSummary,
+    list[AnalyticsTrendPoint],
+    list[AnalyticsCategory],
+    list[AnalyticsMonthlyPoint],
+]:
+    settings = cast(Settings, request.app.state.settings)
+    start, end = _analytics_dates(settings, period, start_date, end_date)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await WebAnalyticsQueryService(
+            session, timezone=settings.timezone, currency=settings.currency
+        ).analytics(principal.user_open_id, start_date=start, end_date=end)
+
+
+@router.get("/analytics/summary", response_model=AnalyticsSummary)
+async def analytics_summary(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: AnalyticsPeriod = "30d",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> AnalyticsSummary:
+    return (await _analytics_data(request, principal, period, start_date, end_date))[0]
+
+
+@router.get("/analytics", response_model=AnalyticsOverview)
+async def analytics_overview(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: AnalyticsPeriod = "30d",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> AnalyticsOverview:
+    summary, trend, categories, _ = await _analytics_data(
+        request, principal, period, start_date, end_date
+    )
+    return AnalyticsOverview(summary=summary, trend=trend, categories=categories)
+
+
+@router.get("/analytics/trend", response_model=list[AnalyticsTrendPoint])
+async def analytics_trend(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: AnalyticsPeriod = "30d",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[AnalyticsTrendPoint]:
+    return (await _analytics_data(request, principal, period, start_date, end_date))[1]
+
+
+@router.get("/analytics/categories", response_model=list[AnalyticsCategory])
+async def analytics_categories(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: AnalyticsPeriod = "30d",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[AnalyticsCategory]:
+    return (await _analytics_data(request, principal, period, start_date, end_date))[2]
+
+
+@router.get("/analytics/monthly", response_model=list[AnalyticsMonthlyPoint])
+async def analytics_monthly(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: AnalyticsPeriod = "year",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> list[AnalyticsMonthlyPoint]:
+    return (await _analytics_data(request, principal, period, start_date, end_date))[3]
+
+
+async def _budget_overview(
+    request: Request, principal: DashboardPrincipal
+) -> BudgetOverview:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await WebAnalyticsQueryService(
+            session, timezone=settings.timezone, currency=settings.currency
+        ).budgets(principal.user_open_id)
+
+
+@router.get("/budgets", response_model=BudgetOverview)
+async def budgets(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> BudgetOverview:
+    return await _budget_overview(request, principal)
+
+
+@router.put("/budgets/{category}", response_model=BudgetOverview)
+async def update_budget(
+    category: str,
+    payload: BudgetUpdateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> BudgetOverview:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    processor = getattr(request.app.state, "processor", None)
+    async with factory() as session:
+        await LedgerService(
+            session,
+            currency=settings.currency,
+            timezone=settings.timezone,
+            exchange_rates=getattr(processor, "exchange_rates", None),
+        ).execute(
+            principal.user_open_id,
+            ParsedCommand(
+                action=Action.SET_BUDGET,
+                category=category,
+                amount=payload.amount,
+                currency=payload.currency,
+            ),
+        )
+    return await _budget_overview(request, principal)
+
+
+@router.delete("/budgets/{category}", response_model=BudgetOverview)
+async def delete_budget(
+    category: str,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> BudgetOverview:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        await LedgerService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).execute(
+            principal.user_open_id,
+            ParsedCommand(action=Action.DELETE_BUDGET, category=category),
+        )
+    return await _budget_overview(request, principal)
+
+
+@router.get("/reports", response_model=ReportData)
+async def report(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    start_date: date,
+    end_date: date,
+) -> ReportData:
+    settings = cast(Settings, request.app.state.settings)
+    try:
+        start, end = local_date_bounds(start_date, end_date, ZoneInfo(settings.timezone))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        result = await LedgerService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).execute(
+            principal.user_open_id,
+            ParsedCommand(action=Action.REPORT, range_start=start, range_end=end),
+        )
+    if result.report is None:
+        raise HTTPException(status_code=404, detail=result.message)
+    return result.report
+
+
+@router.post("/exports")
+async def export_entries(
+    payload: ExportRequestBody,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    settings = cast(Settings, request.app.state.settings)
+    timezone = ZoneInfo(settings.timezone)
+    today = datetime.now(timezone).date()
+    range_start: datetime | None = None
+    range_end: datetime | None = None
+    export_start_date: date | None = None
+    export_end_date: date | None = None
+    export_all = payload.preset == "all"
+    if payload.preset == "this_month":
+        export_start_date, export_end_date = today.replace(day=1), today
+    elif payload.preset == "custom":
+        assert payload.start_date is not None and payload.end_date is not None
+        export_start_date, export_end_date = payload.start_date, payload.end_date
+    elif payload.preset == "last_90_days":
+        export_start_date, export_end_date = today - timedelta(days=89), today
+    if export_start_date is not None and export_end_date is not None:
+        range_start = datetime.combine(
+            export_start_date, time.min, tzinfo=timezone
+        ).astimezone(UTC)
+        range_end = datetime.combine(
+            export_end_date + timedelta(days=1), time.min, tzinfo=timezone
+        ).astimezone(UTC)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        result = await LedgerService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).execute(
+            principal.user_open_id,
+            ParsedCommand(
+                action=Action.EXPORT_ENTRIES,
+                range_start=range_start,
+                range_end=range_end,
+                export_all=export_all,
+                include_deleted=payload.include_deleted,
+            ),
+        )
+    if result.export is None:
+        raise HTTPException(status_code=422, detail=result.message)
+    return Response(
+        content=result.export.content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{result.export.filename}"',
+            "X-LarkLedger-Row-Count": str(result.export.row_count),
+        },
+    )
