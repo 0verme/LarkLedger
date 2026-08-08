@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -13,7 +13,7 @@ from lark_ledger.entry_commands import (
 from lark_ledger.entry_revisions import SNAPSHOT_VERSION, RevisionChangeType
 from lark_ledger.models import Direction, LedgerEntry, LedgerEntryRevision
 from lark_ledger.schemas import Action, ParsedCommand
-from lark_ledger.services.ledger import LedgerService
+from lark_ledger.services.ledger import EntryConflictError, LedgerService
 
 
 async def _seed(
@@ -71,6 +71,22 @@ async def test_update_entry_fields_and_revision(session: AsyncSession) -> None:
     assert rev.before_json["snapshot_version"] == SNAPSHOT_VERSION
     assert rev.user_open_id == "ou_user"
     assert rev.short_id == "A83F2"
+
+
+async def test_update_rejects_a_stale_web_version(session: AsyncSession) -> None:
+    entry = await _seed(session)
+    stale = entry.updated_at - timedelta(seconds=1)
+    with pytest.raises(EntryConflictError, match="modified"):
+        await LedgerService(session).execute(
+            "ou_user",
+            ParsedCommand(
+                action=Action.UPDATE_ENTRY,
+                entry_ref="A83F2",
+                amount=Decimal("35"),
+            ),
+            expected_updated_at=stale,
+        )
+    assert entry.amount == Decimal("32.00")
 
 
 async def test_update_noop_and_deleted_blocked(session: AsyncSession) -> None:

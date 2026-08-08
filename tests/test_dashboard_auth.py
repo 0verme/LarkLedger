@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from lark_ledger.config import Settings
-from lark_ledger.models import Base, DashboardSession
+from lark_ledger.models import Base, DashboardSession, Direction, LedgerEntry
 from lark_ledger.services.dashboard_auth import (
     CSRF_COOKIE,
     SESSION_COOKIE,
@@ -190,3 +190,100 @@ async def test_login_boundary_sets_short_lived_http_only_state_cookie(
             params={"next": "https://evil.test"},
         )
         assert invalid.status_code == 400
+
+
+async def test_ledger_http_boundary_enforces_scope_csrf_and_versions(
+    dashboard_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = dashboard_settings()
+    service = DashboardAuthService(settings, dashboard_factory)
+    created = await service.create_session(
+        {"open_id": "ou_user", "name": "小飞", "avatar_url": ""}
+    )
+    async with dashboard_factory() as session:
+        session.add_all(
+            [
+                LedgerEntry(
+                    user_open_id="ou_user",
+                    short_id="A83F2",
+                    amount=32,
+                    currency="CNY",
+                    direction=Direction.EXPENSE,
+                    category="餐饮",
+                    note="午饭",
+                    occurred_at=datetime.now(UTC),
+                    source_type="text",
+                ),
+                LedgerEntry(
+                    user_open_id="ou_other",
+                    short_id="B83F2",
+                    amount=99,
+                    currency="CNY",
+                    direction=Direction.EXPENSE,
+                    category="购物",
+                    note="不可见",
+                    occurred_at=datetime.now(UTC),
+                    source_type="text",
+                ),
+            ]
+        )
+        await session.commit()
+    app = FastAPI()
+    app.state.settings = settings
+    app.state.session_factory = dashboard_factory
+    app.include_router(router)
+    app.dependency_overrides[_auth_service] = lambda: service
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://ledger.test"
+    ) as client:
+        client.cookies.set(SESSION_COOKIE, created.session_token)
+        client.cookies.set(CSRF_COOKIE, created.csrf_token)
+        listed = await client.get("/api/web/v1/entries")
+        assert listed.status_code == 200
+        assert [item["short_id"] for item in listed.json()["items"]] == ["A83F2"]
+        assert (await client.get("/api/web/v1/entries/B83F2")).status_code == 404
+
+        detail = (await client.get("/api/web/v1/entries/A83F2")).json()
+        version = detail["entry"]["updated_at"]
+        missing_csrf = await client.patch(
+            "/api/web/v1/entries/A83F2",
+            json={"expected_updated_at": version, "amount": "35"},
+        )
+        assert missing_csrf.status_code == 403
+        updated = await client.patch(
+            "/api/web/v1/entries/A83F2",
+            headers={"X-CSRF-Token": created.csrf_token},
+            json={"expected_updated_at": version, "amount": "35"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["entry"]["amount"] == "35.00"
+        assert updated.json()["revisions"][0]["change_type"] == "update"
+
+        stale = await client.patch(
+            "/api/web/v1/entries/A83F2",
+            headers={"X-CSRF-Token": created.csrf_token},
+            json={"expected_updated_at": version, "amount": "36"},
+        )
+        assert stale.status_code == 409
+        other = await client.patch(
+            "/api/web/v1/entries/B83F2",
+            headers={"X-CSRF-Token": created.csrf_token},
+            json={"expected_updated_at": version, "amount": "1"},
+        )
+        assert other.status_code == 404
+
+        current_version = updated.json()["entry"]["updated_at"]
+        deleted = await client.request(
+            "DELETE",
+            "/api/web/v1/entries/A83F2",
+            headers={"X-CSRF-Token": created.csrf_token},
+            json={"expected_updated_at": current_version},
+        )
+        assert deleted.status_code == 200
+        restored = await client.post(
+            "/api/web/v1/entries/A83F2/restore",
+            headers={"X-CSRF-Token": created.csrf_token},
+            json={"expected_updated_at": deleted.json()["entry"]["updated_at"]},
+        )
+        assert restored.status_code == 200
+        assert restored.json()["entry"]["deleted_at"] is None

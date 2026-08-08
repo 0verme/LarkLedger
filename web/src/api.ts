@@ -6,6 +6,57 @@ export type Me = {
   expires_at: string;
 };
 
+export type Entry = {
+  id: string;
+  short_id: string;
+  amount: string;
+  currency: string;
+  direction: "EXPENSE" | "INCOME";
+  category: string;
+  note: string;
+  occurred_at: string;
+  source_type: string;
+  created_at: string;
+  updated_at: string;
+  deleted_at: string | null;
+};
+
+export type EntryPage = {
+  items: Entry[];
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+};
+
+export type EntryDetail = {
+  entry: Entry;
+  revisions: Array<{
+    id: string;
+    change_type: "update" | "delete" | "restore";
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+    created_at: string;
+  }>;
+};
+
+export type DashboardData = {
+  month_income: string;
+  month_expense: string;
+  month_balance: string;
+  budget_usage_rate: string | null;
+  pending_count: number;
+  recent_entries: Entry[];
+  trend: Array<{ period: string; income: string; expense: string; balance: string }>;
+  categories: Array<{ category: string; amount: string; ratio: string }>;
+};
+
+export const money = (value: string | number) =>
+  new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
+
+export const localTime = (value: string) =>
+  new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -26,6 +77,7 @@ function cookie(name: string): string {
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
+  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
     headers.set("X-CSRF-Token", cookie("lark_ledger_csrf"));
   }

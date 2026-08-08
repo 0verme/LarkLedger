@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Annotated, cast
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, status
@@ -9,6 +11,8 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
+from lark_ledger.models import Direction
+from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.dashboard_auth import (
     CSRF_COOKIE,
     CSRF_HEADER,
@@ -17,6 +21,18 @@ from lark_ledger.services.dashboard_auth import (
     DashboardAuthError,
     DashboardAuthService,
     DashboardPrincipal,
+)
+from lark_ledger.services.ledger import EntryConflictError, LedgerService
+from lark_ledger.services.web_ledger import WebLedgerQueryService
+from lark_ledger.web_schemas import (
+    DashboardData,
+    DeletedFilter,
+    EntryDetail,
+    EntryPage,
+    EntrySort,
+    EntryUpdateRequest,
+    EntryVersionRequest,
+    SortOrder,
 )
 
 router = APIRouter(prefix="/api/web/v1", tags=["web-dashboard"])
@@ -171,3 +187,180 @@ async def me(
         "role": principal.role,
         "expires_at": principal.expires_at.isoformat(),
     }
+
+
+@router.get("/dashboard", response_model=DashboardData)
+async def dashboard(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> DashboardData:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await WebLedgerQueryService(
+            session, timezone=settings.timezone
+        ).dashboard(principal.user_open_id)
+
+
+@router.get("/entries", response_model=EntryPage)
+async def entries(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    direction: Direction | None = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    source_type: Annotated[str | None, Query(max_length=16)] = None,
+    amount_min: Annotated[Decimal | None, Query(ge=0)] = None,
+    amount_max: Annotated[Decimal | None, Query(ge=0)] = None,
+    search: Annotated[str | None, Query(max_length=100)] = None,
+    deleted: DeletedFilter = "active",
+    sort: EntrySort = "occurred_at",
+    order: SortOrder = "desc",
+) -> EntryPage:
+    if start is None:
+        start = datetime.now(UTC) - timedelta(days=30)
+    if end is not None and start >= end:
+        raise HTTPException(status_code=422, detail="开始时间必须早于结束时间")
+    if amount_min is not None and amount_max is not None and amount_min > amount_max:
+        raise HTTPException(status_code=422, detail="最低金额不能大于最高金额")
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    settings = cast(Settings, request.app.state.settings)
+    async with factory() as session:
+        return await WebLedgerQueryService(
+            session, timezone=settings.timezone
+        ).list_entries(
+            principal.user_open_id,
+            page=page,
+            page_size=page_size,
+            start=start,
+            end=end,
+            direction=direction,
+            category=category,
+            source_type=source_type,
+            amount_min=amount_min,
+            amount_max=amount_max,
+            search=search,
+            deleted=deleted,
+            sort=sort,
+            order=order,
+        )
+
+
+@router.get("/entries/{short_id}", response_model=EntryDetail)
+async def entry_detail(
+    short_id: str,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> EntryDetail:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    settings = cast(Settings, request.app.state.settings)
+    async with factory() as session:
+        try:
+            detail = await WebLedgerQueryService(
+                session, timezone=settings.timezone
+            ).entry_detail(principal.user_open_id, short_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="账目不存在") from exc
+    if detail is None:
+        raise HTTPException(status_code=404, detail="账目不存在")
+    return detail
+
+
+async def _mutate_entry(
+    *,
+    request: Request,
+    principal: DashboardPrincipal,
+    short_id: str,
+    command: ParsedCommand,
+    expected_updated_at: datetime,
+) -> EntryDetail:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    settings = cast(Settings, request.app.state.settings)
+    async with factory() as session:
+        query = WebLedgerQueryService(session, timezone=settings.timezone)
+        try:
+            existing = await query.entry_detail(principal.user_open_id, short_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail="账目不存在") from exc
+        if existing is None:
+            raise HTTPException(status_code=404, detail="账目不存在")
+        try:
+            await LedgerService(
+                session,
+                currency=settings.currency,
+                timezone=settings.timezone,
+            ).execute(
+                principal.user_open_id,
+                command,
+                source_type="web",
+                expected_updated_at=expected_updated_at,
+            )
+        except EntryConflictError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=409, detail="账目已被其他请求修改，请刷新后重试"
+            ) from exc
+        refreshed = await query.entry_detail(principal.user_open_id, short_id)
+        if refreshed is None:
+            raise HTTPException(status_code=404, detail="账目不存在")
+        return refreshed
+
+
+@router.patch("/entries/{short_id}", response_model=EntryDetail)
+async def update_entry(
+    short_id: str,
+    payload: EntryUpdateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> EntryDetail:
+    return await _mutate_entry(
+        request=request,
+        principal=principal,
+        short_id=short_id,
+        expected_updated_at=payload.expected_updated_at,
+        command=ParsedCommand(
+            action=Action.UPDATE_ENTRY,
+            entry_ref=short_id,
+            amount=payload.amount,
+            direction=payload.direction,
+            category=payload.category,
+            note=payload.note,
+            occurred_at=payload.occurred_at,
+            clear_note=payload.note == "",
+        ),
+    )
+
+
+@router.delete("/entries/{short_id}", response_model=EntryDetail)
+async def delete_entry(
+    short_id: str,
+    payload: EntryVersionRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> EntryDetail:
+    return await _mutate_entry(
+        request=request,
+        principal=principal,
+        short_id=short_id,
+        expected_updated_at=payload.expected_updated_at,
+        command=ParsedCommand(action=Action.DELETE_ENTRY, entry_ref=short_id),
+    )
+
+
+@router.post("/entries/{short_id}/restore", response_model=EntryDetail)
+async def restore_entry(
+    short_id: str,
+    payload: EntryVersionRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> EntryDetail:
+    return await _mutate_entry(
+        request=request,
+        principal=principal,
+        short_id=short_id,
+        expected_updated_at=payload.expected_updated_at,
+        command=ParsedCommand(action=Action.RESTORE_ENTRY, entry_ref=short_id),
+    )

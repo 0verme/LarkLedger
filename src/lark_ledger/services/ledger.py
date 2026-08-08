@@ -52,6 +52,12 @@ from lark_ledger.short_id import (
 _NOT_FOUND_MSG = "未找到该账目，或该账目不属于当前用户。"
 
 MAX_MONEY = Decimal("999999999999.99")
+
+
+class EntryConflictError(RuntimeError):
+    """The entry changed after a Web client loaded it."""
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -114,6 +120,7 @@ class LedgerService:
         source_type: str = "text",
         source_message_id: str | None = None,
         source_item_index: int = 0,
+        expected_updated_at: datetime | None = None,
     ) -> ExecutionResult:
         if command.action is Action.CREATE:
             result = await self._create(
@@ -146,11 +153,17 @@ class LedgerService:
         elif command.action is Action.GET_ENTRY:
             result = await self._get_entry(user_open_id, command)
         elif command.action is Action.UPDATE_ENTRY:
-            result = await self._update_entry(user_open_id, command)
+            result = await self._update_entry(
+                user_open_id, command, expected_updated_at=expected_updated_at
+            )
         elif command.action is Action.DELETE_ENTRY:
-            result = await self._delete_entry(user_open_id, command)
+            result = await self._delete_entry(
+                user_open_id, command, expected_updated_at=expected_updated_at
+            )
         elif command.action is Action.RESTORE_ENTRY:
-            result = await self._restore_entry(user_open_id, command)
+            result = await self._restore_entry(
+                user_open_id, command, expected_updated_at=expected_updated_at
+            )
         elif command.action is Action.EXPORT_ENTRIES:
             result = await self._export_entries(user_open_id, command)
         elif command.action is Action.SUMMARY:
@@ -539,7 +552,11 @@ class LedgerService:
         return await self._apply_entry_delete(user_open_id, entry, last_style=True)
 
     async def _update_entry(
-        self, user_open_id: str, command: ParsedCommand
+        self,
+        user_open_id: str,
+        command: ParsedCommand,
+        *,
+        expected_updated_at: datetime | None,
     ) -> ExecutionResult:
         assert command.entry_ref is not None
         try:
@@ -551,6 +568,7 @@ class LedgerService:
         entry = await self._find_entry_for_mutation(user_open_id, short_id)
         if entry is None:
             return ExecutionResult(message=_NOT_FOUND_MSG)
+        self._assert_expected_updated_at(entry, expected_updated_at)
         if entry.deleted_at is not None:
             return ExecutionResult(
                 message=(
@@ -560,7 +578,11 @@ class LedgerService:
         return await self._apply_entry_update(user_open_id, entry, command)
 
     async def _delete_entry(
-        self, user_open_id: str, command: ParsedCommand
+        self,
+        user_open_id: str,
+        command: ParsedCommand,
+        *,
+        expected_updated_at: datetime | None,
     ) -> ExecutionResult:
         assert command.entry_ref is not None
         try:
@@ -570,10 +592,15 @@ class LedgerService:
         entry = await self._find_entry_for_mutation(user_open_id, short_id)
         if entry is None:
             return ExecutionResult(message=_NOT_FOUND_MSG)
+        self._assert_expected_updated_at(entry, expected_updated_at)
         return await self._apply_entry_delete(user_open_id, entry, last_style=False)
 
     async def _restore_entry(
-        self, user_open_id: str, command: ParsedCommand
+        self,
+        user_open_id: str,
+        command: ParsedCommand,
+        *,
+        expected_updated_at: datetime | None,
     ) -> ExecutionResult:
         assert command.entry_ref is not None
         try:
@@ -583,7 +610,22 @@ class LedgerService:
         entry = await self._find_entry_for_mutation(user_open_id, short_id)
         if entry is None:
             return ExecutionResult(message=_NOT_FOUND_MSG)
+        self._assert_expected_updated_at(entry, expected_updated_at)
         return await self._apply_entry_restore(user_open_id, entry)
+
+    @staticmethod
+    def _assert_expected_updated_at(
+        entry: LedgerEntry, expected_updated_at: datetime | None
+    ) -> None:
+        if expected_updated_at is None:
+            return
+        actual = entry.updated_at
+        if actual.tzinfo is None:
+            actual = actual.replace(tzinfo=UTC)
+        if expected_updated_at.tzinfo is None:
+            expected_updated_at = expected_updated_at.replace(tzinfo=UTC)
+        if actual != expected_updated_at:
+            raise EntryConflictError("entry was modified by another request")
 
     async def _find_latest_for_mutation(self, user_open_id: str) -> LedgerEntry | None:
         query = self._latest_query(user_open_id)
@@ -641,6 +683,7 @@ class LedgerService:
                 message=f"{format_entry_ref(entry.short_id)} 没有变化，无需修改。"
             )
 
+        entry.updated_at = datetime.now(UTC)
         budget_alert = await self._check_budget(entry)
         await self.session.flush()
         await self.session.refresh(entry)
@@ -681,6 +724,7 @@ class LedgerService:
             )
         before = snapshot_ledger_entry(entry)
         entry.deleted_at = datetime.now(UTC)
+        entry.updated_at = datetime.now(UTC)
         await self.session.flush()
         await self.session.refresh(entry)
         after = snapshot_ledger_entry(entry)
@@ -714,6 +758,7 @@ class LedgerService:
             )
         before = snapshot_ledger_entry(entry)
         entry.deleted_at = None
+        entry.updated_at = datetime.now(UTC)
         await self.session.flush()
         await self.session.refresh(entry)
         after = snapshot_ledger_entry(entry)

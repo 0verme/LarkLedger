@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ApiError, api, type Me } from "./api";
+import { DashboardPage } from "./pages/DashboardPage";
+import { EntriesPage } from "./pages/EntriesPage";
 
 type NavItem = { label: string; path: string; icon: typeof Activity; admin?: boolean };
 
@@ -97,6 +99,12 @@ function Placeholder({ title }: { title: string }) {
   );
 }
 
+function pageElement(item: NavItem) {
+  if (item.path === "/") return <DashboardPage />;
+  if (item.path === "/entries") return <EntriesPage />;
+  return <Placeholder title={item.label} />;
+}
+
 function Shell({ me }: { me: Me }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const location = useLocation();
@@ -142,7 +150,7 @@ function Shell({ me }: { me: Me }) {
         <main className="content">
           <Routes>
             {visibleGroups.flatMap((group) => group.items).map((item) => (
-              <Route key={item.path} path={item.path} element={<Placeholder title={item.label} />} />
+              <Route key={item.path} path={item.path} element={pageElement(item)} />
             ))}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
