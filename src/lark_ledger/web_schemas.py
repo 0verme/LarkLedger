@@ -97,6 +97,40 @@ class EntryVersionRequest(BaseModel):
     expected_updated_at: datetime
 
 
+class WebPending(BaseModel):
+    confirmation_id: str
+    status: str
+    source_type: str
+    transport: str
+    risk_reason: str
+    entries_total: int
+    income_total: Decimal
+    expense_total: Decimal
+    currency: str
+    created_at: datetime
+    expires_at: datetime
+    completed_at: datetime | None
+
+
+class PendingPage(BaseModel):
+    items: list[WebPending]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class PendingDetail(BaseModel):
+    pending: WebPending
+    preview: dict[str, Any]
+
+
+class PendingActionResponse(BaseModel):
+    message: str
+    pending: PendingDetail
+
+
 DeletedFilter = Literal["active", "deleted", "all"]
 EntrySort = Literal["occurred_at", "amount", "updated_at"]
 SortOrder = Literal["asc", "desc"]
+PendingGroup = Literal["pending", "completed", "closed"]

@@ -23,6 +23,7 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { ApiError, api, type Me } from "./api";
 import { DashboardPage } from "./pages/DashboardPage";
 import { EntriesPage } from "./pages/EntriesPage";
+import { PendingPage } from "./pages/PendingPage";
 
 type NavItem = { label: string; path: string; icon: typeof Activity; admin?: boolean };
 
@@ -102,6 +103,7 @@ function Placeholder({ title }: { title: string }) {
 function pageElement(item: NavItem) {
   if (item.path === "/") return <DashboardPage />;
   if (item.path === "/entries") return <EntriesPage />;
+  if (item.path === "/pending") return <PendingPage />;
   return <Placeholder title={item.label} />;
 }
 

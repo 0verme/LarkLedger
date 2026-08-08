@@ -51,6 +51,40 @@ export type DashboardData = {
   categories: Array<{ category: string; amount: string; ratio: string }>;
 };
 
+export type PendingSummary = {
+  confirmation_id: string;
+  status: string;
+  source_type: string;
+  transport: string;
+  risk_reason: string;
+  entries_total: number;
+  income_total: string;
+  expense_total: string;
+  currency: string;
+  created_at: string;
+  expires_at: string;
+  completed_at: string | null;
+};
+
+export type PendingPage = {
+  items: PendingSummary[];
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+};
+
+export type PendingDetail = {
+  pending: PendingSummary;
+  preview: {
+    items: Array<{ index: number | null; direction: string; amount: string; currency: string; category: string; occurred_at: string; note: string; duplicate_of: string | null }>;
+    budgets: Array<{ category: string; amount: string; currency: string }>;
+    anomalies: string[];
+  };
+};
+
+export type PendingActionResponse = { message: string; pending: PendingDetail };
+
 export const money = (value: string | number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
 

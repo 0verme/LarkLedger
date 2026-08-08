@@ -57,4 +57,32 @@ describe("dashboard routing and protection", () => {
     expect(await screen.findByRole("heading", { name: "Dead / Replay" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "事件" })).toBeInTheDocument();
   });
+
+  it("confirms and cancels frozen pending previews", async () => {
+    const base = { status: "pending", source_type: "image", transport: "feishu", risk_reason: "图片识别", entries_total: 1, income_total: "0", expense_total: "32", currency: "CNY", created_at: "2026-08-08T04:00:00Z", expires_at: "2026-08-08T05:00:00Z", completed_at: null };
+    const rows = [{ ...base, confirmation_id: "#C-A83F2" }, { ...base, confirmation_id: "#C-B83F2" }];
+    const preview = { items: [{ index: null, direction: "expense", amount: "32", currency: "CNY", category: "餐饮", occurred_at: "2026-08-08 12:00", note: "午饭", duplicate_of: null }], budgets: [], anomalies: [] };
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
+      const row = rows.find((item) => url.includes(item.confirmation_id.slice(3))) ?? rows[0];
+      if (init?.method === "POST") {
+        const status = url.endsWith("/confirm") ? "executed" : "cancelled";
+        return Promise.resolve(Response.json({ message: status === "executed" ? "已确认入账" : "已取消", pending: { pending: { ...row, status }, preview } }));
+      }
+      if (url.includes("/pending/")) return Promise.resolve(Response.json({ pending: row, preview }));
+      return Promise.resolve(Response.json({ items: rows, page: 1, page_size: 20, total: 2, pages: 1 }));
+    }));
+    renderApp("/pending");
+    fireEvent.click(await screen.findByText("#C-A83F2"));
+    fireEvent.click(await screen.findByRole("button", { name: /确认执行/ }));
+    const confirmButtons = await screen.findAllByRole("button", { name: "确认执行" });
+    fireEvent.click(confirmButtons.at(-1)!);
+    expect(await screen.findByText("已确认入账")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^关闭$/ }));
+    fireEvent.click(await screen.findByText("#C-B83F2"));
+    fireEvent.click(await screen.findByRole("button", { name: /^取消$/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "确认取消" }));
+    expect((await screen.findAllByText("已取消")).length).toBeGreaterThan(0);
+  });
 });

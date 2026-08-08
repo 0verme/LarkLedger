@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
+from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
 from lark_ledger.models import Direction
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.dashboard_auth import (
@@ -23,7 +24,9 @@ from lark_ledger.services.dashboard_auth import (
     DashboardPrincipal,
 )
 from lark_ledger.services.ledger import EntryConflictError, LedgerService
+from lark_ledger.services.pending import PendingCommandStore
 from lark_ledger.services.web_ledger import WebLedgerQueryService
+from lark_ledger.services.web_pending import WebPendingQueryService
 from lark_ledger.web_schemas import (
     DashboardData,
     DeletedFilter,
@@ -32,6 +35,10 @@ from lark_ledger.web_schemas import (
     EntrySort,
     EntryUpdateRequest,
     EntryVersionRequest,
+    PendingActionResponse,
+    PendingDetail,
+    PendingGroup,
+    PendingPage,
     SortOrder,
 )
 
@@ -363,4 +370,125 @@ async def restore_entry(
         short_id=short_id,
         expected_updated_at=payload.expected_updated_at,
         command=ParsedCommand(action=Action.RESTORE_ENTRY, entry_ref=short_id),
+    )
+
+
+@router.get("/pending", response_model=PendingPage)
+async def pending_list(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    group: PendingGroup = "pending",
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=50)] = 20,
+) -> PendingPage:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await WebPendingQueryService(session).list_pending(
+            principal.user_open_id,
+            group=group,
+            page=page,
+            page_size=page_size,
+        )
+
+
+@router.get("/pending/{confirmation_id}", response_model=PendingDetail)
+async def pending_detail(
+    confirmation_id: str,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> PendingDetail:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            detail = await WebPendingQueryService(session).detail(
+                principal.user_open_id, confirmation_id
+            )
+        except ConfirmationCodeError as exc:
+            raise HTTPException(status_code=404, detail="确认单不存在") from exc
+    if detail is None:
+        raise HTTPException(status_code=404, detail="确认单不存在")
+    return detail
+
+
+async def _pending_action(
+    *,
+    action: str,
+    confirmation_id: str,
+    request: Request,
+    principal: DashboardPrincipal,
+) -> PendingActionResponse:
+    try:
+        code = normalize_confirmation_code(confirmation_id)
+    except ConfirmationCodeError as exc:
+        raise HTTPException(status_code=404, detail="确认单不存在") from exc
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    processor = getattr(request.app.state, "processor", None)
+    store = cast(
+        PendingCommandStore,
+        getattr(processor, "_pending_store", None)
+        or PendingCommandStore(factory, settings),
+    )
+    row = await store.get_by_code(principal.user_open_id, code)
+    if row is None:
+        raise HTTPException(status_code=404, detail="确认单不存在")
+    if not row.source_message_id:
+        raise HTTPException(status_code=409, detail="确认单缺少可靠回复目标")
+    now = datetime.now(UTC)
+    if action == "confirm":
+        message, outbox = await store.confirm_and_execute(
+            user_open_id=principal.user_open_id,
+            confirmation_code=code,
+            reply_to_message_id=row.source_message_id,
+            confirm_event_id=None,
+            exchange_rates=getattr(processor, "exchange_rates", None),
+            now=now,
+        )
+    else:
+        message, outbox = await store.cancel(
+            user_open_id=principal.user_open_id,
+            confirmation_code=code,
+            reply_to_message_id=row.source_message_id,
+            cancel_event_id=None,
+            now=now,
+        )
+    if processor is not None:
+        await processor._signal_or_deliver(outbox)
+    async with factory() as session:
+        detail = await WebPendingQueryService(session).detail(
+            principal.user_open_id, code, now=now
+        )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="确认单不存在")
+    expected = "executed" if action == "confirm" else "cancelled"
+    if detail.pending.status != expected:
+        raise HTTPException(status_code=409, detail=message)
+    return PendingActionResponse(message=message, pending=detail)
+
+
+@router.post("/pending/{confirmation_id}/confirm", response_model=PendingActionResponse)
+async def confirm_pending(
+    confirmation_id: str,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> PendingActionResponse:
+    return await _pending_action(
+        action="confirm",
+        confirmation_id=confirmation_id,
+        request=request,
+        principal=principal,
+    )
+
+
+@router.post("/pending/{confirmation_id}/cancel", response_model=PendingActionResponse)
+async def cancel_pending(
+    confirmation_id: str,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> PendingActionResponse:
+    return await _pending_action(
+        action="cancel",
+        confirmation_id=confirmation_id,
+        request=request,
+        principal=principal,
     )

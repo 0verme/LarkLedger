@@ -30,6 +30,7 @@ export function EntriesPage() {
   const debounced = useDebounced(search);
 
   useEffect(() => {
+    if ((params.get("search") ?? "") === debounced) return;
     setParams((current) => {
       const next = new URLSearchParams(current);
       if (debounced) next.set("search", debounced);
@@ -37,7 +38,7 @@ export function EntriesPage() {
       next.set("page", "1");
       return next;
     }, { replace: true });
-  }, [debounced, setParams]);
+  }, [debounced, params, setParams]);
 
   const selected = params.get("entry");
   const queryString = useMemo(() => {
