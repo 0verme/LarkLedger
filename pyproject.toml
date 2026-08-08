@@ -69,6 +69,7 @@ markers = [
 
 [tool.coverage.run]
 source = ["lark_ledger"]
+concurrency = ["greenlet", "thread"]
 
 [tool.mypy]
 python_version = "3.11"
