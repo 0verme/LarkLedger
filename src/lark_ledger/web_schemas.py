@@ -189,6 +189,24 @@ class ResultReplayResponse(BaseModel):
     not_found: int
 
 
+class SafeSystemConfig(BaseModel):
+    version: str
+    event_mode: str
+    timezone: str
+    currency: str
+    worker_enabled: bool
+    reply_worker_enabled: bool
+    cleanup_worker_enabled: bool
+    pending_enabled: bool
+    ai_provider: str
+    ai_model: str
+    ai_api_key_configured: bool
+    lark_app_secret_configured: bool
+    dashboard_base_url: str
+    session_ttl_seconds: int
+    secure_cookie: bool
+
+
 class AnalyticsSummary(BaseModel):
     range_start: datetime
     range_end: datetime

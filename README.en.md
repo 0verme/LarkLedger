@@ -24,6 +24,21 @@ Detailed user, deployment, and architecture docs are **Chinese-first**. This REA
 
 Simple single text remains a direct write: `午饭32元` immediately creates the ledger entry. Image, voice, batch, and likely-duplicate writes follow `media → preview card → user confirmation → ledger`. Text fallbacks are `确认 #C-A83F2`, `取消 #C-A83F2`, and `查看待确认` (or `确认列表`).
 
+## Web Dashboard
+
+v0.4.0 adds an optional Chinese-first Dashboard for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
+
+The production image embeds the Vite build and serves it from FastAPI; Node.js is not needed at runtime. Enable it only behind HTTPS:
+
+```dotenv
+LARK_LEDGER_DASHBOARD_ENABLED=true
+LARK_LEDGER_DASHBOARD_BASE_URL=https://ledger.example.com
+LARK_LEDGER_DASHBOARD_SESSION_SECRET=replace-with-at-least-32-high-entropy-characters
+LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_xxx,ou_yyy
+```
+
+Register `https://ledger.example.com/api/web/v1/auth/callback` in the Feishu app and grant `auth:user.id:read`. Configure the reverse proxy to pass `X-Forwarded-Proto` and trust only its explicit address. When disabled, `/api/web/v1/*` and Dashboard static routes are absent, while the bot and workers remain unchanged. See the [Chinese deployment guide](docs/environment.md#web-dashboard可选).
+
 ## Who it is for
 
 Technical self-hosters who use Feishu heavily and want a **private** ledger. The first-run goal is one successful **text-only** entry—not a full multi-modal production rollout.

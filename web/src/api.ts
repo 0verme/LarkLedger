@@ -126,6 +126,7 @@ export type ReplayPreflight = {
 };
 export type EventReplayResult = { mode: string; outcome: string; audit_id: string | null; resulting_status: string | null; preflight: ReplayPreflight };
 export type HealthSnapshot = { status: string; checks: Record<string, { status: string; reason?: string; current?: string; enabled?: boolean; running?: boolean; last_error_code?: string | null }> };
+export type SafeSystemConfig = { version: string; event_mode: string; timezone: string; currency: string; worker_enabled: boolean; reply_worker_enabled: boolean; cleanup_worker_enabled: boolean; pending_enabled: boolean; ai_provider: string; ai_model: string; ai_api_key_configured: boolean; lark_app_secret_configured: boolean; dashboard_base_url: string; session_ttl_seconds: number; secure_cookie: boolean };
 
 export type AnalyticsSummary = { range_start: string; range_end: string; income: string; expense: string; balance: string; entry_count: number };
 export type AnalyticsTrendPoint = { period: string; income: string; expense: string; balance: string };
@@ -159,6 +160,24 @@ function cookie(name: string): string {
   return value ? decodeURIComponent(value.slice(name.length + 1)) : "";
 }
 
+const statusMessages: Record<number, string> = {
+  401: "登录已失效，请重新登录",
+  403: "没有权限执行此操作",
+  404: "请求的内容不存在",
+  409: "状态已变化，请刷新后重试",
+  422: "输入内容有误，请检查后重试",
+  503: "系统暂不可用，请稍后重试",
+};
+
+async function responseError(response: Response): Promise<ApiError> {
+  const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+  const detail = typeof payload?.detail === "string" && /[\u3400-\u9fff]/u.test(payload.detail)
+    ? payload.detail
+    : null;
+  if (response.status === 401) window.dispatchEvent(new Event("larkledger:auth-expired"));
+  return new ApiError(response.status, detail ?? statusMessages[response.status] ?? "请求失败，请稍后重试");
+}
+
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
@@ -172,10 +191,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: "same-origin",
   });
   if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as {
-      detail?: string;
-    } | null;
-    throw new ApiError(response.status, payload?.detail ?? "请求失败，请稍后重试");
+    throw await responseError(response);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -189,8 +205,7 @@ export async function downloadExport(payload: unknown): Promise<{ blob: Blob; fi
     body: JSON.stringify(payload),
   });
   if (!response.ok) {
-    const error = (await response.json().catch(() => null)) as { detail?: string } | null;
-    throw new ApiError(response.status, error?.detail ?? "导出失败，请稍后重试");
+    throw await responseError(response);
   }
   const disposition = response.headers.get("Content-Disposition") ?? "";
   const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "larkledger-export.csv";

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -26,6 +26,7 @@ import { DeadPage, EventsPage, HealthPage, OutboxPage } from "./pages/AdminPages
 import { EntriesPage } from "./pages/EntriesPage";
 import { AnalyticsPage, BudgetsPage, ExportsPage, ReportsPage } from "./pages/FinancePages";
 import { PendingPage } from "./pages/PendingPage";
+import { AboutPage, ConfigPage } from "./pages/SystemPages";
 
 type NavItem = { label: string; path: string; icon: typeof Activity; admin?: boolean };
 
@@ -92,16 +93,6 @@ function LoadingScreen() {
   );
 }
 
-function Placeholder({ title }: { title: string }) {
-  return (
-    <section className="placeholder-page">
-      <p className="eyebrow">WEB DASHBOARD · V0.4.0</p>
-      <h2>{title}</h2>
-      <p>页面基础已就绪，业务视图将在对应工作包中接入。</p>
-    </section>
-  );
-}
-
 function pageElement(item: NavItem) {
   if (item.path === "/") return <DashboardPage />;
   if (item.path === "/entries") return <EntriesPage />;
@@ -114,7 +105,8 @@ function pageElement(item: NavItem) {
   if (item.path === "/admin/outbox") return <OutboxPage />;
   if (item.path === "/admin/dead") return <DeadPage />;
   if (item.path === "/admin/health") return <HealthPage />;
-  return <Placeholder title={item.label} />;
+  if (item.path === "/admin/config") return <ConfigPage />;
+  return <AboutPage />;
 }
 
 function Shell({ me }: { me: Me }) {
@@ -173,8 +165,15 @@ function Shell({ me }: { me: Me }) {
 }
 
 export function App() {
+  const [authExpired, setAuthExpired] = useState(false);
+  useEffect(() => {
+    const expire = () => setAuthExpired(true);
+    window.addEventListener("larkledger:auth-expired", expire);
+    return () => window.removeEventListener("larkledger:auth-expired", expire);
+  }, []);
   const me = useQuery({ queryKey: ["me"], queryFn: () => api<Me>("/me"), retry: false });
   if (me.isLoading) return <LoadingScreen />;
+  if (authExpired) return <Login />;
   if (me.error instanceof ApiError && me.error.status === 401) return <Login />;
   if (me.isError) {
     return <main className="error-page"><h1>暂时无法加载</h1><p>请检查服务状态后重试。</p><button onClick={() => me.refetch()}>重新加载</button></main>;

@@ -21,6 +21,16 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
 
+## 从 v0.3.0 升级到 v0.4.0
+
+v0.4.0 新增可选 Web Dashboard 与迁移 `20260808_0014`（`dashboard_sessions`）。先备份 PostgreSQL，再执行 `alembic upgrade head`。Dashboard 默认关闭，所以只升级代码和 migration 不会改变机器人、Worker 或现有公网路由。
+
+需要启用 Dashboard 时，再配置 HTTPS origin、强随机 Session Secret、飞书 OAuth 回调与管理员 open_id；完整清单见[环境与部署指南 · Web Dashboard](environment.md#web-dashboard可选)。生产镜像已经通过 Node build stage 嵌入静态资源，运行容器不包含 Node server。
+
+验收至少包括：OAuth 登录、当前用户账目隔离、修改后 revision、删除/恢复、pending 确认、CSV 下载、管理员健康与 replay dry-run；随后在飞书发送一笔文字记账确认机器人路径未回归。再以 `DASHBOARD_ENABLED=false` 重启一次，确认 `/api/web/v1/*` 不暴露且飞书仍正常。
+
+若回退到 v0.3.0，先关闭 Dashboard。保留 `dashboard_sessions` 表不会影响旧代码；若必须 downgrade，会删除所有 Web 会话，但不会删除账目、revision、pending、Event 或 Outbox 数据。
+
 ## 从 v0.2.1 升级到 v0.3.0
 
 v0.3.0「高风险确认」新增迁移 `20260806_0012` 和 `pending_commands` 表。升级前请备份 PostgreSQL，并确认备份可以恢复；不要把事件清理或尚未实现的 P10 备份脚本当作数据库备份。

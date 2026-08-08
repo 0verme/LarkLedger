@@ -95,6 +95,48 @@ docker compose -f compose.yaml -f compose.dev.yaml down -v
 
 ---
 
+## Web Dashboard（可选）
+
+Dashboard 默认关闭。关闭时不会挂载静态页面或 `/api/web/v1/*`，也不会改变飞书事件、Event Worker、Reply Worker、Cleanup Worker 或 migration 的启动条件。
+
+### 飞书 OAuth 与会话配置
+
+```dotenv
+LARK_LEDGER_DASHBOARD_ENABLED=true
+LARK_LEDGER_DASHBOARD_BASE_URL=https://ledger.example.com
+LARK_LEDGER_DASHBOARD_SESSION_SECRET=replace-with-at-least-32-high-entropy-characters
+LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_admin_1,ou_admin_2
+LARK_LEDGER_DASHBOARD_SESSION_TTL_SECONDS=28800
+LARK_LEDGER_DASHBOARD_OAUTH_STATE_TTL_SECONDS=600
+LARK_LEDGER_DASHBOARD_COOKIE_SECURE=true
+```
+
+在飞书开放平台为同一个企业自建应用配置：
+
+1. 添加重定向 URL：`https://ledger.example.com/api/web/v1/auth/callback`，必须与 `DASHBOARD_BASE_URL` 的 origin 完全一致。
+2. 开通 `auth:user.id:read`，使登录流程取得当前用户的 `open_id`。
+3. 发布应用版本，再访问 `https://ledger.example.com/` 登录。
+4. 将需要运维权限的 `open_id` 以逗号分隔写入 `DASHBOARD_ADMIN_OPEN_IDS`；未列入者都是普通用户。
+
+`SESSION_SECRET` 需由密码学安全随机源生成，至少 32 个非平凡字符。Dashboard 开启但密钥弱、App ID/Secret 缺失、Base URL 非绝对 origin，或 Secure Cookie 搭配 HTTP 时，应用会拒绝启动。飞书 access token 不返回浏览器；浏览器仅保存 HttpOnly 会话 Cookie、HttpOnly OAuth state Cookie 与供双提交校验的 CSRF Cookie。会话可撤销、有明确 TTL，退出后立即失效。
+
+### HTTPS 与可信代理
+
+生产必须在 HTTPS 反向代理后运行。代理应保留 `Host` 并发送 `X-Forwarded-Proto: https`。Uvicorn 只能信任实际代理 IP/CIDR，不要在互联网暴露的实例上使用无边界的 `--forwarded-allow-ips='*'`。代理不在 Uvicorn 默认信任的 `127.0.0.1` 时，可覆盖 Compose command，例如：
+
+```yaml
+services:
+  app:
+    command: >-
+      sh -c "alembic upgrade head &&
+      uvicorn lark_ledger.main:app --host 0.0.0.0 --port 8000
+      --proxy-headers --forwarded-allow-ips=172.20.0.10"
+```
+
+把示例地址替换为固定代理地址或经过审查的最小 CIDR。`DASHBOARD_BASE_URL` 是 OAuth 回调的权威外部 origin，不能包含路径、query、凭据或 fragment。应用为 Dashboard 响应添加 CSP、禁止 iframe、MIME sniff 防护、Referrer/Permissions Policy；Secure Cookie 模式还返回 HSTS。不要让代理覆盖或放宽这些响应头。
+
+管理员配置页只返回时区、币种、Worker 开关、模型名与“是否已配置”状态；不会返回 API Key、App Secret、数据库 URL、密码、Webhook Token 或 Authorization 值。本版本不支持网页修改 Secret。
+
 ## 外部依赖
 
 1. 开启机器人能力并订阅 `im.message.receive_v1` 的飞书 / Lark 企业自建应用。
@@ -154,6 +196,13 @@ docker compose -f compose.yaml -f compose.dev.yaml down -v
 | 终态确认单保留天数 `PENDING_RETENTION_DAYS` | `7` | `7` | executed/cancelled/expired/failed 按 updated_at 清理 |
 | 疑似重复时间窗分钟 `PENDING_DUPLICATE_WINDOW_MINUTES` | `60` | `60` | 相同方向/金额/币种在此窗口内检查分类与来源 |
 | 待确认列表上限 `PENDING_MAX_LIST` | `10` | `10` | `查看待确认` 最多展示条数 |
+| Dashboard 开关 `DASHBOARD_ENABLED` | `false` | `false` | 关闭时不暴露页面或 Web API |
+| Dashboard 外部 origin `DASHBOARD_BASE_URL` | 空 | `https://ledger.example.com` | 开启时必填，仅允许绝对 origin |
+| Dashboard Session Secret | 空 | 空 | 开启时必填，至少 32 位高熵随机值，不得提交仓库 |
+| Dashboard 管理员 open_id | 空 | 空 | 逗号分隔；未列入者为 USER |
+| Dashboard Session TTL 秒 | `28800` | `28800` | 300～604800 |
+| OAuth state TTL 秒 | `600` | `600` | 60～1800 |
+| Dashboard Secure Cookie | `true` | `true` | 生产保持开启并使用 HTTPS |
 | 日志级别 | **无此配置项** | — | — |
 | Webhook 监听 | 进程内 `0.0.0.0:8000`（Compose 映射 `8000:8000`） | — | WebSocket 仅用于 healthz 时可内网访问 |
 | Compose 应用服务名 | `app` | — | — |

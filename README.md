@@ -32,13 +32,33 @@
 
 卡片不可用时可发送 `确认 #C-A83F2`、`取消 #C-A83F2`；发送 `查看待确认`（或 `确认列表`）可列出当前待确认单。确认使用创建 pending 时冻结的结构化命令，不会重新调用 AI。
 
+## Web Dashboard
+
+v0.4.0 提供可选的中文 Web Dashboard，生产镜像已内置前端静态资源，无需额外 Node.js 服务：
+
+- 财务总览、服务端分页账目管理、revision 时间线、软删除与恢复
+- 待确认查看、确认与取消（复用冻结预览，不重新调用 AI）
+- 趋势、分类、月度分析、预算、报告和受限 CSV 下载
+- 管理员 Event / Outbox / Dead / Replay、健康状态与只读脱敏配置
+
+Web 与飞书共享同一套 `LedgerService`、`PendingCommandService`、revision、Outbox 与 PostgreSQL 用户隔离。启用后访问 `https://你的域名/`，通过飞书 OAuth 登录：
+
+```dotenv
+LARK_LEDGER_DASHBOARD_ENABLED=true
+LARK_LEDGER_DASHBOARD_BASE_URL=https://ledger.example.com
+LARK_LEDGER_DASHBOARD_SESSION_SECRET=请生成至少32位的高熵随机值
+LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_xxx,ou_yyy
+```
+
+在飞书应用中登记回调地址 `https://ledger.example.com/api/web/v1/auth/callback`，并授予 `auth:user.id:read`。生产必须使用 HTTPS；反向代理需正确传递 `X-Forwarded-Proto`，应用服务器只应信任明确的代理地址。完整配置与安全说明见[环境与部署指南 · Web Dashboard](docs/environment.md#web-dashboard可选)。不开启时，Dashboard 页面与 `/api/web/v1/*` 均不暴露，机器人和 Worker 保持原行为。
+
 ## 适合谁
 
 - 技术用户，能配置 Docker 与 PostgreSQL
 - 重度飞书用户，希望**自托管**个人账本
 - 首次部署只想尽快完成**一笔纯文字记账**
 
-不适合：需要 Web 管理页、共享账本、多级审批、多人共享确认。可靠投递与高风险确认已实现，但**仍不**宣称「绝不重复记账」或「绝对零重复回复」（见下方已知限制）。
+不适合：需要共享账本、多级审批、多人共享确认。可靠投递与高风险确认已实现，但**仍不**宣称「绝不重复记账」或「绝对零重复回复」（见下方已知限制）。
 
 ## 快速开始（推荐）
 

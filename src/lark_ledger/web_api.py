@@ -12,6 +12,7 @@ from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Re
 from fastapi.responses import RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from lark_ledger import __version__
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
 from lark_ledger.models import Direction
@@ -62,6 +63,7 @@ from lark_ledger.web_schemas import (
     PendingGroup,
     PendingPage,
     ResultReplayResponse,
+    SafeSystemConfig,
     SortOrder,
 )
 
@@ -618,6 +620,37 @@ async def admin_health(
     if service is None:
         raise HTTPException(status_code=503, detail="系统尚未完成启动")
     return cast(dict[str, object], await service.check(request.app.state))
+
+
+@router.get("/admin/config", response_model=SafeSystemConfig)
+async def admin_config(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> SafeSystemConfig:
+    del principal
+    settings = cast(Settings, request.app.state.settings)
+    provider = (
+        "DeepSeek-compatible"
+        if "deepseek" in settings.ai_base_url.lower()
+        else "OpenAI-compatible"
+    )
+    return SafeSystemConfig(
+        version=__version__,
+        event_mode=settings.event_mode.value,
+        timezone=settings.timezone,
+        currency=settings.currency,
+        worker_enabled=settings.worker_enabled,
+        reply_worker_enabled=settings.reply_worker_enabled,
+        cleanup_worker_enabled=settings.cleanup_enabled,
+        pending_enabled=settings.pending_enabled,
+        ai_provider=provider,
+        ai_model=settings.ai_model,
+        ai_api_key_configured=bool(settings.ai_api_key.strip()),
+        lark_app_secret_configured=bool(settings.lark_app_secret.strip()),
+        dashboard_base_url=settings.dashboard_base_url,
+        session_ttl_seconds=settings.dashboard_session_ttl_seconds,
+        secure_cookie=settings.dashboard_cookie_secure,
+    )
 
 
 def _analytics_dates(

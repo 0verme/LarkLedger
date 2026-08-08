@@ -62,6 +62,37 @@ describe("dashboard routing and protection", () => {
     expect(screen.getByRole("link", { name: "事件" })).toBeInTheDocument();
   });
 
+  it("shows only redacted configuration and supports mobile navigation", async () => {
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_admin", name: "管理员", avatar_url: "", role: "ADMIN", expires_at: "2026-08-08T12:00:00+00:00" }));
+      return Promise.resolve(Response.json({ version: "0.3.0", event_mode: "websocket", timezone: "Asia/Shanghai", currency: "CNY", worker_enabled: true, reply_worker_enabled: true, cleanup_worker_enabled: true, pending_enabled: true, ai_provider: "DeepSeek-compatible", ai_model: "deepseek-chat", ai_api_key_configured: true, lark_app_secret_configured: true, dashboard_base_url: "https://ledger.example.com", session_ttl_seconds: 28800, secure_cookie: true }));
+    }));
+    renderApp("/admin/config");
+    expect(await screen.findByRole("heading", { name: "系统配置" })).toBeInTheDocument();
+    expect(screen.getByText("DeepSeek-compatible")).toBeInTheDocument();
+    expect(screen.getAllByText("已配置")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("button", { name: "打开导航" }));
+    expect(document.querySelector(".sidebar")).toHaveClass("open");
+    fireEvent.click(screen.getAllByRole("button", { name: "关闭导航" }).at(-1)!);
+    expect(document.querySelector(".sidebar")).not.toHaveClass("open");
+  });
+
+  it("returns to login when an authenticated request expires", async () => {
+    let expired = false;
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
+      if (!expired) {
+        expired = true;
+        return Promise.resolve(new Response(JSON.stringify({ detail: "session expired" }), { status: 401, headers: { "Content-Type": "application/json" } }));
+      }
+      return Promise.resolve(Response.json({}));
+    }));
+    renderApp("/entries");
+    expect(await screen.findByRole("link", { name: /使用飞书登录/ })).toBeInTheDocument();
+  });
+
   it("dry-runs event replay before explicit execution", async () => {
     const event = { event_id: "evt-dead", source_message_id: "om_se…dead", status: "dead", attempt_count: 3, transport: "webhook", received_at: "2026-08-08T04:00:00Z", processed_at: "2026-08-08T04:01:00Z", last_error_code: "TemporaryFailure", updated_at: "2026-08-08T04:01:00Z" };
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

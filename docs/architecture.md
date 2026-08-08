@@ -21,6 +21,26 @@
 | `ReportRenderer` | 生成消费报告 PNG 和飞书消息卡片；失败时降级为文字卡片 |
 | PostgreSQL / Alembic | 保存账目、预算、告警阈值和已处理事件，管理 Schema 版本 |
 
+## Web Dashboard 与共享业务核心
+
+```text
+                    ┌──────────────┐
+Feishu ───────────→ │ Event Worker │
+                    └──────┬───────┘
+                           ↓
+                     Service Layer
+                           ↓
+                      PostgreSQL
+                           ↑
+                     Service Layer
+                           ↑
+Web Dashboard → Web API ───┘
+```
+
+Dashboard 是可选的 React/Vite 静态客户端，由同一 FastAPI 容器提供。`/api/web/v1/*` 从 PostgreSQL Session 取得已认证 `user_open_id`，请求 body/query 不能覆盖该身份。账目写操作继续进入 `LedgerService` 并产生 revision；确认/取消继续进入 `PendingCommandStore` 的锁与幂等路径；结果重发和事件重放继续使用现有 Replay Service 与安全预检。Web 不直接更新 ORM、不创建第二套确认状态机、Outbox、Worker 或任务队列。
+
+普通用户只能读取和操作自己的账目、预算、报告、导出与 pending。环境变量中列出的管理员额外获得经过脱敏的 Event / Outbox、Dead / Replay、readiness 与只读安全配置；完整 payload、回复正文、blob、密钥和数据库连接信息不进入 Web 响应。
+
 ## 消息处理链路
 
 ```text

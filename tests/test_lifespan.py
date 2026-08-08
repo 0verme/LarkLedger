@@ -1,10 +1,43 @@
 from typing import Any
 
+import httpx
 import pytest
 from fastapi import FastAPI
 
 from lark_ledger import main
 from lark_ledger.config import Settings
+
+
+async def test_dashboard_routes_and_security_headers_are_optional() -> None:
+    disabled = main.create_app(Settings(_env_file=None, dashboard_enabled=False))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=disabled), base_url="http://test"
+    ) as client:
+        response = await client.get("/api/web/v1/me")
+        assert response.status_code == 404
+        assert "content-security-policy" not in response.headers
+
+    enabled_settings = Settings(
+        _env_file=None,
+        dashboard_enabled=True,
+        dashboard_base_url="https://ledger.example.com",
+        dashboard_session_secret="test-only-secret-that-is-long-enough-123456",
+        lark_app_id="cli_test",
+        lark_app_secret="app-secret",
+    )
+    enabled = main.create_app(enabled_settings)
+    enabled.state.settings = enabled_settings
+    enabled.state.session_factory = main.SessionFactory
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=enabled), base_url="https://ledger.example.com"
+    ) as client:
+        response = await client.get("/api/web/v1/me")
+        assert response.status_code == 401
+        assert response.headers["cache-control"] == "no-store"
+        assert response.headers["x-frame-options"] == "DENY"
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+        assert response.headers["strict-transport-security"].startswith("max-age=")
 
 
 async def test_websocket_mode_requires_app_credentials_at_startup(

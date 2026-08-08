@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from lark_ledger import __version__
 from lark_ledger.api import router
 from lark_ledger.config import EventMode, Settings, get_settings
-from lark_ledger.dashboard_static import DashboardStaticFiles
+from lark_ledger.dashboard_static import DashboardSecurityHeaders, DashboardStaticFiles
 from lark_ledger.db import SessionFactory, engine
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.services.ai import AIInterpreter
@@ -160,6 +160,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(router)
     if initial_settings.dashboard_enabled:
         application.include_router(web_router)
+        application.add_middleware(
+            DashboardSecurityHeaders, hsts=initial_settings.dashboard_cookie_secure
+        )
         static_dir = Path("web/dist")
         if static_dir.is_dir():
             application.mount(

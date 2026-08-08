@@ -174,6 +174,15 @@ async def test_admin_lists_are_bounded_redacted_and_permissioned(
         assert dead.json()["reply_count"] == 1
         health = await admin_client.get("/api/web/v1/admin/health")
         assert health.json()["checks"]["migration"]["current"] == "20260808_0014"
+        config = await admin_client.get("/api/web/v1/admin/config")
+        config_data = config.json()
+        assert config_data["event_mode"] == "webhook"
+        assert config_data["lark_app_secret_configured"] is True
+        assert config_data["secure_cookie"] is False
+        serialized = config.text.lower()
+        assert "app-secret" not in serialized
+        assert "database_url" not in serialized
+        assert "session_secret" not in serialized
 
 
 async def test_replay_requires_csrf_preflight_and_second_confirmation(
