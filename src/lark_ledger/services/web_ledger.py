@@ -6,11 +6,13 @@ from calendar import monthrange
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from math import ceil
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     CategoryBudget,
     Direction,
@@ -41,7 +43,7 @@ class WebLedgerQueryService:
 
     async def list_entries(
         self,
-        user_open_id: str,
+        user_open_id: RequestContext | str,
         *,
         page: int,
         page_size: int,
@@ -57,7 +59,7 @@ class WebLedgerQueryService:
         sort: EntrySort = "occurred_at",
         order: SortOrder = "desc",
     ) -> EntryPage:
-        filters = [LedgerEntry.user_open_id == user_open_id]
+        filters = [self._entry_scope(user_open_id)]
         if deleted == "active":
             filters.append(LedgerEntry.deleted_at.is_(None))
         elif deleted == "deleted":
@@ -118,11 +120,13 @@ class WebLedgerQueryService:
             pages=ceil(total / page_size) if total else 0,
         )
 
-    async def entry_detail(self, user_open_id: str, short_id: str) -> EntryDetail | None:
+    async def entry_detail(
+        self, user_open_id: RequestContext | str, short_id: str
+    ) -> EntryDetail | None:
         code = normalize_entry_ref(short_id)
         entry = await self._session.scalar(
             select(LedgerEntry).where(
-                LedgerEntry.user_open_id == user_open_id,
+                self._entry_scope(user_open_id),
                 LedgerEntry.short_id == code,
             )
         )
@@ -134,7 +138,7 @@ class WebLedgerQueryService:
                     select(LedgerEntryRevision)
                     .where(
                         LedgerEntryRevision.entry_id == entry.id,
-                        LedgerEntryRevision.user_open_id == user_open_id,
+                        self._revision_scope(user_open_id),
                     )
                     .order_by(LedgerEntryRevision.created_at.desc())
                     .limit(100)
@@ -156,7 +160,9 @@ class WebLedgerQueryService:
             ],
         )
 
-    async def dashboard(self, user_open_id: str, *, now: datetime | None = None) -> DashboardData:
+    async def dashboard(
+        self, user_open_id: RequestContext | str, *, now: datetime | None = None
+    ) -> DashboardData:
         current = (now or datetime.now(UTC)).astimezone(self._timezone)
         month_start_local = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         days = monthrange(current.year, current.month)[1]
@@ -164,7 +170,7 @@ class WebLedgerQueryService:
         month_start = month_start_local.astimezone(UTC)
         month_end = month_end_local.astimezone(UTC)
         active = and_(
-            LedgerEntry.user_open_id == user_open_id,
+            self._entry_scope(user_open_id),
             LedgerEntry.deleted_at.is_(None),
         )
         totals = (
@@ -209,7 +215,7 @@ class WebLedgerQueryService:
         pending_count = int(
             await self._session.scalar(
                 select(func.count()).select_from(PendingCommand).where(
-                    PendingCommand.user_open_id == user_open_id,
+                    self._pending_scope(user_open_id),
                     PendingCommand.status == PendingStatus.PENDING.value,
                     PendingCommand.expires_at > current.astimezone(UTC),
                 )
@@ -281,7 +287,7 @@ class WebLedgerQueryService:
         total_budget = Decimal(
             await self._session.scalar(
                 select(func.coalesce(func.sum(CategoryBudget.amount), 0)).where(
-                    CategoryBudget.user_open_id == user_open_id
+                    self._budget_scope(user_open_id)
                 )
             )
             or 0
@@ -304,6 +310,64 @@ class WebLedgerQueryService:
             recent_entries=[self._entry(row) for row in recent],
             trend=trend,
             categories=categories,
+        )
+
+    @staticmethod
+    def _legacy_subject(scope: RequestContext | str) -> str | None:
+        return scope if isinstance(scope, str) else scope.external_subject_id
+
+    @classmethod
+    def _entry_scope(cls, scope: RequestContext | str) -> Any:
+        if isinstance(scope, str):
+            return LedgerEntry.user_open_id == scope
+        legacy = cls._legacy_subject(scope)
+        if legacy is None:
+            return LedgerEntry.ledger_id == scope.ledger_id
+        return or_(
+            LedgerEntry.ledger_id == scope.ledger_id,
+            and_(LedgerEntry.ledger_id.is_(None), LedgerEntry.user_open_id == legacy),
+        )
+
+    @classmethod
+    def _budget_scope(cls, scope: RequestContext | str) -> Any:
+        if isinstance(scope, str):
+            return CategoryBudget.user_open_id == scope
+        legacy = cls._legacy_subject(scope)
+        if legacy is None:
+            return CategoryBudget.ledger_id == scope.ledger_id
+        return or_(
+            CategoryBudget.ledger_id == scope.ledger_id,
+            and_(CategoryBudget.ledger_id.is_(None), CategoryBudget.user_open_id == legacy),
+        )
+
+    @classmethod
+    def _revision_scope(cls, scope: RequestContext | str) -> Any:
+        if isinstance(scope, str):
+            return LedgerEntryRevision.user_open_id == scope
+        legacy = cls._legacy_subject(scope)
+        if legacy is None:
+            return LedgerEntryRevision.ledger_id == scope.ledger_id
+        return or_(
+            LedgerEntryRevision.ledger_id == scope.ledger_id,
+            and_(
+                LedgerEntryRevision.ledger_id.is_(None),
+                LedgerEntryRevision.user_open_id == legacy,
+            ),
+        )
+
+    @classmethod
+    def _pending_scope(cls, scope: RequestContext | str) -> Any:
+        if isinstance(scope, str):
+            return PendingCommand.user_open_id == scope
+        legacy = cls._legacy_subject(scope)
+        if legacy is None:
+            return PendingCommand.actor_user_id == scope.actor_user_id
+        return or_(
+            PendingCommand.actor_user_id == scope.actor_user_id,
+            and_(
+                PendingCommand.actor_user_id.is_(None),
+                PendingCommand.user_open_id == legacy,
+            ),
         )
 
     @staticmethod

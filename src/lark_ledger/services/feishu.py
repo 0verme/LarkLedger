@@ -46,6 +46,7 @@ from lark_ledger.schemas import (
 )
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
+from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.outbox import ReplyOutboxStore
 from lark_ledger.services.pending import (
@@ -703,6 +704,14 @@ class MessageProcessor:
         worker never re-calls AI or re-queries the ledger.
         """
         async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=user_open_id,
+            )
             result = await LedgerService(
                 session,
                 self.settings.currency,
@@ -710,7 +719,7 @@ class MessageProcessor:
                 exchange_rates=self.exchange_rates,
                 commit_changes=False,
             ).execute(
-                user_open_id,
+                context,
                 command,
                 source_type=source_type,
                 source_message_id=source_message_id,
@@ -753,6 +762,14 @@ class MessageProcessor:
         re-claim (the outbox pre-check skips business) without a second pending.
         """
         async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=user_open_id,
+            )
             pending = await self._pending_store.create_pending(
                 session=session,
                 event_id=event_id,
@@ -763,6 +780,7 @@ class MessageProcessor:
                 source_type=source_type,
                 risk=risk,
                 now=datetime.now(UTC),
+                context=context,
             )
             row = self._make_outbox_row(
                 event_id=event_id,

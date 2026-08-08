@@ -4,6 +4,26 @@
 
 本文说明 LarkLedger v0.4.0 的运行组件、消息数据流、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
+## 身份与账本边界（Unreleased）
+
+飞书 `open_id` 现在只作为 `ChannelIdentity` 的外部主体标识。入口在调用账务核心前
+解析出 `RequestContext(actor_user_id, ledger_id, source_channel)`；账目、预算和 Web
+查询以 `ledger_id` 为授权与数据隔离边界。迁移期保留旧 `user_open_id` 列用于安全
+回滚，但它不再是新查询的首要作用域。
+
+```text
+Feishu / Web
+      │ external subject
+      ▼
+ChannelIdentity ──► User ──► default Ledger
+                                │
+                                ▼
+                       Ledger Core / PostgreSQL
+```
+
+Event 与 Reply Outbox 中的外部标识承担接收、重放、审计和投递职责，属于传输层元数据，
+不会为了领域身份迁移而删除。
+
 ## 组件
 
 | 组件 | 职责 |

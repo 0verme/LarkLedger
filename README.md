@@ -273,6 +273,7 @@ curl http://127.0.0.1:8000/healthz
 - [用户手册](docs/help.md)：消息示例、预算、报告、限制、FAQ
 - [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
 - [架构说明](docs/architecture.md)
+- [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
 - [变更日志](CHANGELOG.md) · [v0.4.0 发布说明](.github/release-notes/v0.4.0.md) · [v0.3.0 发布说明](.github/release-notes/v0.3.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)

@@ -21,7 +21,7 @@ from decimal import Decimal
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
@@ -29,6 +29,7 @@ from lark_ledger.confirmation_id import (
     format_confirmation_ref,
     generate_confirmation_code,
 )
+from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     Direction,
     PendingCommand,
@@ -43,6 +44,7 @@ from lark_ledger.outbox import (
     build_text_payload,
 )
 from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.risk import RiskAssessment, RiskReason
 from lark_ledger.services.worker import is_permanent_error
@@ -394,11 +396,21 @@ class PendingCommandStore:
         source_type: str,
         risk: RiskAssessment,
         now: datetime,
+        context: RequestContext | None = None,
     ) -> PendingCommand:
         """Add a pending row to ``session`` (the caller commits it together with
         the preview outbox). Allocates a user-unique confirmation code via an
         in-session pre-check plus the unique constraint as the concurrency guard.
         """
+        if context is None:
+            context = await IdentityService(
+                session,
+                currency=self._settings.currency,
+                timezone=self._settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=user_open_id,
+            )
         preview = build_pending_preview(
             command,
             source_type,
@@ -414,6 +426,8 @@ class PendingCommandStore:
         pending = PendingCommand(
             confirmation_code=code,
             user_open_id=user_open_id,
+            actor_user_id=context.actor_user_id,
+            ledger_id=context.ledger_id,
             source_event_id=event_id,
             source_message_id=message_id,
             source_fingerprint=source_fingerprint,
@@ -562,10 +576,24 @@ class PendingCommandStore:
         ``business_committed_at`` pre-checks without re-running business.
         """
         async with self._factory() as session:
+            actor_context = await IdentityService(
+                session,
+                currency=self._settings.currency,
+                timezone=self._settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=user_open_id,
+            )
             row = await session.scalar(
                 select(PendingCommand)
                 .where(
-                    PendingCommand.user_open_id == user_open_id,
+                    or_(
+                        PendingCommand.actor_user_id == actor_context.actor_user_id,
+                        and_(
+                            PendingCommand.actor_user_id.is_(None),
+                            PendingCommand.user_open_id == user_open_id,
+                        ),
+                    ),
                     PendingCommand.confirmation_code == confirmation_code,
                 )
                 .with_for_update()
@@ -607,7 +635,12 @@ class PendingCommandStore:
                     exchange_rates=exchange_rates,
                     commit_changes=False,
                 ).execute(
-                    user_open_id,
+                    RequestContext(
+                        actor_user_id=actor_context.actor_user_id,
+                        ledger_id=row.ledger_id or actor_context.ledger_id,
+                        source_channel=row.transport,
+                        external_subject_id=user_open_id,
+                    ),
                     command,
                     source_type=row.source_type,
                     source_message_id=row.source_message_id,

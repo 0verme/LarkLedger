@@ -5,11 +5,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from math import ceil
+from typing import Any
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.confirmation_id import format_confirmation_ref, normalize_confirmation_code
+from lark_ledger.context import RequestContext
 from lark_ledger.models import PendingCommand, PendingStatus
 from lark_ledger.services.pending import PendingPreview
 from lark_ledger.web_schemas import PendingDetail, PendingGroup, PendingPage, WebPending
@@ -21,7 +23,7 @@ class WebPendingQueryService:
 
     async def list_pending(
         self,
-        user_open_id: str,
+        user_open_id: RequestContext | str,
         *,
         group: PendingGroup,
         page: int,
@@ -29,7 +31,7 @@ class WebPendingQueryService:
         now: datetime | None = None,
     ) -> PendingPage:
         current = now or datetime.now(UTC)
-        filters = [PendingCommand.user_open_id == user_open_id]
+        filters = [self._scope(user_open_id)]
         if group == "pending":
             filters.extend(
                 [
@@ -74,7 +76,7 @@ class WebPendingQueryService:
 
     async def detail(
         self,
-        user_open_id: str,
+        user_open_id: RequestContext | str,
         confirmation_id: str,
         *,
         now: datetime | None = None,
@@ -82,7 +84,7 @@ class WebPendingQueryService:
         code = normalize_confirmation_code(confirmation_id)
         row = await self._session.scalar(
             select(PendingCommand).where(
-                PendingCommand.user_open_id == user_open_id,
+                self._scope(user_open_id),
                 PendingCommand.confirmation_code == code,
             )
         )
@@ -92,6 +94,20 @@ class WebPendingQueryService:
         return PendingDetail(
             pending=self._pending(row, now=now or datetime.now(UTC)),
             preview=preview.as_json(),
+        )
+
+    @staticmethod
+    def _scope(scope: RequestContext | str) -> Any:
+        if isinstance(scope, str):
+            return PendingCommand.user_open_id == scope
+        if scope.external_subject_id is None:
+            return PendingCommand.actor_user_id == scope.actor_user_id
+        return or_(
+            PendingCommand.actor_user_id == scope.actor_user_id,
+            and_(
+                PendingCommand.actor_user_id.is_(None),
+                PendingCommand.user_open_id == scope.external_subject_id,
+            ),
         )
 
     @staticmethod

@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from sqlalchemy import Select, and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lark_ledger.context import RequestContext
 from lark_ledger.entry_revisions import (
     RevisionChangeType,
     snapshot_ledger_entry,
@@ -19,6 +20,7 @@ from lark_ledger.models import (
     BudgetAlert,
     CategoryBudget,
     Direction,
+    Ledger,
     LedgerEntry,
     LedgerEntryRevision,
 )
@@ -41,6 +43,7 @@ from lark_ledger.schemas import (
 )
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.export import ExportTooLargeError, build_export_file
+from lark_ledger.services.identity import IdentityService
 from lark_ledger.short_id import (
     MAX_SHORT_ID_ALLOCATION_ATTEMPTS,
     ShortIdError,
@@ -56,6 +59,10 @@ MAX_MONEY = Decimal("999999999999.99")
 
 class EntryConflictError(RuntimeError):
     """The entry changed after a Web client loaded it."""
+
+
+class LedgerAccessDeniedError(PermissionError):
+    """The actor is not allowed to operate on the requested ledger."""
 
 
 logger = logging.getLogger(__name__)
@@ -111,10 +118,11 @@ class LedgerService:
         self.exchange_rates = exchange_rates
         self._short_id_factory = short_id_factory or generate_short_id
         self.commit_changes = commit_changes
+        self._active_context: RequestContext | None = None
 
     async def execute(
         self,
-        user_open_id: str,
+        context: RequestContext | str,
         command: ParsedCommand,
         *,
         source_type: str = "text",
@@ -122,6 +130,20 @@ class LedgerService:
         source_item_index: int = 0,
         expected_updated_at: datetime | None = None,
     ) -> ExecutionResult:
+        if isinstance(context, RequestContext):
+            self._active_context = context
+            user_open_id = context.external_subject_id or str(context.actor_user_id)
+        else:
+            self._active_context = await IdentityService(
+                self.session,
+                currency=self.currency,
+                timezone=str(self.timezone),
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=context,
+            )
+            user_open_id = context
+        await self._authorize_context()
         if command.action is Action.CREATE:
             result = await self._create(
                 user_open_id,
@@ -185,6 +207,42 @@ class LedgerService:
             await self.session.commit()
         return result
 
+    def _request_context(self) -> RequestContext:
+        if self._active_context is None:
+            raise RuntimeError("ledger request context is not initialized")
+        return self._active_context
+
+    async def _authorize_context(self) -> None:
+        context = self._request_context()
+        allowed = await self.session.scalar(
+            select(Ledger.id).where(
+                Ledger.id == context.ledger_id,
+                Ledger.owner_user_id == context.actor_user_id,
+            )
+        )
+        if allowed is None:
+            raise LedgerAccessDeniedError("actor cannot access the requested ledger")
+
+    def _entry_scope(self, legacy_subject: str) -> Any:
+        """Use ledger_id as the authority, with a nullable expand-migration fallback."""
+
+        return or_(
+            LedgerEntry.ledger_id == self._request_context().ledger_id,
+            and_(
+                LedgerEntry.ledger_id.is_(None),
+                LedgerEntry.user_open_id == legacy_subject,
+            ),
+        )
+
+    def _budget_scope(self, legacy_subject: str) -> Any:
+        return or_(
+            CategoryBudget.ledger_id == self._request_context().ledger_id,
+            and_(
+                CategoryBudget.ledger_id.is_(None),
+                CategoryBudget.user_open_id == legacy_subject,
+            ),
+        )
+
     @staticmethod
     def _entry_order_by() -> tuple[Any, ...]:
         """Stable newest-first order shared by last-entry and list pagination."""
@@ -197,7 +255,7 @@ class LedgerService:
     def _latest_query(self, user_open_id: str) -> Select[tuple[LedgerEntry]]:
         return (
             select(LedgerEntry)
-            .where(LedgerEntry.user_open_id == user_open_id, LedgerEntry.deleted_at.is_(None))
+            .where(self._entry_scope(user_open_id), LedgerEntry.deleted_at.is_(None))
             .order_by(*self._entry_order_by())
             .limit(1)
         )
@@ -255,6 +313,7 @@ class LedgerService:
         converted = await self._convert_command_amount(command)
         entry = LedgerEntry(
             user_open_id=user_open_id,
+            ledger_id=self._request_context().ledger_id,
             short_id=await self._allocate_short_id(user_open_id),
             amount=converted.amount,
             currency=self.currency,
@@ -272,11 +331,11 @@ class LedgerService:
         return entry, converted, budget_alert
 
     async def _allocate_short_id(self, user_open_id: str) -> str:
-        """Allocate a user-scoped short_id.
+        """Allocate a ledger-scoped short_id.
 
         Avoids collisions with rows already in the database and with other
         pending ``LedgerEntry`` objects in this session (important for batches).
-        The database unique constraint ``uq_entries_user_short_id`` remains the
+        The database unique constraint ``uq_entries_ledger_short_id`` remains the
         authoritative guarantee under concurrency.
         """
         for _ in range(MAX_SHORT_ID_ALLOCATION_ATTEMPTS):
@@ -292,14 +351,14 @@ class LedgerService:
         for obj in self.session.new:
             if (
                 isinstance(obj, LedgerEntry)
-                and obj.user_open_id == user_open_id
+                and obj.ledger_id == self._request_context().ledger_id
                 and obj.short_id == short_id
             ):
                 return True
         existing = await self.session.scalar(
             select(LedgerEntry.id)
             .where(
-                LedgerEntry.user_open_id == user_open_id,
+                self._entry_scope(user_open_id),
                 LedgerEntry.short_id == short_id,
             )
             .limit(1)
@@ -637,7 +696,7 @@ class LedgerService:
         self, user_open_id: str, short_id: str
     ) -> LedgerEntry | None:
         query = select(LedgerEntry).where(
-            LedgerEntry.user_open_id == user_open_id,
+            self._entry_scope(user_open_id),
             LedgerEntry.short_id == short_id,
         )
         if self._supports_for_update():
@@ -791,6 +850,8 @@ class LedgerService:
             LedgerEntryRevision(
                 entry_id=entry.id,
                 user_open_id=user_open_id,
+                ledger_id=self._request_context().ledger_id,
+                actor_user_id=self._request_context().actor_user_id,
                 short_id=entry.short_id,
                 change_type=change_type.value,
                 before_json=before,
@@ -814,6 +875,7 @@ class LedgerService:
         if budget is None:
             budget = CategoryBudget(
                 user_open_id=user_open_id,
+                ledger_id=self._request_context().ledger_id,
                 category=command.category,
                 amount=converted.amount,
             )
@@ -951,7 +1013,7 @@ class LedgerService:
     async def _list_budgets(
         self, user_open_id: str, command: ParsedCommand
     ) -> ExecutionResult:
-        query = select(CategoryBudget).where(CategoryBudget.user_open_id == user_open_id)
+        query = select(CategoryBudget).where(self._budget_scope(user_open_id))
         if command.category:
             query = query.where(CategoryBudget.category == command.category)
         budgets = (
@@ -1047,7 +1109,7 @@ class LedgerService:
             await self.session.execute(
                 select(CategoryBudget)
                 .where(
-                    CategoryBudget.user_open_id == user_open_id,
+                    self._budget_scope(user_open_id),
                     CategoryBudget.category == category,
                 )
                 .with_for_update()
@@ -1058,7 +1120,7 @@ class LedgerService:
         start, end = self._current_month_bounds()
         amount = await self.session.scalar(
             select(func.sum(LedgerEntry.amount)).where(
-                LedgerEntry.user_open_id == user_open_id,
+                self._entry_scope(user_open_id),
                 LedgerEntry.category == category,
                 LedgerEntry.direction == Direction.EXPENSE,
                 LedgerEntry.deleted_at.is_(None),
@@ -1097,7 +1159,7 @@ class LedgerService:
         capped = requested > MAX_LIST_LIMIT
         limit = min(max(requested, 1), MAX_LIST_LIMIT)
         filters: list[Any] = [
-            LedgerEntry.user_open_id == user_open_id,
+            self._entry_scope(user_open_id),
             LedgerEntry.deleted_at.is_(None),
         ]
         if command.range_start is not None and command.range_end is not None:
@@ -1186,7 +1248,7 @@ class LedgerService:
         include_deleted: bool,
     ) -> LedgerEntry | None:
         filters = [
-            LedgerEntry.user_open_id == user_open_id,
+            self._entry_scope(user_open_id),
             LedgerEntry.short_id == short_id,
         ]
         if not include_deleted:
@@ -1285,7 +1347,7 @@ class LedgerService:
                 message="导出时间范围无效：开始时间必须早于结束时间。"
             )
 
-        filters: list[Any] = [LedgerEntry.user_open_id == user_open_id]
+        filters: list[Any] = [self._entry_scope(user_open_id)]
         if not command.include_deleted:
             filters.append(LedgerEntry.deleted_at.is_(None))
         if range_start is not None and range_end is not None:
@@ -1345,7 +1407,7 @@ class LedgerService:
         assert command.range_start is not None
         assert command.range_end is not None
         filters = [
-            LedgerEntry.user_open_id == user_open_id,
+            self._entry_scope(user_open_id),
             LedgerEntry.deleted_at.is_(None),
             LedgerEntry.occurred_at >= command.range_start,
             LedgerEntry.occurred_at < command.range_end,
@@ -1386,7 +1448,7 @@ class LedgerService:
                     LedgerEntry.category,
                     LedgerEntry.occurred_at,
                 ).where(
-                    LedgerEntry.user_open_id == user_open_id,
+                    self._entry_scope(user_open_id),
                     LedgerEntry.deleted_at.is_(None),
                     LedgerEntry.occurred_at >= command.range_start,
                     LedgerEntry.occurred_at < command.range_end,

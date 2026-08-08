@@ -5,11 +5,13 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from lark_ledger.context import RequestContext
 from lark_ledger.models import CategoryBudget, Direction, LedgerEntry
 from lark_ledger.web_schemas import (
     AnalyticsCategory,
@@ -44,7 +46,7 @@ class WebAnalyticsQueryService:
         self._currency = currency
 
     async def analytics(
-        self, user_open_id: str, *, start_date: date, end_date: date
+        self, user_open_id: RequestContext | str, *, start_date: date, end_date: date
     ) -> tuple[
         AnalyticsSummary,
         list[AnalyticsTrendPoint],
@@ -60,7 +62,7 @@ class WebAnalyticsQueryService:
                     LedgerEntry.category,
                     LedgerEntry.occurred_at,
                 ).where(
-                    LedgerEntry.user_open_id == user_open_id,
+                    self._entry_scope(user_open_id),
                     LedgerEntry.deleted_at.is_(None),
                     LedgerEntry.occurred_at >= start,
                     LedgerEntry.occurred_at < end,
@@ -146,7 +148,7 @@ class WebAnalyticsQueryService:
         )
 
     async def budgets(
-        self, user_open_id: str, *, now: datetime | None = None
+        self, user_open_id: RequestContext | str, *, now: datetime | None = None
     ) -> BudgetOverview:
         current = self._local(now or datetime.now(UTC))
         month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -158,14 +160,14 @@ class WebAnalyticsQueryService:
         budgets = (
             await self._session.scalars(
                 select(CategoryBudget)
-                .where(CategoryBudget.user_open_id == user_open_id)
+                .where(self._budget_scope(user_open_id))
                 .order_by(CategoryBudget.category)
             )
         ).all()
         expenses = (
             await self._session.execute(
                 select(LedgerEntry.category, LedgerEntry.amount).where(
-                    LedgerEntry.user_open_id == user_open_id,
+                    self._entry_scope(user_open_id),
                     LedgerEntry.direction == Direction.EXPENSE,
                     LedgerEntry.deleted_at.is_(None),
                     LedgerEntry.occurred_at >= month_start.astimezone(UTC),
@@ -205,3 +207,31 @@ class WebAnalyticsQueryService:
         if value.tzinfo is None:
             value = value.replace(tzinfo=UTC)
         return value.astimezone(self._timezone)
+
+    @staticmethod
+    def _entry_scope(scope: RequestContext | str) -> Any:
+        if isinstance(scope, str):
+            return LedgerEntry.user_open_id == scope
+        if scope.external_subject_id is None:
+            return LedgerEntry.ledger_id == scope.ledger_id
+        return or_(
+            LedgerEntry.ledger_id == scope.ledger_id,
+            and_(
+                LedgerEntry.ledger_id.is_(None),
+                LedgerEntry.user_open_id == scope.external_subject_id,
+            ),
+        )
+
+    @staticmethod
+    def _budget_scope(scope: RequestContext | str) -> Any:
+        if isinstance(scope, str):
+            return CategoryBudget.user_open_id == scope
+        if scope.external_subject_id is None:
+            return CategoryBudget.ledger_id == scope.ledger_id
+        return or_(
+            CategoryBudget.ledger_id == scope.ledger_id,
+            and_(
+                CategoryBudget.ledger_id.is_(None),
+                CategoryBudget.user_open_id == scope.external_subject_id,
+            ),
+        )

@@ -18,12 +18,14 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
+from lark_ledger.context import RequestContext
 from lark_ledger.models import Direction, LedgerEntry
 from lark_ledger.schemas import Action, EntryCandidate, ParsedCommand
+from lark_ledger.services.identity import IdentityService
 
 
 class RiskDecision(StrEnum):
@@ -147,8 +149,21 @@ class RiskRouter:
         if command.action not in _WRITE_ACTIONS:
             return RiskAssessment(decision=RiskDecision.WRITE_THROUGH)
 
+        async with self._factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self._settings.currency,
+                timezone=self._settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=user_open_id,
+            )
+            await session.commit()
         hits = await self._find_duplicate_hits(
-            user_open_id=user_open_id, command=command, source_type=source_type
+            context=context,
+            user_open_id=user_open_id,
+            command=command,
+            source_type=source_type,
         )
 
         if media is MediaKind.VISION or source_type in {"image", "post"}:
@@ -193,6 +208,7 @@ class RiskRouter:
     async def _find_duplicate_hits(
         self,
         *,
+        context: RequestContext,
         user_open_id: str,
         command: ParsedCommand,
         source_type: str = "text",
@@ -205,6 +221,7 @@ class RiskRouter:
             entry_index = None if command.action is Action.CREATE else index
             hits.extend(
                 await self._find_duplicates(
+                    context=context,
                     user_open_id=user_open_id,
                     entry_index=entry_index,
                     amount=candidate.amount,
@@ -238,6 +255,7 @@ class RiskRouter:
     async def _find_duplicates(
         self,
         *,
+        context: RequestContext,
         user_open_id: str,
         entry_index: int | None,
         amount: Decimal | str | None,
@@ -275,7 +293,13 @@ class RiskRouter:
                 await session.execute(
                     select(LedgerEntry.short_id, LedgerEntry.note)
                     .where(
-                        LedgerEntry.user_open_id == user_open_id,
+                        or_(
+                            LedgerEntry.ledger_id == context.ledger_id,
+                            and_(
+                                LedgerEntry.ledger_id.is_(None),
+                                LedgerEntry.user_open_id == user_open_id,
+                            ),
+                        ),
                         LedgerEntry.deleted_at.is_(None),
                         LedgerEntry.direction == resolved_direction,
                         LedgerEntry.amount == amount,

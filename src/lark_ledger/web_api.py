@@ -231,7 +231,7 @@ async def dashboard(
     async with factory() as session:
         return await WebLedgerQueryService(
             session, timezone=settings.timezone
-        ).dashboard(principal.user_open_id)
+        ).dashboard(principal.request_context)
 
 
 @router.get("/entries", response_model=EntryPage)
@@ -264,7 +264,7 @@ async def entries(
         return await WebLedgerQueryService(
             session, timezone=settings.timezone
         ).list_entries(
-            principal.user_open_id,
+            principal.request_context,
             page=page,
             page_size=page_size,
             start=start,
@@ -293,7 +293,7 @@ async def entry_detail(
         try:
             detail = await WebLedgerQueryService(
                 session, timezone=settings.timezone
-            ).entry_detail(principal.user_open_id, short_id)
+            ).entry_detail(principal.request_context, short_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="账目不存在") from exc
     if detail is None:
@@ -314,7 +314,7 @@ async def _mutate_entry(
     async with factory() as session:
         query = WebLedgerQueryService(session, timezone=settings.timezone)
         try:
-            existing = await query.entry_detail(principal.user_open_id, short_id)
+            existing = await query.entry_detail(principal.request_context, short_id)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="账目不存在") from exc
         if existing is None:
@@ -325,7 +325,7 @@ async def _mutate_entry(
                 currency=settings.currency,
                 timezone=settings.timezone,
             ).execute(
-                principal.user_open_id,
+                principal.request_context,
                 command,
                 source_type="web",
                 expected_updated_at=expected_updated_at,
@@ -335,7 +335,7 @@ async def _mutate_entry(
             raise HTTPException(
                 status_code=409, detail="账目已被其他请求修改，请刷新后重试"
             ) from exc
-        refreshed = await query.entry_detail(principal.user_open_id, short_id)
+        refreshed = await query.entry_detail(principal.request_context, short_id)
         if refreshed is None:
             raise HTTPException(status_code=404, detail="账目不存在")
         return refreshed
@@ -409,7 +409,7 @@ async def pending_list(
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
         return await WebPendingQueryService(session).list_pending(
-            principal.user_open_id,
+            principal.request_context,
             group=group,
             page=page,
             page_size=page_size,
@@ -426,7 +426,7 @@ async def pending_detail(
     async with factory() as session:
         try:
             detail = await WebPendingQueryService(session).detail(
-                principal.user_open_id, confirmation_id
+                principal.request_context, confirmation_id
             )
         except ConfirmationCodeError as exc:
             raise HTTPException(status_code=404, detail="确认单不存在") from exc
@@ -481,7 +481,7 @@ async def _pending_action(
         await processor._signal_or_deliver(outbox)
     async with factory() as session:
         detail = await WebPendingQueryService(session).detail(
-            principal.user_open_id, code, now=now
+            principal.request_context, code, now=now
         )
     if detail is None:
         raise HTTPException(status_code=404, detail="确认单不存在")
@@ -694,7 +694,7 @@ async def _analytics_data(
     async with factory() as session:
         return await WebAnalyticsQueryService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).analytics(principal.user_open_id, start_date=start, end_date=end)
+        ).analytics(principal.request_context, start_date=start, end_date=end)
 
 
 @router.get("/analytics/summary", response_model=AnalyticsSummary)
@@ -763,7 +763,7 @@ async def _budget_overview(
     async with factory() as session:
         return await WebAnalyticsQueryService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).budgets(principal.user_open_id)
+        ).budgets(principal.request_context)
 
 
 @router.get("/budgets", response_model=BudgetOverview)
@@ -791,7 +791,7 @@ async def update_budget(
             timezone=settings.timezone,
             exchange_rates=getattr(processor, "exchange_rates", None),
         ).execute(
-            principal.user_open_id,
+            principal.request_context,
             ParsedCommand(
                 action=Action.SET_BUDGET,
                 category=category,
@@ -814,7 +814,7 @@ async def delete_budget(
         await LedgerService(
             session, currency=settings.currency, timezone=settings.timezone
         ).execute(
-            principal.user_open_id,
+            principal.request_context,
             ParsedCommand(action=Action.DELETE_BUDGET, category=category),
         )
     return await _budget_overview(request, principal)
@@ -837,7 +837,7 @@ async def report(
         result = await LedgerService(
             session, currency=settings.currency, timezone=settings.timezone
         ).execute(
-            principal.user_open_id,
+            principal.request_context,
             ParsedCommand(action=Action.REPORT, range_start=start, range_end=end),
         )
     if result.report is None:
@@ -878,7 +878,7 @@ async def export_entries(
         result = await LedgerService(
             session, currency=settings.currency, timezone=settings.timezone
         ).execute(
-            principal.user_open_id,
+            principal.request_context,
             ParsedCommand(
                 action=Action.EXPORT_ENTRIES,
                 range_start=range_start,

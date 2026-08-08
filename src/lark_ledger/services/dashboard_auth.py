@@ -19,7 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
+from lark_ledger.context import RequestContext
 from lark_ledger.models import DashboardSession
+from lark_ledger.services.identity import IdentityService
 
 SESSION_COOKIE = "lark_ledger_session"
 CSRF_COOKIE = "lark_ledger_csrf"
@@ -34,11 +36,22 @@ class DashboardAuthError(ValueError):
 @dataclass(frozen=True)
 class DashboardPrincipal:
     session_id: str
+    user_id: uuid.UUID
+    ledger_id: uuid.UUID
     user_open_id: str
     display_name: str
     avatar_url: str
     role: str
     expires_at: datetime
+
+    @property
+    def request_context(self) -> RequestContext:
+        return RequestContext(
+            actor_user_id=self.user_id,
+            ledger_id=self.ledger_id,
+            source_channel="web",
+            external_subject_id=self.user_open_id,
+        )
 
 
 @dataclass(frozen=True)
@@ -204,16 +217,27 @@ class DashboardAuthService:
         expires_at = now + timedelta(seconds=self._settings.dashboard_session_ttl_seconds)
         session_token = secrets.token_urlsafe(48)
         csrf_token = secrets.token_urlsafe(32)
-        row = DashboardSession(
-            token_hash=_digest(session_token),
-            csrf_hash=_digest(csrf_token),
-            user_open_id=identity["open_id"],
-            display_name=identity.get("name", "")[:128],
-            avatar_url=identity.get("avatar_url", "")[:1024],
-            expires_at=expires_at,
-            last_seen_at=now,
-        )
         async with self._factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self._settings.currency,
+                timezone=self._settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=identity["open_id"],
+                display_name=identity.get("name", ""),
+            )
+            row = DashboardSession(
+                token_hash=_digest(session_token),
+                csrf_hash=_digest(csrf_token),
+                user_open_id=identity["open_id"],
+                user_id=context.actor_user_id,
+                ledger_id=context.ledger_id,
+                display_name=identity.get("name", "")[:128],
+                avatar_url=identity.get("avatar_url", "")[:1024],
+                expires_at=expires_at,
+                last_seen_at=now,
+            )
             session.add(row)
             await session.commit()
         return CreatedSession(
@@ -260,9 +284,13 @@ class DashboardAuthService:
                 await session.commit()
 
     def _principal(self, row: DashboardSession) -> DashboardPrincipal:
+        if row.user_id is None or row.ledger_id is None:
+            raise DashboardAuthError("登录会话缺少内部账本身份")
         role = "ADMIN" if row.user_open_id in self._settings.dashboard_admin_ids else "USER"
         return DashboardPrincipal(
             session_id=str(row.id),
+            user_id=row.user_id,
+            ledger_id=row.ledger_id,
             user_open_id=row.user_open_id,
             display_name=row.display_name,
             avatar_url=row.avatar_url,

@@ -4,6 +4,25 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added
+
+- **Identity and Ledger foundation** introduces platform-independent `users`,
+  `channel_identities`, and `ledgers`, plus a deterministic `RequestContext`
+  carrying the actor, target ledger, and source channel.
+- Alembic migration `20260809_0015` creates one internal user, Feishu identity,
+  and default personal ledger for every existing domain user, then backfills
+  ledger ownership without deleting or rewriting legacy `user_open_id` values.
+
+### Changed
+
+- New ledger entries, budgets, revisions, pending confirmations, and Dashboard
+  sessions persist internal user/ledger identifiers. Ledger and Web queries use
+  `ledger_id` as their primary scope, with a nullable legacy fallback retained
+  for the expand-migration release.
+- Feishu processing and Web Dashboard sessions now resolve external identities
+  before entering the ledger core. Event and Reply Outbox routing identifiers
+  remain transport metadata and are intentionally unchanged.
+
 ## [0.4.0] - 2026-08-08
 
 ### Added (v0.4.0 — Web Dashboard / 可视化账本与运维控制台; P11)
