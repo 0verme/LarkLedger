@@ -201,15 +201,22 @@ class AIInterpreter:
             if not isinstance(payload_data, dict):
                 raise TypeError("AI command response is not a JSON object")
             return ParsedCommand.model_validate_json(
-                json.dumps(self._normalize_command_payload(payload_data))
+                json.dumps(self._normalize_command_payload(payload_data, now=now))
             )
         except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValidationError) as exc:
             logger.exception("AI command response failed schema validation")
             raise CommandInterpretationError("AI command response is invalid") from exc
 
     @staticmethod
-    def _normalize_command_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    def _normalize_command_payload(
+        payload: dict[str, Any], *, now: datetime
+    ) -> dict[str, Any]:
         normalized = payload.copy()
+        # JSON-only providers occasionally emit null when the user omits a
+        # date. Preserve the existing "book it now" behavior at the AI trust
+        # boundary while leaving strict validation for every other field.
+        if normalized.get("action") == "create" and not normalized.get("occurred_at"):
+            normalized["occurred_at"] = now.isoformat()
         limits = (
             ("entries", MAX_BATCH_ENTRIES, "batch_truncated"),
             ("budgets", MAX_BATCH_BUDGETS, "budgets_truncated"),

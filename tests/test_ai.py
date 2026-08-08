@@ -59,6 +59,43 @@ async def test_interpreter_uses_strict_schema() -> None:
     assert "日元 JPY" in messages[0]["content"]
 
 
+async def test_interpreter_defaults_missing_create_time_to_request_now() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "create",
+                                    "amount": "0.01",
+                                    "direction": "expense",
+                                    "category": "其他",
+                                    "note": "v040 pending acceptance",
+                                    "occurred_at": None,
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://ai.example/v1"
+    )
+    interpreter = AIInterpreter(Settings(ai_api_key="test-key"), client)
+    now = datetime(2026, 8, 8, 10, 30, tzinfo=UTC)
+
+    command = await interpreter.interpret("其他支出0.01元", now=now)
+    await client.aclose()
+
+    assert command.action is Action.CREATE
+    assert command.occurred_at == now
+
+
 async def test_transcription() -> None:
     captured: dict[str, object] = {}
 
