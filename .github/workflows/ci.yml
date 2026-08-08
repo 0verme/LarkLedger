@@ -23,7 +23,7 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: mypy src
-      - run: pytest --cov --cov-report=term-missing --cov-fail-under=88 -m "not postgres"
+      - run: pytest --cov --cov-report=term-missing --cov-fail-under=90 -m "not postgres"
 
   postgres:
     runs-on: ubuntu-latest
