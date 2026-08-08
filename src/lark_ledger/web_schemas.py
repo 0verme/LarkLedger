@@ -130,7 +130,70 @@ class PendingActionResponse(BaseModel):
     pending: PendingDetail
 
 
+class AdminEvent(BaseModel):
+    event_id: str
+    source_message_id: str | None
+    status: str
+    attempt_count: int
+    transport: str | None
+    received_at: datetime | None
+    processed_at: datetime
+    last_error_code: str | None
+    updated_at: datetime
+
+
+class AdminEventPage(BaseModel):
+    items: list[AdminEvent]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class AdminOutbox(BaseModel):
+    id: str
+    event_id: str | None
+    reply_type: str
+    sequence: int
+    status: str
+    attempt_count: int
+    created_at: datetime
+    sent_at: datetime | None
+    last_error_code: str | None
+
+
+class AdminOutboxPage(BaseModel):
+    items: list[AdminOutbox]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class AdminDeadSummary(BaseModel):
+    event_count: int
+    reply_count: int
+    latest_events: list[AdminEvent]
+    latest_replies: list[AdminOutbox]
+
+
+class EventReplayRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=512)
+    execute: bool = False
+    confirmation_event_id: str | None = Field(default=None, max_length=128)
+
+
+class ResultReplayResponse(BaseModel):
+    reset: int
+    skipped: int
+    not_found: int
+
+
 DeletedFilter = Literal["active", "deleted", "all"]
 EntrySort = Literal["occurred_at", "amount", "updated_at"]
 SortOrder = Literal["asc", "desc"]
 PendingGroup = Literal["pending", "completed", "closed"]
+AdminEventStatus = Literal[
+    "received", "processing", "failed", "succeeded", "dead", "legacy", "legacy_succeeded"
+]
+AdminOutboxStatus = Literal["pending", "sending", "failed", "sent", "dead"]

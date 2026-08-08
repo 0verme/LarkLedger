@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Annotated, cast
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
 from lark_ledger.models import Direction
+from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.dashboard_auth import (
     CSRF_COOKIE,
@@ -23,11 +25,19 @@ from lark_ledger.services.dashboard_auth import (
     DashboardAuthService,
     DashboardPrincipal,
 )
+from lark_ledger.services.event_replay import EventReplayService
 from lark_ledger.services.ledger import EntryConflictError, LedgerService
 from lark_ledger.services.pending import PendingCommandStore
+from lark_ledger.services.replay import OutboxReplayService
+from lark_ledger.services.web_admin import WebAdminQueryService
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 from lark_ledger.services.web_pending import WebPendingQueryService
 from lark_ledger.web_schemas import (
+    AdminDeadSummary,
+    AdminEventPage,
+    AdminEventStatus,
+    AdminOutboxPage,
+    AdminOutboxStatus,
     DashboardData,
     DeletedFilter,
     EntryDetail,
@@ -35,10 +45,12 @@ from lark_ledger.web_schemas import (
     EntrySort,
     EntryUpdateRequest,
     EntryVersionRequest,
+    EventReplayRequest,
     PendingActionResponse,
     PendingDetail,
     PendingGroup,
     PendingPage,
+    ResultReplayResponse,
     SortOrder,
 )
 
@@ -492,3 +504,106 @@ async def cancel_pending(
         request=request,
         principal=principal,
     )
+
+
+@router.get("/admin/events", response_model=AdminEventPage)
+async def admin_events(
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(admin_principal)],
+    event_status: Annotated[AdminEventStatus | None, Query(alias="status")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> AdminEventPage:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await WebAdminQueryService(session).events(
+            status=event_status, page=page, page_size=page_size
+        )
+
+
+@router.get("/admin/outbox", response_model=AdminOutboxPage)
+async def admin_outbox(
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(admin_principal)],
+    outbox_status: Annotated[AdminOutboxStatus | None, Query(alias="status")] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> AdminOutboxPage:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await WebAdminQueryService(session).outbox(
+            status=outbox_status, page=page, page_size=page_size
+        )
+
+
+@router.get("/admin/dead", response_model=AdminDeadSummary)
+async def admin_dead(
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> AdminDeadSummary:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await WebAdminQueryService(session).dead_summary()
+
+
+@router.post(
+    "/admin/outbox/{outbox_id}/replay", response_model=ResultReplayResponse
+)
+async def replay_outbox_result(
+    outbox_id: uuid.UUID,
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    admin: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> ResultReplayResponse:
+    del admin
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    result = await OutboxReplayService(factory).replay_ids([outbox_id])
+    if result.not_found:
+        raise HTTPException(status_code=404, detail="回复记录不存在")
+    if result.reset == 0:
+        raise HTTPException(status_code=409, detail="当前回复状态不可重发")
+    reply_worker = getattr(request.app.state, "reply_worker", None)
+    if reply_worker is not None:
+        reply_worker.wakeup()
+    return ResultReplayResponse(
+        reset=result.reset, skipped=result.skipped, not_found=result.not_found
+    )
+
+
+@router.post("/admin/events/{event_id}/replay")
+async def replay_event(
+    event_id: str,
+    payload: EventReplayRequest,
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    admin: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> dict[str, object]:
+    if payload.execute and payload.confirmation_event_id != event_id:
+        raise HTTPException(status_code=422, detail="二次确认事件 ID 不匹配")
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    try:
+        result = await EventReplayService(factory).replay(
+            event_id,
+            operator=admin.user_open_id,
+            reason=payload.reason,
+            execute=payload.execute,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if payload.execute and result.outcome != "requeued":
+        raise HTTPException(
+            status_code=409,
+            detail="安全预检未通过，事件状态已变化，请重新 Dry Run",
+        )
+    return result.to_safe_dict()
+
+
+@router.get("/admin/health")
+async def admin_health(
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> dict[str, object]:
+    service = cast(ReadinessService | None, getattr(request.app.state, "readiness", None))
+    if service is None:
+        raise HTTPException(status_code=503, detail="系统尚未完成启动")
+    return cast(dict[str, object], await service.check(request.app.state))

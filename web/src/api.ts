@@ -85,6 +85,48 @@ export type PendingDetail = {
 
 export type PendingActionResponse = { message: string; pending: PendingDetail };
 
+export type AdminEvent = {
+  event_id: string;
+  source_message_id: string | null;
+  status: string;
+  attempt_count: number;
+  transport: string | null;
+  received_at: string | null;
+  processed_at: string;
+  last_error_code: string | null;
+  updated_at: string;
+};
+
+export type AdminOutbox = {
+  id: string;
+  event_id: string | null;
+  reply_type: string;
+  sequence: number;
+  status: string;
+  attempt_count: number;
+  created_at: string;
+  sent_at: string | null;
+  last_error_code: string | null;
+};
+
+export type AdminEventPage = { items: AdminEvent[]; page: number; page_size: number; total: number; pages: number };
+export type AdminOutboxPage = { items: AdminOutbox[]; page: number; page_size: number; total: number; pages: number };
+export type AdminDeadSummary = { event_count: number; reply_count: number; latest_events: AdminEvent[]; latest_replies: AdminOutbox[] };
+export type ReplayPreflight = {
+  event_found: boolean;
+  eligible: boolean;
+  status: string | null;
+  business_result_committed: boolean;
+  outbox_count: number;
+  ledger_entry_count: number;
+  batch_risk: string;
+  lease_state: string;
+  reason_codes: string[];
+  recommended_action: string;
+};
+export type EventReplayResult = { mode: string; outcome: string; audit_id: string | null; resulting_status: string | null; preflight: ReplayPreflight };
+export type HealthSnapshot = { status: string; checks: Record<string, { status: string; reason?: string; current?: string; enabled?: boolean; running?: boolean; last_error_code?: string | null }> };
+
 export const money = (value: string | number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
 

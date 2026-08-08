@@ -52,10 +52,39 @@ describe("dashboard routing and protection", () => {
   });
 
   it("shows operations navigation for administrators", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ open_id: "ou_admin", name: "管理员", avatar_url: "", role: "ADMIN", expires_at: "2026-08-08T12:00:00+00:00" })));
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_admin", name: "管理员", avatar_url: "", role: "ADMIN", expires_at: "2026-08-08T12:00:00+00:00" }));
+      return Promise.resolve(Response.json({ event_count: 0, reply_count: 0, latest_events: [], latest_replies: [] }));
+    }));
     renderApp("/admin/dead");
     expect(await screen.findByRole("heading", { name: "Dead / Replay" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "事件" })).toBeInTheDocument();
+  });
+
+  it("dry-runs event replay before explicit execution", async () => {
+    const event = { event_id: "evt-dead", source_message_id: "om_se…dead", status: "dead", attempt_count: 3, transport: "webhook", received_at: "2026-08-08T04:00:00Z", processed_at: "2026-08-08T04:01:00Z", last_error_code: "TemporaryFailure", updated_at: "2026-08-08T04:01:00Z" };
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_admin", name: "管理员", avatar_url: "", role: "ADMIN", expires_at: "2026-08-08T12:00:00+00:00" }));
+      if (init?.method === "POST") {
+        const body = JSON.parse(String(init.body));
+        return Promise.resolve(Response.json({ mode: body.execute ? "execute" : "dry-run", outcome: body.execute ? "requeued" : "eligible", audit_id: null, resulting_status: body.execute ? "received" : null, preflight: { event_found: true, eligible: true, status: "dead", business_result_committed: false, outbox_count: 0, ledger_entry_count: 0, batch_risk: "single_or_unknown", lease_state: "none", reason_codes: [], recommended_action: "execute" } }));
+      }
+      return Promise.resolve(Response.json({ event_count: 1, reply_count: 0, latest_events: [event], latest_replies: [] }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderApp("/admin/dead");
+    fireEvent.click(await screen.findByText("evt-dead"));
+    fireEvent.change(screen.getByPlaceholderText(/记录本次重放/), { target: { value: "temporary failure" } });
+    fireEvent.click(screen.getByRole("button", { name: "先执行 Dry Run" }));
+    expect(await screen.findByRole("heading", { name: "安全预检通过" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "继续事件重放" }));
+    fireEvent.click(screen.getByRole("button", { name: "明确执行事件重放" }));
+    expect(await screen.findByText("事件已安全重新入队")).toBeInTheDocument();
+    const requests = fetchMock.mock.calls.filter((call) => call[1]?.method === "POST");
+    expect(JSON.parse(String(requests[0][1]?.body)).execute).toBe(false);
+    expect(JSON.parse(String(requests[1][1]?.body)).confirmation_event_id).toBe("evt-dead");
   });
 
   it("confirms and cancels frozen pending previews", async () => {

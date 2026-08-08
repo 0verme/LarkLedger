@@ -22,6 +22,7 @@ import {
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { ApiError, api, type Me } from "./api";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DeadPage, EventsPage, HealthPage, OutboxPage } from "./pages/AdminPages";
 import { EntriesPage } from "./pages/EntriesPage";
 import { PendingPage } from "./pages/PendingPage";
 
@@ -104,6 +105,10 @@ function pageElement(item: NavItem) {
   if (item.path === "/") return <DashboardPage />;
   if (item.path === "/entries") return <EntriesPage />;
   if (item.path === "/pending") return <PendingPage />;
+  if (item.path === "/admin/events") return <EventsPage />;
+  if (item.path === "/admin/outbox") return <OutboxPage />;
+  if (item.path === "/admin/dead") return <DeadPage />;
+  if (item.path === "/admin/health") return <HealthPage />;
   return <Placeholder title={item.label} />;
 }
 
