@@ -375,3 +375,29 @@ class PendingCommand(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class DashboardSession(Base):
+    """Revocable server-side session for the optional Web Dashboard."""
+
+    __tablename__ = "dashboard_sessions"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_dashboard_sessions_token_hash"),
+        Index("ix_dashboard_sessions_expires", "expires_at"),
+        Index("ix_dashboard_sessions_user", "user_open_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    csrf_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    user_open_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    avatar_url: Mapped[str] = mapped_column(String(1024), nullable=False, default="")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

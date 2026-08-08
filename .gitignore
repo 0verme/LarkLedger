@@ -9,6 +9,9 @@ __pycache__/
 venv/
 dist/
 build/
+node_modules/
+web/coverage/
+*.tsbuildinfo
 .env
 .env.*
 !.env.example

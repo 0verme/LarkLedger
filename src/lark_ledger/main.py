@@ -1,12 +1,14 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 
 from lark_ledger import __version__
 from lark_ledger.api import router
-from lark_ledger.config import EventMode, get_settings
+from lark_ledger.config import EventMode, Settings, get_settings
+from lark_ledger.dashboard_static import DashboardStaticFiles
 from lark_ledger.db import SessionFactory, engine
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.services.ai import AIInterpreter
@@ -24,12 +26,14 @@ from lark_ledger.services.outbox import ReplyOutboxStore
 from lark_ledger.services.reply_worker import ReplyDeliverer, ReplyWorker
 from lark_ledger.services.websocket import LongConnectionReceiver
 from lark_ledger.services.worker import EventWorker, EventWorkerStore, generate_owner_id
+from lark_ledger.web_api import router as web_router
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     app.state.settings = settings
+    app.state.session_factory = SessionFactory
     app.state.shutting_down = False
     app.state.readiness = ReadinessService(settings, SessionFactory)
     if settings.event_mode is EventMode.WEBSOCKET and (
@@ -145,10 +149,25 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await engine.dispose()
 
 
-app = FastAPI(
-    title="LarkLedger / 飞账",
-    description="Self-hosted AI bookkeeping bot for Feishu/Lark.",
-    version=__version__,
-    lifespan=lifespan,
-)
-app.include_router(router)
+def create_app(settings: Settings | None = None) -> FastAPI:
+    initial_settings = settings or get_settings()
+    application = FastAPI(
+        title="LarkLedger / 飞账",
+        description="Self-hosted AI bookkeeping bot for Feishu/Lark.",
+        version=__version__,
+        lifespan=lifespan,
+    )
+    application.include_router(router)
+    if initial_settings.dashboard_enabled:
+        application.include_router(web_router)
+        static_dir = Path("web/dist")
+        if static_dir.is_dir():
+            application.mount(
+                "/",
+                DashboardStaticFiles(directory=static_dir, html=True),
+                name="dashboard",
+            )
+    return application
+
+
+app = create_app()

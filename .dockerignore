@@ -1,7 +1,14 @@
 .git
 .github
 .venv
-__pycache__
-*.pyc
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+web/dist
 .env
+.env.*
+!.env.example
 tests
+docs-product-review

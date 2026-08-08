@@ -1,8 +1,9 @@
 from enum import StrEnum
 from functools import lru_cache
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -69,6 +70,18 @@ class Settings(BaseSettings):
     pending_duplicate_window_minutes: int = Field(default=60, ge=1, le=1440)
     pending_max_list: int = Field(default=10, ge=1, le=50)
 
+    # Optional Web Dashboard. Authentication state remains in PostgreSQL; the
+    # browser only receives opaque, short-lived cookies. Disabled deployments
+    # retain the bot-only application surface.
+    dashboard_enabled: bool = False
+    dashboard_base_url: str = ""
+    dashboard_session_secret: str = ""
+    dashboard_admin_open_ids: str = ""
+    dashboard_session_ttl_seconds: int = Field(default=28800, ge=300, le=604800)
+    dashboard_oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=1800)
+    dashboard_cookie_secure: bool = True
+    dashboard_oauth_authorize_url: str = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
+
     lark_app_id: str = ""
     lark_app_secret: str = ""
     lark_verification_token: str = ""
@@ -112,6 +125,40 @@ class Settings(BaseSettings):
         if len(value) != 3 or not value.isalpha():
             raise ValueError("currency must be a three-letter ISO 4217 code")
         return value
+
+    @model_validator(mode="after")
+    def valid_dashboard_security(self) -> "Settings":
+        if not self.dashboard_enabled:
+            return self
+        session_secret = self.dashboard_session_secret.strip()
+        if len(session_secret) < 32 or len(set(session_secret)) < 8:
+            raise ValueError(
+                "dashboard requires LARK_LEDGER_DASHBOARD_SESSION_SECRET "
+                "with at least 32 non-trivial characters"
+            )
+        if not self.lark_app_id.strip() or not self.lark_app_secret.strip():
+            raise ValueError("dashboard Feishu OAuth requires Lark app credentials")
+        parsed = urlsplit(self.dashboard_base_url)
+        if (
+            not parsed.scheme
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("dashboard_base_url must be an absolute origin URL")
+        if self.dashboard_cookie_secure and parsed.scheme != "https":
+            raise ValueError("secure dashboard cookies require an https dashboard_base_url")
+        if parsed.path not in {"", "/"}:
+            raise ValueError("dashboard_base_url must not contain a path")
+        return self
+
+    @property
+    def dashboard_admin_ids(self) -> frozenset[str]:
+        return frozenset(
+            item.strip() for item in self.dashboard_admin_open_ids.split(",") if item.strip()
+        )
 
 
 @lru_cache
