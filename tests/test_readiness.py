@@ -358,7 +358,7 @@ def test_code_revision_is_resolved_from_alembic_configuration() -> None:
     revision, error = resolve_code_revision()
 
     assert error is None
-    assert revision == "20260809_0019"
+    assert revision == "20260809_0020"
 
 
 async def test_cleanup_worker_failure_is_degraded_but_not_a_readiness_failure() -> None:

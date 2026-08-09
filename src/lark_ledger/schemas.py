@@ -10,6 +10,7 @@ from lark_ledger.models import Direction
 
 class Action(StrEnum):
     CREATE = "create"
+    TRANSFER = "transfer"
     CREATE_ENTRIES = "create_entries"
     BATCH = "batch"
     UPDATE_LAST = "update_last"
@@ -98,6 +99,9 @@ class ParsedCommand(BaseModel):
     export_all: bool = False
     # export_entries only: include soft-deleted rows when user explicitly asks.
     include_deleted: bool = False
+    # AI/user supplied names only. Stable IDs are resolved by deterministic domain code.
+    from_account_hint: str | None = Field(default=None, min_length=1, max_length=64)
+    to_account_hint: str | None = Field(default=None, min_length=1, max_length=64)
 
     @field_validator("currency")
     @classmethod
@@ -119,6 +123,18 @@ class ParsedCommand(BaseModel):
             ]
             if missing:
                 raise ValueError(f"create is missing: {', '.join(missing)}")
+        if self.action is Action.TRANSFER:
+            missing = [
+                name
+                for name in ("amount", "occurred_at", "from_account_hint", "to_account_hint")
+                if getattr(self, name) is None
+            ]
+            if missing:
+                raise ValueError(f"transfer is missing: {', '.join(missing)}")
+            if self.direction is not None or self.category is not None:
+                raise ValueError("transfer does not accept direction or category")
+        elif self.from_account_hint is not None or self.to_account_hint is not None:
+            raise ValueError("account hints are only supported for transfer")
         if self.action is Action.CREATE_ENTRIES:
             if not self.entries:
                 raise ValueError("create_entries requires at least one entry candidate")
@@ -279,13 +295,21 @@ class ParsedCommand(BaseModel):
                 if self.range_start >= self.range_end:
                     raise ValueError("export_entries range must be increasing")
             elif self.range_start is not None or self.range_end is not None:
-                raise ValueError(
-                    "export_entries range requires both range_start and range_end"
+                raise ValueError("export_entries range requires both range_start and range_end")
+        if (
+            self.action is Action.UPDATE_LAST
+            and all(
+                value is None
+                for value in (
+                    self.amount,
+                    self.direction,
+                    self.category,
+                    self.note,
+                    self.occurred_at,
                 )
-        if self.action is Action.UPDATE_LAST and all(
-            value is None
-            for value in (self.amount, self.direction, self.category, self.note, self.occurred_at)
-        ) and not self.clear_note:
+            )
+            and not self.clear_note
+        ):
             raise ValueError("update_last requires at least one changed field")
         if self.action is Action.UPDATE_LAST and self.clear_note and self.note is not None:
             raise ValueError("clear_note cannot be combined with note")
@@ -294,6 +318,7 @@ class ParsedCommand(BaseModel):
                 raise ValueError("currency requires amount")
             if self.action not in {
                 Action.CREATE,
+                Action.TRANSFER,
                 Action.UPDATE_LAST,
                 Action.UPDATE_ENTRY,
                 Action.SET_BUDGET,

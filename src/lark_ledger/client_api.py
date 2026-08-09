@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.client_schemas import (
     ClientAccount,
+    ClientAccountBalance,
     ClientAccountCreateRequest,
     ClientAccountList,
     ClientAccountRenameRequest,
+    ClientAssetSummary,
     ClientCommandResult,
     ClientEntryCreateRequest,
     ClientErrorResponse,
@@ -22,6 +24,8 @@ from lark_ledger.client_schemas import (
     ClientLedger,
     ClientLedgerList,
     ClientLedgerNameRequest,
+    ClientTransfer,
+    ClientTransferCreateRequest,
 )
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
@@ -32,6 +36,7 @@ from lark_ledger.models import (
     Household,
     Ledger,
     LedgerEntry,
+    Transfer,
 )
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
@@ -55,6 +60,13 @@ from lark_ledger.services.ledger import EntryConflictError
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationError
 from lark_ledger.services.ledger_management import LedgerManagementError
 from lark_ledger.services.pending import PendingCommandStore
+from lark_ledger.services.transfers import (
+    AccountBalance,
+    AssetSummary,
+    TransferConflictError,
+    TransferError,
+    TransferNotFoundError,
+)
 from lark_ledger.web_schemas import (
     AnalyticsOverview,
     BudgetOverview,
@@ -161,6 +173,46 @@ def _account(row: Account) -> ClientAccount:
     )
 
 
+def _transfer(row: Transfer) -> ClientTransfer:
+    return ClientTransfer(
+        id=str(row.id),
+        ledger_id=str(row.ledger_id),
+        from_account_id=str(row.from_account_id),
+        to_account_id=str(row.to_account_id),
+        amount=row.amount,
+        currency=row.currency,
+        note=row.note,
+        occurred_at=row.occurred_at,
+        reversed_at=row.reversed_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _balance(row: AccountBalance) -> ClientAccountBalance:
+    return ClientAccountBalance(
+        account_id=str(row.account_id),
+        ledger_id=str(row.ledger_id),
+        account_name=row.account_name,
+        account_type=row.account_type,
+        currency=row.currency,
+        opening_balance=row.opening_balance,
+        current_balance=row.current_balance,
+        archived=row.archived,
+    )
+
+
+def _assets(row: AssetSummary) -> ClientAssetSummary:
+    return ClientAssetSummary(
+        ledger_id=str(row.ledger_id),
+        currency=row.currency,
+        total_assets=row.total_assets,
+        total_liabilities=row.total_liabilities,
+        net_assets=row.net_assets,
+        accounts=[_balance(item) for item in row.accounts],
+    )
+
+
 def _household(view: HouseholdView, current_id: uuid.UUID) -> WebHousehold:
     return WebHousehold(
         id=str(view.household.id),
@@ -182,6 +234,14 @@ def _raise_account_error(exc: AccountError) -> None:
     if isinstance(exc, AccountNotFoundError):
         raise client_error(404, "resource_not_found", "resource not found") from exc
     if isinstance(exc, AccountConflictError):
+        raise client_error(409, "conflict", str(exc)) from exc
+    raise client_error(422, "validation_error", str(exc)) from exc
+
+
+def _raise_transfer_error(exc: TransferError) -> None:
+    if isinstance(exc, TransferNotFoundError):
+        raise client_error(404, "resource_not_found", "resource not found") from exc
+    if isinstance(exc, TransferConflictError):
         raise client_error(409, "conflict", str(exc)) from exc
     raise client_error(422, "validation_error", str(exc)) from exc
 
@@ -924,6 +984,122 @@ async def set_default_account(
         principal=principal,
         idempotency_key=idempotency_key,
     )
+
+
+@router.get("/accounts/{account_id}/balance", response_model=ClientAccountBalance, responses=ERRORS)
+async def account_balance(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+) -> ClientAccountBalance:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        try:
+            row = await _application(session, _settings(request)).account_balance(
+                principal.context, account_id
+            )
+        except AccountError as exc:
+            _raise_account_error(exc)
+    return _balance(row)
+
+
+@router.get("/assets", response_model=ClientAssetSummary, responses=ERRORS)
+async def assets(
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+) -> ClientAssetSummary:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        row = await _application(session, _settings(request)).asset_summary(principal.context)
+    return _assets(row)
+
+
+@router.post("/transfers", response_model=ClientTransfer, status_code=201, responses=ERRORS)
+async def create_transfer(
+    payload: ClientTransferCreateRequest,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ClientTransfer:
+    _require(principal, "ledger:write")
+    async with _factory(request)() as session:
+        app = _application(session, _settings(request))
+
+        async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
+            row = await app.create_transfer(
+                principal.context,
+                from_account_id=uuid.UUID(payload.from_account_id),
+                to_account_id=uuid.UUID(payload.to_account_id),
+                amount=payload.amount,
+                occurred_at=payload.occurred_at,
+                note=payload.note,
+            )
+            return _transfer(row).model_dump(mode="json")
+
+        try:
+            data, _ = await _idempotent(
+                session,
+                principal,
+                operation="transfer.create",
+                key=idempotency_key,
+                payload=payload,
+                callback=apply,
+                status_code=201,
+            )
+        except (ValueError, TransferError, AccountError) as exc:
+            if isinstance(exc, TransferError):
+                _raise_transfer_error(exc)
+            if isinstance(exc, AccountError):
+                _raise_account_error(exc)
+            raise client_error(422, "validation_error", "invalid account id") from exc
+    return ClientTransfer.model_validate(data)
+
+
+@router.get("/transfers/{transfer_id}", response_model=ClientTransfer, responses=ERRORS)
+async def transfer_detail(
+    transfer_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+) -> ClientTransfer:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        try:
+            row = await _application(session, _settings(request)).get_transfer(
+                principal.context, transfer_id
+            )
+        except TransferError as exc:
+            _raise_transfer_error(exc)
+    return _transfer(row)
+
+
+@router.post("/transfers/{transfer_id}/reverse", response_model=ClientTransfer, responses=ERRORS)
+async def reverse_transfer(
+    transfer_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ClientTransfer:
+    _require(principal, "ledger:write")
+    async with _factory(request)() as session:
+        app = _application(session, _settings(request))
+
+        async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
+            return _transfer(await app.reverse_transfer(principal.context, transfer_id)).model_dump(
+                mode="json"
+            )
+
+        try:
+            data, _ = await _idempotent(
+                session,
+                principal,
+                operation=f"transfer.reverse:{transfer_id}",
+                key=idempotency_key,
+                payload={"transfer_id": str(transfer_id)},
+                callback=apply,
+            )
+        except TransferError as exc:
+            _raise_transfer_error(exc)
+    return ClientTransfer.model_validate(data)
 
 
 @router.get("/dashboard", response_model=DashboardData, responses=ERRORS)

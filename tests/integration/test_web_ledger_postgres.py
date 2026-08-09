@@ -5,8 +5,9 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from lark_ledger.models import Direction, LedgerEntry, LedgerEntryRevision
+from lark_ledger.models import Account, Direction, LedgerEntry, LedgerEntryRevision
 from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import EntryConflictError, LedgerService
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 
@@ -18,10 +19,25 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
 ) -> None:
     now = datetime.now(UTC)
     async with postgres_session_factory() as session:
+        contexts = {
+            subject: await IdentityService(
+                session, currency="CNY", timezone="Asia/Shanghai"
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=subject)
+            for subject in ("ou_a", "ou_b")
+        }
+        accounts = {
+            subject: await session.scalar(
+                select(Account.id).where(Account.ledger_id == context.ledger_id)
+            )
+            for subject, context in contexts.items()
+        }
+        assert all(accounts.values())
         session.add_all(
             [
                 LedgerEntry(
                     user_open_id="ou_a",
+                    ledger_id=contexts["ou_a"].ledger_id,
+                    account_id=accounts["ou_a"],
                     short_id="A83F2",
                     amount=Decimal("32"),
                     currency="CNY",
@@ -33,6 +49,8 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
                 ),
                 LedgerEntry(
                     user_open_id="ou_a",
+                    ledger_id=contexts["ou_a"].ledger_id,
+                    account_id=accounts["ou_a"],
                     short_id="B83F2",
                     amount=Decimal("80"),
                     currency="CNY",
@@ -44,6 +62,8 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
                 ),
                 LedgerEntry(
                     user_open_id="ou_b",
+                    ledger_id=contexts["ou_b"].ledger_id,
+                    account_id=accounts["ou_b"],
                     short_id="A83F2",
                     amount=Decimal("999"),
                     currency="CNY",
@@ -57,7 +77,7 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
         )
         await session.commit()
         page = await WebLedgerQueryService(session).list_entries(
-            "ou_a",
+            contexts["ou_a"],
             page=1,
             page_size=1,
             category="餐饮",
@@ -65,7 +85,7 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
         )
         assert page.total == 1
         assert [entry.short_id for entry in page.items] == ["A83F2"]
-        detail = await WebLedgerQueryService(session).entry_detail("ou_b", "B83F2")
+        detail = await WebLedgerQueryService(session).entry_detail(contexts["ou_b"], "B83F2")
         assert detail is None
         row = await session.scalar(
             select(LedgerEntry).where(
@@ -78,7 +98,7 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
 
     async with postgres_session_factory() as first:
         await LedgerService(first).execute(
-            "ou_a",
+            contexts["ou_a"],
             ParsedCommand(
                 action=Action.UPDATE_ENTRY,
                 entry_ref="A83F2",
@@ -89,7 +109,7 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
     async with postgres_session_factory() as stale:
         with pytest.raises(EntryConflictError):
             await LedgerService(stale).execute(
-                "ou_a",
+                contexts["ou_a"],
                 ParsedCommand(
                     action=Action.UPDATE_ENTRY,
                     entry_ref="A83F2",
@@ -99,7 +119,7 @@ async def test_web_ledger_postgres_scope_filters_revision_and_version_lock(
             )
         await stale.rollback()
     async with postgres_session_factory() as verify:
-        entry = await WebLedgerQueryService(verify).entry_detail("ou_a", "A83F2")
+        entry = await WebLedgerQueryService(verify).entry_detail(contexts["ou_a"], "A83F2")
         assert entry is not None
         assert entry.entry.amount == Decimal("35")
         revisions = (await verify.scalars(select(LedgerEntryRevision))).all()

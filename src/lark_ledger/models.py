@@ -375,6 +375,87 @@ class LedgerEntry(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class Transfer(Base):
+    """A ledger-scoped movement of funds between two accounts.
+
+    Transfers are deliberately separate from ``LedgerEntry`` so they can never
+    be counted as income, expense, category consumption, or budget usage.
+    """
+
+    __tablename__ = "transfers"
+    __table_args__ = (
+        UniqueConstraint("ledger_id", "id", name="uq_transfers_ledger_id"),
+        ForeignKeyConstraint(
+            ["ledger_id", "from_account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_transfers_ledger_from_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["ledger_id", "to_account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_transfers_ledger_to_account",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("from_account_id <> to_account_id", name="ck_transfers_distinct_accounts"),
+        CheckConstraint("amount > 0", name="ck_transfers_positive_amount"),
+        Index("ix_transfers_ledger_occurred", "ledger_id", "occurred_at"),
+        Index("ix_transfers_ledger_from", "ledger_id", "from_account_id", "occurred_at"),
+        Index("ix_transfers_ledger_to", "ledger_id", "to_account_id", "occurred_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=False
+    )
+    from_account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    to_account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(16), nullable=False, default="client")
+    source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reversed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class TransferRevision(Base):
+    """Append-only audit snapshots for transfer changes and reversal."""
+
+    __tablename__ = "transfer_revisions"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ledger_id", "transfer_id"],
+            ["transfers.ledger_id", "transfers.id"],
+            name="fk_transfer_revisions_ledger_transfer",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_transfer_revisions_transfer_created", "transfer_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    transfer_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    change_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    before_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    after_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class CategoryBudget(Base):
     __tablename__ = "category_budgets"
     __table_args__ = (UniqueConstraint("ledger_id", "category", name="uq_budgets_ledger_category"),)
@@ -638,6 +719,25 @@ class PendingCommand(Base):
     __table_args__ = (
         UniqueConstraint("user_open_id", "confirmation_code", name="uq_pending_user_code"),
         UniqueConstraint("source_event_id", name="uq_pending_source_event"),
+        ForeignKeyConstraint(
+            ["ledger_id", "from_account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_pending_ledger_from_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["ledger_id", "to_account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_pending_ledger_to_account",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(from_account_id IS NULL AND to_account_id IS NULL AND transfer_id IS NULL) OR "
+            "(ledger_id IS NOT NULL AND from_account_id IS NOT NULL "
+            "AND to_account_id IS NOT NULL AND transfer_id IS NOT NULL "
+            "AND from_account_id <> to_account_id)",
+            name="ck_pending_transfer_target",
+        ),
         Index(
             "uq_pending_ledger_active_fingerprint",
             "ledger_id",
@@ -664,6 +764,9 @@ class PendingCommand(Base):
     ledger_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=True
     )
+    from_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    to_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    transfer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     source_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)

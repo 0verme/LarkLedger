@@ -44,11 +44,12 @@ from lark_ledger.outbox import (
     ReplyType,
     build_text_payload,
 )
-from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.risk import RiskAssessment, RiskReason
+from lark_ledger.services.transfers import TransferService
 from lark_ledger.services.worker import is_permanent_error
 from lark_ledger.short_id import MAX_SHORT_ID_ALLOCATION_ATTEMPTS
 
@@ -60,6 +61,7 @@ NOTE_PREVIEW_LEN = 20
 CARD_ACTION_KEY = "larkledger_pending"
 
 _REASON_TEXT = {
+    RiskReason.TRANSFER: "账户转账",
     RiskReason.VISION: "图片识别",
     RiskReason.TRANSCRIPTION: "语音识别",
     RiskReason.BATCH: "批量记账",
@@ -129,9 +131,7 @@ def _as_utc(value: datetime) -> datetime:
     return value
 
 
-def _format_local_datetime(
-    value: datetime | str, timezone: str, format_string: str
-) -> str:
+def _format_local_datetime(value: datetime | str, timezone: str, format_string: str) -> str:
     """Format a stored UTC timestamp in the configured application timezone."""
     if not value:
         return ""
@@ -191,6 +191,18 @@ def build_pending_preview(
                 duplicate_of=duplicate_by_index.get(None),
             )
         )
+    elif command.action is Action.TRANSFER:
+        items.append(
+            PendingPreviewItem(
+                index=None,
+                direction="transfer",
+                amount=_format_amount(command.amount),
+                currency=command.currency or currency,
+                category=f"{command.from_account_hint} → {command.to_account_hint}",
+                occurred_at=_format_occurred(command.occurred_at),
+                note=(command.note or "")[:NOTE_PREVIEW_LEN],
+            )
+        )
     elif command.entries:
         for index, candidate in enumerate(command.entries):
             items.append(
@@ -226,7 +238,7 @@ def build_pending_preview(
         ]
 
     income_count = sum(1 for item in items if item.direction == "income")
-    expense_count = len(items) - income_count
+    expense_count = sum(1 for item in items if item.direction == "expense")
     income_total = sum(
         (Decimal(item.amount) for item in items if item.direction == "income"),
         Decimal("0"),
@@ -259,17 +271,13 @@ def build_pending_preview(
         budgets=budgets,
         anomalies=anomalies,
         risk_reason=(
-            _REASON_TEXT.get(risk.reason, "高风险写入")
-            if risk.reason is not None
-            else "高风险写入"
+            _REASON_TEXT.get(risk.reason, "高风险写入") if risk.reason is not None else "高风险写入"
         ),
         expires_at=expires.isoformat(),
     )
 
 
-def build_pending_preview_card(
-    preview: PendingPreview, *, timezone: str
-) -> dict[str, Any]:
+def build_pending_preview_card(preview: PendingPreview, *, timezone: str) -> dict[str, Any]:
     """Render a confirmation preview card (schema 2.0) with 确认 / 取消 buttons.
 
     Each button uses the JSON 2.0 callback behavior to carry the storage
@@ -316,8 +324,7 @@ def build_pending_preview_card(
         {
             "tag": "markdown",
             "content": (
-                f"回复 `确认 {preview.display_code}` 确认，或 "
-                f"`取消 {preview.display_code}` 取消。"
+                f"回复 `确认 {preview.display_code}` 确认，或 `取消 {preview.display_code}` 取消。"
             ),
         }
     )
@@ -413,6 +420,22 @@ class PendingCommandStore:
                 channel="feishu",
                 external_subject_id=user_open_id,
             )
+        from_account_id: uuid.UUID | None = None
+        to_account_id: uuid.UUID | None = None
+        transfer_id: uuid.UUID | None = None
+        if command.action is Action.TRANSFER:
+            assert command.from_account_hint is not None
+            assert command.to_account_hint is not None
+            resolver = TransferService(session)
+            from_account_id = (
+                await resolver.resolve_account_hint(context, command.from_account_hint)
+            ).id
+            to_account_id = (
+                await resolver.resolve_account_hint(context, command.to_account_hint)
+            ).id
+            if from_account_id == to_account_id:
+                raise ValueError("转出和转入账户不能相同")
+            transfer_id = uuid.uuid4()
         preview = build_pending_preview(
             command,
             source_type,
@@ -422,14 +445,15 @@ class PendingCommandStore:
             currency=self._settings.currency,
         )
         code = await self._allocate_code(session, user_open_id)
-        preview = replace(
-            preview, code=code, display_code=format_confirmation_ref(code)
-        )
+        preview = replace(preview, code=code, display_code=format_confirmation_ref(code))
         pending = PendingCommand(
             confirmation_code=code,
             user_open_id=user_open_id,
             actor_user_id=context.actor_user_id,
             ledger_id=context.ledger_id,
+            from_account_id=from_account_id,
+            to_account_id=to_account_id,
+            transfer_id=transfer_id,
             source_event_id=event_id,
             source_message_id=message_id,
             source_fingerprint=source_fingerprint,
@@ -446,9 +470,7 @@ class PendingCommandStore:
         session.add(pending)
         return pending
 
-    async def has_active_fingerprint(
-        self, ledger_id: uuid.UUID, source_fingerprint: str
-    ) -> bool:
+    async def has_active_fingerprint(self, ledger_id: uuid.UUID, source_fingerprint: str) -> bool:
         """Return whether this ledger's exact media already awaits a decision."""
         async with self._factory() as session:
             pending_id = await session.scalar(
@@ -493,9 +515,7 @@ class PendingCommandStore:
             f"{MAX_SHORT_ID_ALLOCATION_ATTEMPTS} attempts"
         )
 
-    async def get_by_code(
-        self, user_open_id: str, confirmation_code: str
-    ) -> PendingCommand | None:
+    async def get_by_code(self, user_open_id: str, confirmation_code: str) -> PendingCommand | None:
         async with self._factory() as session:
             return cast(
                 PendingCommand | None,
@@ -530,12 +550,12 @@ class PendingCommandStore:
                         .order_by(PendingCommand.created_at.desc())
                         .limit(limit)
                     )
-                ).scalars().all()
+                )
+                .scalars()
+                .all()
             )
 
-    def _make_text_row(
-        self, *, message_id: str, event_id: str | None, text: str
-    ) -> ReplyOutbox:
+    def _make_text_row(self, *, message_id: str, event_id: str | None, text: str) -> ReplyOutbox:
         return ReplyOutbox(
             event_id=event_id,
             message_id=message_id,
@@ -649,23 +669,48 @@ class PendingCommandStore:
             row.status = PendingStatus.EXECUTING.value
             command = ParsedCommand.model_validate(row.payload_json)
             try:
-                result = await LedgerService(
-                    session,
-                    self._settings.currency,
-                    self._settings.timezone,
-                    exchange_rates=exchange_rates,
-                    commit_changes=False,
-                ).execute(
-                    RequestContext(
-                        actor_user_id=actor_context.actor_user_id,
-                        ledger_id=frozen_ledger_id,
-                        source_channel=row.transport,
-                        external_subject_id=user_open_id,
-                    ),
-                    command,
-                    source_type=row.source_type,
-                    source_message_id=row.source_message_id,
+                frozen_context = RequestContext(
+                    actor_user_id=actor_context.actor_user_id,
+                    ledger_id=frozen_ledger_id,
+                    source_channel=row.transport,
+                    external_subject_id=user_open_id,
                 )
+                if command.action is Action.TRANSFER:
+                    if (
+                        row.from_account_id is None
+                        or row.to_account_id is None
+                        or row.transfer_id is None
+                        or command.amount is None
+                        or command.occurred_at is None
+                    ):
+                        raise ValueError("pending transfer target is incomplete")
+                    transfer = await TransferService(session).create(
+                        frozen_context,
+                        from_account_id=row.from_account_id,
+                        to_account_id=row.to_account_id,
+                        amount=command.amount,
+                        occurred_at=command.occurred_at,
+                        note=command.note or "",
+                        source_type=row.source_type,
+                        source_message_id=row.source_message_id,
+                        transfer_id=row.transfer_id,
+                    )
+                    result = ExecutionResult(
+                        message=f"转账已创建：{transfer.amount} {transfer.currency}"
+                    )
+                else:
+                    result = await LedgerService(
+                        session,
+                        self._settings.currency,
+                        self._settings.timezone,
+                        exchange_rates=exchange_rates,
+                        commit_changes=False,
+                    ).execute(
+                        frozen_context,
+                        command,
+                        source_type=row.source_type,
+                        source_message_id=row.source_message_id,
+                    )
             except Exception as exc:
                 # Roll back the EXECUTING write. Deterministic failures mark the
                 # pending failed (a retried confirm then gets the idempotent
@@ -715,8 +760,7 @@ class PendingCommandStore:
                     parent.business_committed_at = now
             await session.commit()
             logger.info(
-                "pending confirmation executed confirmation_code=%s "
-                "event_id=%s",
+                "pending confirmation executed confirmation_code=%s event_id=%s",
                 confirmation_code,
                 confirm_event_id,
             )
@@ -801,19 +845,23 @@ class PendingCommandStore:
                 external_subject_id=user_open_id,
             )
             rows = (
-                await session.execute(
-                    select(PendingCommand)
-                    .where(
-                        PendingCommand.user_open_id == user_open_id,
-                        or_(
-                            PendingCommand.ledger_id == context.ledger_id,
-                            PendingCommand.ledger_id.is_(None),
-                        ),
+                (
+                    await session.execute(
+                        select(PendingCommand)
+                        .where(
+                            PendingCommand.user_open_id == user_open_id,
+                            or_(
+                                PendingCommand.ledger_id == context.ledger_id,
+                                PendingCommand.ledger_id.is_(None),
+                            ),
+                        )
+                        .order_by(PendingCommand.created_at.desc())
+                        .limit(count)
                     )
-                    .order_by(PendingCommand.created_at.desc())
-                    .limit(count)
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if not rows:
                 message = "当前没有待确认的记账。"
                 reply = self._make_text_row(

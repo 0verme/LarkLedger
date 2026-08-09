@@ -22,8 +22,9 @@ from lark_ledger.event_payload import (
     build_stored_payload,
     serialize_payload,
 )
-from lark_ledger.models import Direction, LedgerEntry, ProcessedEvent
+from lark_ledger.models import Account, Direction, LedgerEntry, ProcessedEvent
 from lark_ledger.services.events import EventService
+from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.worker import (
     ClaimedEvent,
     EventWorker,
@@ -93,9 +94,7 @@ async def _insert(
         await session.commit()
 
 
-async def _row(
-    factory: async_sessionmaker[Any], event_id: str
-) -> ProcessedEvent:
+async def _row(factory: async_sessionmaker[Any], event_id: str) -> ProcessedEvent:
     async with factory() as session:
         row = await session.get(ProcessedEvent, event_id)
         assert row is not None
@@ -299,15 +298,18 @@ async def test_expired_lease_reclaim_and_stale_worker_cannot_overwrite(
 
     # The stale worker's lease is gone; it must not overwrite the new owner.
     assert await store.complete("evt_reclaim", "old", later) is False
-    assert await store.record_failure(
-        "evt_reclaim",
-        "old",
-        status=EventProcessStatus.DEAD.value,
-        next_attempt_at=None,
-        error_code="X",
-        summary="stale",
-        now=later,
-    ) is False
+    assert (
+        await store.record_failure(
+            "evt_reclaim",
+            "old",
+            status=EventProcessStatus.DEAD.value,
+            next_attempt_at=None,
+            error_code="X",
+            summary="stale",
+            now=later,
+        )
+        is False
+    )
 
     assert await store.complete("evt_reclaim", "new", later) is True
     row = await _row(postgres_session_factory, "evt_reclaim")
@@ -415,9 +417,18 @@ async def test_business_idempotency_prevents_double_entry_on_retry(
         async def process(self, event: dict[str, Any]) -> None:
             self.calls += 1
             async with self.factory() as session:
+                context = await IdentityService(
+                    session, currency="CNY", timezone="Asia/Shanghai"
+                ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_dup")
+                account_id = await session.scalar(
+                    select(Account.id).where(Account.ledger_id == context.ledger_id)
+                )
+                assert account_id is not None
                 session.add(
                     LedgerEntry(
                         user_open_id="ou_dup",
+                        ledger_id=context.ledger_id,
+                        account_id=account_id,
                         short_id="DUP01",
                         amount=Decimal("1.00"),
                         currency="CNY",
@@ -458,11 +469,7 @@ async def test_business_idempotency_prevents_double_entry_on_retry(
 
     async with postgres_session_factory() as session:
         entries = (
-            (
-                await session.execute(
-                    select(LedgerEntry).where(LedgerEntry.user_open_id == "ou_dup")
-                )
-            )
+            (await session.execute(select(LedgerEntry).where(LedgerEntry.user_open_id == "ou_dup")))
             .scalars()
             .all()
         )

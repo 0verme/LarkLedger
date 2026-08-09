@@ -104,6 +104,16 @@ export_entries 不得填写 amount、category、note、limit、entry_ref。
 """
 
 
+SYSTEM_PROMPT += """
+
+Transfer rules:
+- transfer: movement between two named accounts. Return amount, occurred_at,
+  from_account_hint and to_account_hint. Never return or invent account_id.
+- A transfer has no direction or category and is not income or expense.
+- If either account name is unclear, use help instead of guessing.
+"""
+
+
 class AIInterpreter:
     def __init__(
         self,

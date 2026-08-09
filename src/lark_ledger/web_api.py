@@ -16,16 +16,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lark_ledger import __version__
 from lark_ledger.client_schemas import (
     ClientAccount,
+    ClientAccountBalance,
     ClientAccountCreateRequest,
     ClientAccountList,
     ClientAccountRenameRequest,
+    ClientAssetSummary,
     ClientCredentialCreated,
     ClientCredentialCreateRequest,
     ClientCredentialList,
+    ClientTransfer,
+    ClientTransferCreateRequest,
 )
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
-from lark_ledger.models import Account, Direction, Household, HouseholdInvitation, Ledger
+from lark_ledger.models import Account, Direction, Household, HouseholdInvitation, Ledger, Transfer
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
@@ -58,6 +62,13 @@ from lark_ledger.services.ledger_management import (
 )
 from lark_ledger.services.pending import PendingCommandStore
 from lark_ledger.services.replay import OutboxReplayService
+from lark_ledger.services.transfers import (
+    AccountBalance,
+    AssetSummary,
+    TransferConflictError,
+    TransferError,
+    TransferNotFoundError,
+)
 from lark_ledger.services.web_admin import WebAdminQueryService
 from lark_ledger.services.web_analytics import WebAnalyticsQueryService, local_date_bounds
 from lark_ledger.services.web_ledger import WebLedgerQueryService
@@ -348,10 +359,58 @@ def _web_account(row: Account) -> ClientAccount:
     )
 
 
+def _web_transfer(row: Transfer) -> ClientTransfer:
+    return ClientTransfer(
+        id=str(row.id),
+        ledger_id=str(row.ledger_id),
+        from_account_id=str(row.from_account_id),
+        to_account_id=str(row.to_account_id),
+        amount=row.amount,
+        currency=row.currency,
+        note=row.note,
+        occurred_at=row.occurred_at,
+        reversed_at=row.reversed_at,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _web_balance(row: AccountBalance) -> ClientAccountBalance:
+    return ClientAccountBalance(
+        account_id=str(row.account_id),
+        ledger_id=str(row.ledger_id),
+        account_name=row.account_name,
+        account_type=row.account_type,
+        currency=row.currency,
+        opening_balance=row.opening_balance,
+        current_balance=row.current_balance,
+        archived=row.archived,
+    )
+
+
+def _web_assets(row: AssetSummary) -> ClientAssetSummary:
+    return ClientAssetSummary(
+        ledger_id=str(row.ledger_id),
+        currency=row.currency,
+        total_assets=row.total_assets,
+        total_liabilities=row.total_liabilities,
+        net_assets=row.net_assets,
+        accounts=[_web_balance(item) for item in row.accounts],
+    )
+
+
 def _account_http_error(exc: AccountError) -> HTTPException:
     if isinstance(exc, AccountNotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, AccountConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+def _transfer_http_error(exc: TransferError) -> HTTPException:
+    if isinstance(exc, TransferNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, TransferConflictError):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=422, detail=str(exc))
 
@@ -593,6 +652,108 @@ async def set_default_account(
     principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
 ) -> ClientAccount:
     return await _mutate_web_account(account_id, request, principal, operation="default")
+
+
+@router.get("/accounts/{account_id}/balance", response_model=ClientAccountBalance)
+async def get_account_balance(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> ClientAccountBalance:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).account_balance(principal.request_context, account_id)
+        except AccountError as exc:
+            raise _account_http_error(exc) from exc
+    return _web_balance(row)
+
+
+@router.get("/assets", response_model=ClientAssetSummary)
+async def get_assets(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> ClientAssetSummary:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        row = await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).asset_summary(principal.request_context)
+    return _web_assets(row)
+
+
+@router.post("/transfers", response_model=ClientTransfer, status_code=201)
+async def create_web_transfer(
+    body: ClientTransferCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientTransfer:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).create_transfer(
+                principal.request_context,
+                from_account_id=uuid.UUID(body.from_account_id),
+                to_account_id=uuid.UUID(body.to_account_id),
+                amount=body.amount,
+                occurred_at=body.occurred_at,
+                note=body.note,
+                source_type="web",
+            )
+            await session.commit()
+        except (ValueError, TransferError, AccountError) as exc:
+            await session.rollback()
+            if isinstance(exc, TransferError):
+                raise _transfer_http_error(exc) from exc
+            if isinstance(exc, AccountError):
+                raise _account_http_error(exc) from exc
+            raise HTTPException(status_code=422, detail="invalid account id") from exc
+    return _web_transfer(row)
+
+
+@router.get("/transfers/{transfer_id}", response_model=ClientTransfer)
+async def get_web_transfer(
+    transfer_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> ClientTransfer:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).get_transfer(principal.request_context, transfer_id)
+        except TransferError as exc:
+            raise _transfer_http_error(exc) from exc
+    return _web_transfer(row)
+
+
+@router.post("/transfers/{transfer_id}/reverse", response_model=ClientTransfer)
+async def reverse_web_transfer(
+    transfer_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientTransfer:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).reverse_transfer(principal.request_context, transfer_id)
+            await session.commit()
+        except TransferError as exc:
+            await session.rollback()
+            raise _transfer_http_error(exc) from exc
+    return _web_transfer(row)
 
 
 def _household_http_error(exc: HouseholdManagementError) -> HTTPException:

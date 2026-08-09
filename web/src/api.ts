@@ -51,6 +51,26 @@ export type DashboardData = {
   categories: Array<{ category: string; amount: string; ratio: string }>;
 };
 
+export type AccountBalance = {
+  account_id: string;
+  ledger_id: string;
+  account_name: string;
+  account_type: "cash" | "asset" | "liability";
+  currency: string;
+  opening_balance: string;
+  current_balance: string;
+  archived: boolean;
+};
+
+export type AssetSummary = {
+  ledger_id: string;
+  currency: string;
+  total_assets: string;
+  total_liabilities: string;
+  net_assets: string;
+  accounts: AccountBalance[];
+};
+
 export type Ledger = {
   id: string;
   name: string;

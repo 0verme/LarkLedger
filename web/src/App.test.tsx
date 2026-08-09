@@ -39,11 +39,13 @@ describe("dashboard routing and protection", () => {
       const url = String(input);
       if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
       if (url.includes("/dashboard")) return Promise.resolve(Response.json({ month_income: "100", month_expense: "32", month_balance: "68", budget_usage_rate: "64", pending_count: 1, recent_entries: [entry], trend: [], categories: [{ category: "餐饮", amount: "32", ratio: "100" }] }));
+      if (url.includes("/assets")) return Promise.resolve(Response.json({ ledger_id: "ledger-1", currency: "CNY", total_assets: "1000", total_liabilities: "200", net_assets: "800", accounts: [{ account_id: "account-1", ledger_id: "ledger-1", account_name: "支付宝", account_type: "asset", currency: "CNY", opening_balance: "0", current_balance: "1000", archived: false }] }));
       if (url.includes("/entries/A83F2")) return Promise.resolve(Response.json({ entry, revisions: [] }));
       return Promise.resolve(Response.json({ items: [entry], page: 1, page_size: 25, total: 1, pages: 1 }));
     }));
     const view = renderApp();
     expect(await screen.findByText("本月，保持清晰。")).toBeInTheDocument();
+    expect(await screen.findByText("净资产")).toBeInTheDocument();
     view.unmount();
     renderApp("/entries");
     fireEvent.click(await screen.findByRole("button", { name: "#A83F2" }));

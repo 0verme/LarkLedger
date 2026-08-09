@@ -98,6 +98,49 @@ class ClientAccountRenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
 
 
+class ClientTransferCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    from_account_id: str
+    to_account_id: str
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    occurred_at: datetime
+    note: str = Field(default="", max_length=500)
+
+
+class ClientTransfer(BaseModel):
+    id: str
+    ledger_id: str
+    from_account_id: str
+    to_account_id: str
+    amount: Decimal
+    currency: str
+    note: str
+    occurred_at: datetime
+    reversed_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ClientAccountBalance(BaseModel):
+    account_id: str
+    ledger_id: str
+    account_name: str
+    account_type: AccountType
+    currency: str
+    opening_balance: Decimal
+    current_balance: Decimal
+    archived: bool
+
+
+class ClientAssetSummary(BaseModel):
+    ledger_id: str
+    currency: str
+    total_assets: Decimal
+    total_liabilities: Decimal
+    net_assets: Decimal
+    accounts: list[ClientAccountBalance]
+
+
 class ClientEntryCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)

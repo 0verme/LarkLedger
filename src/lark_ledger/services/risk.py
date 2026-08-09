@@ -41,6 +41,7 @@ class RiskReason(StrEnum):
     CREATE_ENTRIES = "create_entries"
     BUDGETS = "budgets"
     DUPLICATE = "duplicate"
+    TRANSFER = "transfer"
 
 
 class MediaKind(StrEnum):
@@ -75,6 +76,7 @@ _WRITE_ACTIONS = frozenset(
         Action.BATCH,
         Action.SET_BUDGET,
         Action.SET_BUDGETS,
+        Action.TRANSFER,
     }
 )
 #: Batch / multi-entry semantics: always confirmed when reached (media or text).
@@ -94,10 +96,7 @@ def _note_shingles(note: str) -> set[str]:
     cleaned = "".join(ch for ch in (note or "").lower() if not ch.isspace())
     if len(cleaned) < _NOTE_SHINGLE_LEN:
         return {cleaned} if cleaned else set()
-    return {
-        cleaned[i : i + _NOTE_SHINGLE_LEN]
-        for i in range(len(cleaned) - _NOTE_SHINGLE_LEN + 1)
-    }
+    return {cleaned[i : i + _NOTE_SHINGLE_LEN] for i in range(len(cleaned) - _NOTE_SHINGLE_LEN + 1)}
 
 
 def note_similarity(a: str, b: str) -> float:
@@ -166,6 +165,12 @@ class RiskRouter:
             source_type=source_type,
         )
 
+        if command.action is Action.TRANSFER:
+            return RiskAssessment(
+                decision=RiskDecision.PENDING,
+                reason=RiskReason.TRANSFER,
+            )
+
         if media is MediaKind.VISION or source_type in {"image", "post"}:
             if media is MediaKind.TRANSCRIPTION or source_type == "audio":
                 return RiskAssessment(
@@ -190,9 +195,7 @@ class RiskRouter:
         ):
             return RiskAssessment(
                 decision=RiskDecision.PENDING,
-                reason=_BATCH_REASON_BY_ACTION.get(
-                    command.action, RiskReason.BATCH
-                ),
+                reason=_BATCH_REASON_BY_ACTION.get(command.action, RiskReason.BATCH),
                 duplicate_hits=hits,
             )
 
@@ -272,15 +275,9 @@ class RiskRouter:
             occurred_at = datetime.fromisoformat(occurred_at)
         if isinstance(amount, str):
             amount = Decimal(amount)
-        window = timedelta(
-            minutes=self._settings.pending_duplicate_window_minutes
-        )
+        window = timedelta(minutes=self._settings.pending_duplicate_window_minutes)
         resolved_currency = currency or self._settings.currency
-        resolved_direction = (
-            direction
-            if isinstance(direction, Direction)
-            else Direction(direction)
-        )
+        resolved_direction = direction if isinstance(direction, Direction) else Direction(direction)
         # Candidate matches an existing row on the same category OR the same
         # source type, then the Python note-similarity check does the final call.
         category_conditions = []
@@ -316,7 +313,5 @@ class RiskRouter:
         hits: list[DuplicateHit] = []
         for short_id, existing_note in rows:
             if note_similarity(note, existing_note or "") >= _NOTE_SIMILARITY_THRESHOLD:
-                hits.append(
-                    DuplicateHit(entry_index=entry_index, existing_short_id=short_id)
-                )
+                hits.append(DuplicateHit(entry_index=entry_index, existing_short_id=short_id))
         return hits

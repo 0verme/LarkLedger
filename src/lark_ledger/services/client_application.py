@@ -8,8 +8,15 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
-from lark_ledger.models import Account, AccountType, Direction, HouseholdInvitation, Ledger
-from lark_ledger.schemas import ExecutionResult, ParsedCommand
+from lark_ledger.models import (
+    Account,
+    AccountType,
+    Direction,
+    HouseholdInvitation,
+    Ledger,
+    Transfer,
+)
+from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.household_management import (
@@ -21,6 +28,7 @@ from lark_ledger.services.household_management import (
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import LedgerManagementService
+from lark_ledger.services.transfers import AccountBalance, AssetSummary, TransferService
 from lark_ledger.services.web_analytics import WebAnalyticsQueryService
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 from lark_ledger.services.web_pending import WebPendingQueryService
@@ -161,6 +169,45 @@ class ClientApplicationService:
     async def set_default_account(self, context: RequestContext, account_id: uuid.UUID) -> Account:
         return await AccountService(self._session).set_default(context, account_id)
 
+    async def create_transfer(
+        self,
+        context: RequestContext,
+        *,
+        from_account_id: uuid.UUID,
+        to_account_id: uuid.UUID,
+        amount: Decimal,
+        occurred_at: datetime,
+        note: str = "",
+        source_type: str = "client",
+        source_message_id: str | None = None,
+        transfer_id: uuid.UUID | None = None,
+    ) -> Transfer:
+        return await TransferService(self._session).create(
+            context,
+            from_account_id=from_account_id,
+            to_account_id=to_account_id,
+            amount=amount,
+            occurred_at=occurred_at,
+            note=note,
+            source_type=source_type,
+            source_message_id=source_message_id,
+            transfer_id=transfer_id,
+        )
+
+    async def get_transfer(self, context: RequestContext, transfer_id: uuid.UUID) -> Transfer:
+        return await TransferService(self._session).get(context, transfer_id)
+
+    async def reverse_transfer(self, context: RequestContext, transfer_id: uuid.UUID) -> Transfer:
+        return await TransferService(self._session).reverse(context, transfer_id)
+
+    async def account_balance(
+        self, context: RequestContext, account_id: uuid.UUID
+    ) -> AccountBalance:
+        return await TransferService(self._session).account_balance(context, account_id)
+
+    async def asset_summary(self, context: RequestContext) -> AssetSummary:
+        return await TransferService(self._session).asset_summary(context)
+
     async def execute_financial(
         self,
         context: RequestContext,
@@ -171,8 +218,38 @@ class ClientApplicationService:
         expected_updated_at: datetime | None = None,
         commit_changes: bool = True,
         account_id: uuid.UUID | None = None,
+        transfer_id: uuid.UUID | None = None,
+        from_account_id: uuid.UUID | None = None,
+        to_account_id: uuid.UUID | None = None,
     ) -> ExecutionResult:
         await self.authorize(context)
+        if command.action is Action.TRANSFER:
+            transfer_service = TransferService(self._session)
+            if from_account_id is None:
+                assert command.from_account_hint is not None
+                from_account_id = (
+                    await transfer_service.resolve_account_hint(context, command.from_account_hint)
+                ).id
+            if to_account_id is None:
+                assert command.to_account_hint is not None
+                to_account_id = (
+                    await transfer_service.resolve_account_hint(context, command.to_account_hint)
+                ).id
+            assert command.amount is not None and command.occurred_at is not None
+            row = await transfer_service.create(
+                context,
+                from_account_id=from_account_id,
+                to_account_id=to_account_id,
+                amount=command.amount,
+                occurred_at=command.occurred_at,
+                note=command.note or "",
+                source_type=source_type,
+                source_message_id=source_message_id,
+                transfer_id=transfer_id,
+            )
+            if commit_changes:
+                await self._session.commit()
+            return ExecutionResult(message=f"转账已创建：{row.amount} {row.currency}")
         return await LedgerService(
             self._session,
             currency=self._currency,

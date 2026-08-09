@@ -279,6 +279,15 @@ source_type, created_at, updated_at, deleted_at
 
 - `short_id`：展示形式 `#A83F2`
 - `direction`：稳定枚举 `expense` / `income`
+
+## P27 转账与余额
+
+- 飞书文字转账使用明确账户名，例如：`招商银行 → 支付宝 1000`。账户名不能唯一匹配时会要求确认，不会猜测账户。
+- Client / Web API：`POST /transfers`、`GET /transfers/{transfer_id}`、`POST /transfers/{transfer_id}/reverse`、`GET /accounts/{account_id}/balance`、`GET /assets`（分别位于 `/api/client/v1` 与 `/api/web/v1`）。
+- Transfer 是独立账务事实，不是 income/expense LedgerEntry，因此不进入收支、分类消费与预算统计。
+- 资产/现金账户的正余额表示持有资产：`opening + income - expense + inbound transfer - outbound transfer`。
+- 负债账户的正余额表示当前负债，资金流方向取反：收入/转入降低负债，支出/转出增加负债。净资产始终为总资产减总负债。
+- 余额不存储为可修改字段；归档账户仍可查询历史余额，已删除账目和已撤销转账不计入当前余额。
 - 时间为带时区偏移的 ISO 8601；金额为十进制字符串
 
 ## 分类月预算

@@ -64,6 +64,7 @@ from lark_ledger.services.reply_worker import ReplyDeliverer
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
 from lark_ledger.services.risk import MediaKind, RiskAssessment, RiskDecision, RiskRouter
 from lark_ledger.services.worker import generate_owner_id
+from lark_ledger.transfer_commands import try_parse_transfer_command
 
 MAX_POST_IMAGES = 5
 
@@ -269,7 +270,15 @@ class MessageProcessor:
                     stage = "reply"
                     await self._signal_or_deliver(outbox_rows)
                     return
-                deterministic = try_parse_deterministic_entry_command(text)
+                transfer_command = try_parse_transfer_command(text, now=now)
+                if isinstance(transfer_command, str):
+                    await self.feishu.reply_text(message_id, transfer_command)
+                    return
+                if transfer_command is not None:
+                    command = transfer_command
+                deterministic = (
+                    try_parse_deterministic_entry_command(text) if command is None else None
+                )
                 if isinstance(deterministic, str):
                     await self.feishu.reply_text(message_id, deterministic)
                     return
@@ -288,7 +297,8 @@ class MessageProcessor:
             # the ledger; simple single text writes continue straight through.
             write_source_message_id = (
                 message_id
-                if command.action in {Action.CREATE, Action.CREATE_ENTRIES, Action.BATCH}
+                if command.action
+                in {Action.CREATE, Action.CREATE_ENTRIES, Action.BATCH, Action.TRANSFER}
                 else None
             )
             if self.settings.pending_enabled:
@@ -811,9 +821,7 @@ class MessageProcessor:
                     invitation = await application.respond_household_invitation(
                         context,
                         command.argument,
-                        "accept"
-                        if command.action is HouseholdCommandAction.ACCEPT
-                        else "reject",
+                        "accept" if command.action is HouseholdCommandAction.ACCEPT else "reject",
                     )
                     household = await session.get(Household, invitation.household_id)
                     ledger = await session.scalar(

@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -17,7 +17,7 @@ from lark_ledger.event_payload import (
     EventProcessStatus,
     parse_stored_payload,
 )
-from lark_ledger.models import Direction, LedgerEntry, ProcessedEvent
+from lark_ledger.models import Account, Direction, LedgerEntry, ProcessedEvent
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.events import EventService
@@ -55,7 +55,7 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260809_0019"
+    assert revision == "20260809_0020"
 
 
 async def test_readiness_uses_real_postgres_and_current_alembic_revision(
@@ -78,8 +78,8 @@ async def test_readiness_uses_real_postgres_and_current_alembic_revision(
     assert result["checks"]["database"] == {"status": "ok"}
     assert result["checks"]["migration"] == {
         "status": "ok",
-        "current": "20260809_0019",
-        "expected": "20260809_0019",
+        "current": "20260809_0020",
+        "expected": "20260809_0020",
     }
 
 
@@ -88,9 +88,18 @@ async def test_list_keyset_and_get_entry_on_postgres(
 ) -> None:
     when = datetime(2026, 8, 5, 12, tzinfo=UTC)
     async with postgres_session_factory() as session:
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_pg")
+        account_id = await session.scalar(
+            select(Account.id).where(Account.ledger_id == context.ledger_id)
+        )
+        assert account_id is not None
         for index, code in enumerate(["PG001", "PG002", "PG003"]):
             entry = LedgerEntry(
                 user_open_id="ou_pg",
+                ledger_id=context.ledger_id,
+                account_id=account_id,
                 short_id=code,
                 amount=Decimal(str(index + 1)),
                 currency="CNY",
@@ -107,15 +116,13 @@ async def test_list_keyset_and_get_entry_on_postgres(
         await session.commit()
 
         service = LedgerService(session)
-        page1 = await service.execute(
-            "ou_pg", ParsedCommand(action=Action.LIST_ENTRIES, limit=2)
-        )
+        page1 = await service.execute(context, ParsedCommand(action=Action.LIST_ENTRIES, limit=2))
         # Newest by created_at: PG003, PG002
         assert "1. #PG003" in page1.message
         assert "2. #PG002" in page1.message
         assert "查看 #PG002 之前的2笔" in page1.message
         page2 = await service.execute(
-            "ou_pg",
+            context,
             ParsedCommand(
                 action=Action.LIST_ENTRIES,
                 limit=2,
@@ -125,7 +132,7 @@ async def test_list_keyset_and_get_entry_on_postgres(
         assert "最近 1 笔账目" in page2.message
         assert "#PG001" in page2.message
         detail = await service.execute(
-            "ou_pg", ParsedCommand(action=Action.GET_ENTRY, entry_ref="PG001")
+            context, ParsedCommand(action=Action.GET_ENTRY, entry_ref="PG001")
         )
         assert "短 ID：#PG001" in detail.message
         assert "ou_pg" not in detail.message
@@ -137,9 +144,18 @@ async def test_entry_mutation_and_revision_on_postgres(
     from lark_ledger.models import LedgerEntryRevision
 
     async with postgres_session_factory() as session:
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_mut")
+        account_id = await session.scalar(
+            select(Account.id).where(Account.ledger_id == context.ledger_id)
+        )
+        assert account_id is not None
         session.add(
             LedgerEntry(
                 user_open_id="ou_mut",
+                ledger_id=context.ledger_id,
+                account_id=account_id,
                 short_id="MT01A",
                 amount=Decimal("10.00"),
                 currency="CNY",
@@ -153,7 +169,7 @@ async def test_entry_mutation_and_revision_on_postgres(
         await session.commit()
         service = LedgerService(session)
         updated = await service.execute(
-            "ou_mut",
+            context,
             ParsedCommand(
                 action=Action.UPDATE_ENTRY,
                 entry_ref="MT01A",
@@ -162,11 +178,11 @@ async def test_entry_mutation_and_revision_on_postgres(
         )
         assert "已修改 #MT01A" in updated.message
         deleted = await service.execute(
-            "ou_mut", ParsedCommand(action=Action.DELETE_ENTRY, entry_ref="MT01A")
+            context, ParsedCommand(action=Action.DELETE_ENTRY, entry_ref="MT01A")
         )
         assert "已删除 #MT01A" in deleted.message
         restored = await service.execute(
-            "ou_mut", ParsedCommand(action=Action.RESTORE_ENTRY, entry_ref="MT01A")
+            context, ParsedCommand(action=Action.RESTORE_ENTRY, entry_ref="MT01A")
         )
         assert "已恢复 #MT01A" in restored.message
         count = await session.scalar(select(func.count()).select_from(LedgerEntryRevision))
@@ -192,6 +208,19 @@ async def test_export_entries_query_on_postgres(
     end = datetime(2026, 7, 1, tzinfo=UTC)
     mid = datetime(2026, 6, 15, 8, tzinfo=UTC)
     async with postgres_session_factory() as session:
+        contexts = {
+            subject: await IdentityService(
+                session, currency="CNY", timezone="Asia/Shanghai"
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=subject)
+            for subject in ("ou_export_a", "ou_export_b")
+        }
+        account_ids = {
+            subject: await session.scalar(
+                select(Account.id).where(Account.ledger_id == context.ledger_id)
+            )
+            for subject, context in contexts.items()
+        }
+        assert all(account_ids.values())
         for index, (user, code, deleted, when) in enumerate(
             [
                 ("ou_export_a", "EX001", False, mid),
@@ -203,6 +232,8 @@ async def test_export_entries_query_on_postgres(
         ):
             entry = LedgerEntry(
                 user_open_id=user,
+                ledger_id=contexts[user].ledger_id,
+                account_id=account_ids[user],
                 short_id=code,
                 amount=Decimal(str(index + 1)),
                 currency="CNY",
@@ -221,7 +252,7 @@ async def test_export_entries_query_on_postgres(
 
         service = LedgerService(session)
         default = await service.execute(
-            "ou_export_a",
+            contexts["ou_export_a"],
             ParsedCommand(
                 action=Action.EXPORT_ENTRIES,
                 range_start=start,
@@ -242,7 +273,7 @@ async def test_export_entries_query_on_postgres(
         assert rows[1].startswith("#EX003")
 
         with_deleted = await service.execute(
-            "ou_export_a",
+            contexts["ou_export_a"],
             ParsedCommand(
                 action=Action.EXPORT_ENTRIES,
                 range_start=start,
@@ -255,7 +286,7 @@ async def test_export_entries_query_on_postgres(
         assert "#EX002" in with_deleted.export.content.decode("utf-8-sig")
 
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "20260809_0019"
+        assert revision == "20260809_0020"
 
 
 async def test_short_id_unique_per_ledger_allows_cross_ledger_reuse(
@@ -269,10 +300,18 @@ async def test_short_id_unique_per_ledger_allows_cross_ledger_reuse(
             session, currency="CNY", timezone="Asia/Shanghai"
         ).create(context.actor_user_id, "旅行")
         second_id = second.id
+        first_account_id = await session.scalar(
+            select(Account.id).where(Account.ledger_id == context.ledger_id)
+        )
+        second_account_id = await session.scalar(
+            select(Account.id).where(Account.ledger_id == second_id)
+        )
+        assert first_account_id is not None and second_account_id is not None
         session.add(
             LedgerEntry(
                 user_open_id="ou_a",
                 ledger_id=context.ledger_id,
+                account_id=first_account_id,
                 short_id="A83F2",
                 amount=Decimal("1.00"),
                 currency="CNY",
@@ -289,6 +328,7 @@ async def test_short_id_unique_per_ledger_allows_cross_ledger_reuse(
             LedgerEntry(
                 user_open_id="ou_a",
                 ledger_id=context.ledger_id,
+                account_id=first_account_id,
                 short_id="A83F2",
                 amount=Decimal("2.00"),
                 currency="CNY",
@@ -307,6 +347,7 @@ async def test_short_id_unique_per_ledger_allows_cross_ledger_reuse(
             LedgerEntry(
                 user_open_id="ou_a",
                 ledger_id=second_id,
+                account_id=second_account_id,
                 short_id="A83F2",
                 amount=Decimal("3.00"),
                 currency="CNY",
@@ -348,11 +389,18 @@ async def test_concurrent_event_claim_is_processed_once(
         assert parsed["event"]["message"]["message_id"] == "om_concurrent"
 
 
-def make_entry(source_item_index: int, short_id: str | None = None) -> LedgerEntry:
+def make_entry(
+    source_item_index: int,
+    ledger_id: uuid.UUID,
+    account_id: uuid.UUID,
+    short_id: str | None = None,
+) -> LedgerEntry:
     # Distinct Crockford codes for integration fixtures (no I/L/O/U).
     defaults = ("AAAAA", "AAAAB", "AAAAC", "AAAAD", "AAAAE")
     return LedgerEntry(
         user_open_id="ou_integration",
+        ledger_id=ledger_id,
+        account_id=account_id,
         short_id=short_id or defaults[source_item_index],
         amount=Decimal("12.34"),
         currency="CNY",
@@ -370,9 +418,21 @@ async def test_batch_source_constraint_allows_distinct_items_only(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with postgres_session_factory() as session:
-        session.add_all([make_entry(0), make_entry(1)])
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_integration")
+        account_id = await session.scalar(
+            select(Account.id).where(Account.ledger_id == context.ledger_id)
+        )
+        assert account_id is not None
+        session.add_all(
+            [
+                make_entry(0, context.ledger_id, account_id),
+                make_entry(1, context.ledger_id, account_id),
+            ]
+        )
         await session.commit()
-        session.add(make_entry(1))
+        session.add(make_entry(1, context.ledger_id, account_id))
         with pytest.raises(IntegrityError):
             await session.commit()
         await session.rollback()
@@ -614,8 +674,7 @@ async def test_event_state_migration_roundtrip(
             received = (
                 await conn.execute(
                     text(
-                        "SELECT attempt_count FROM processed_events "
-                        "WHERE event_id = 'evt_received'"
+                        "SELECT attempt_count FROM processed_events WHERE event_id = 'evt_received'"
                     )
                 )
             ).one()

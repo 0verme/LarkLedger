@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.4.0` |
 | Git tag | `v0.4.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest` 由发布流水线写入） |
-| Alembic head | `20260809_0019` |
+| Alembic head | `20260809_0020` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -26,6 +26,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 运行 `alembic upgrade head` 会从 `20260809_0017` 升级到 `20260809_0018`，新增 `client_credentials`、`client_idempotency_records` 和 `client_security_audits`。迁移不修改或删除 User、ChannelIdentity、Ledger、Household、DashboardSession、财务数据及旧 `user_open_id` 兼容列，并支持降级回 0017。
 
 随后 `20260809_0019` 为每个既有 Ledger 创建“默认账户”，并将历史 `ledger_entries` 无损回填到同 Ledger 默认账户。降级会移除账户关联和账户表，但保留全部原账目数据。
+`20260809_0020` 新增独立的 `transfers`、`transfer_revisions`，并为 `pending_commands` 增加冻结的转出账户、转入账户与 transfer ID。复合外键保证两个账户与 transfer/pending 的 Ledger 一致，检查约束拒绝同账户转账。降级到 `0019` 会删除全部 transfer 与 transfer revision 数据，并移除 Pending 的 transfer 冻结列；既有 Account 与 LedgerEntry 不受影响，降级前必须备份。
 
 升级后不会自动签发任何公网凭证。管理员应先保持 Dashboard 的 HTTPS、Cookie 与 CSRF 配置，再由已认证用户按需创建最小 scope 凭证。请妥善保存创建时唯一一次返回的明文 token；数据库备份只包含摘要，无法恢复明文。升级前后建议实际执行一次测试库 `upgrade -> downgrade 0018 -> upgrade head`。
 
