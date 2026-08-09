@@ -11,6 +11,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.client_schemas import (
+    ClientAccount,
+    ClientAccountCreateRequest,
+    ClientAccountList,
+    ClientAccountRenameRequest,
     ClientCommandResult,
     ClientEntryCreateRequest,
     ClientErrorResponse,
@@ -22,6 +26,7 @@ from lark_ledger.client_schemas import (
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
 from lark_ledger.models import (
+    Account,
     ClientIdempotencyRecord,
     ClientSecurityAudit,
     Household,
@@ -29,6 +34,7 @@ from lark_ledger.models import (
     LedgerEntry,
 )
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
+from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
 from lark_ledger.services.client_application import ClientApplicationService, EntryQuery
 from lark_ledger.services.client_auth import (
     ClientAuthenticationError,
@@ -136,6 +142,25 @@ def _ledger(row: Ledger, current_id: uuid.UUID) -> ClientLedger:
     )
 
 
+def _account(row: Account) -> ClientAccount:
+    return ClientAccount.model_validate(
+        {
+            "id": str(row.id),
+            "ledger_id": str(row.ledger_id),
+            "name": row.name,
+            "type": row.type,
+            "subtype": row.subtype,
+            "provider": row.provider,
+            "currency": row.currency,
+            "opening_balance": row.opening_balance,
+            "status": row.status,
+            "is_default": row.is_default,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+    )
+
+
 def _household(view: HouseholdView, current_id: uuid.UUID) -> WebHousehold:
     return WebHousehold(
         id=str(view.household.id),
@@ -150,9 +175,15 @@ def _household(view: HouseholdView, current_id: uuid.UUID) -> WebHousehold:
 
 
 def _application(session: AsyncSession, settings: Settings) -> ClientApplicationService:
-    return ClientApplicationService(
-        session, currency=settings.currency, timezone=settings.timezone
-    )
+    return ClientApplicationService(session, currency=settings.currency, timezone=settings.timezone)
+
+
+def _raise_account_error(exc: AccountError) -> None:
+    if isinstance(exc, AccountNotFoundError):
+        raise client_error(404, "resource_not_found", "resource not found") from exc
+    if isinstance(exc, AccountConflictError):
+        raise client_error(409, "conflict", str(exc)) from exc
+    raise client_error(422, "validation_error", str(exc)) from exc
 
 
 async def _idempotent(
@@ -213,9 +244,7 @@ async def ledgers(
     settings = _settings(request)
     async with _factory(request)() as session:
         rows = await _application(session, settings).list_ledgers(principal.context)
-    return ClientLedgerList(
-        items=[_ledger(row, principal.context.ledger_id) for row in rows]
-    )
+    return ClientLedgerList(items=[_ledger(row, principal.context.ledger_id) for row in rows])
 
 
 @router.get("/ledgers/current", response_model=ClientLedger, responses=ERRORS)
@@ -374,12 +403,8 @@ async def households(
 ) -> HouseholdList:
     _require(principal, "ledger:read")
     async with _factory(request)() as session:
-        rows = await _application(session, _settings(request)).list_households(
-            principal.context
-        )
-    return HouseholdList(
-        items=[_household(row, principal.context.ledger_id) for row in rows]
-    )
+        rows = await _application(session, _settings(request)).list_households(principal.context)
+    return HouseholdList(items=[_household(row, principal.context.ledger_id) for row in rows])
 
 
 @router.post("/households", response_model=WebHousehold, status_code=201, responses=ERRORS)
@@ -452,9 +477,7 @@ async def rename_household(
         app = _application(session, _settings(request))
 
         async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
-            view = await app.rename_household(
-                principal.context, household_id, payload.name
-            )
+            view = await app.rename_household(principal.context, household_id, payload.name)
             return _household(view, principal.context.ledger_id).model_dump(mode="json")
 
         try:
@@ -536,9 +559,7 @@ async def remove_household_member(
         app = _application(session, _settings(request))
 
         async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
-            await app.remove_household_member(
-                principal.context, household_id, user_id
-            )
+            await app.remove_household_member(principal.context, household_id, user_id)
             session.add(
                 ClientSecurityAudit(
                     actor_user_id=principal.context.actor_user_id,
@@ -547,9 +568,7 @@ async def remove_household_member(
                     outcome="succeeded",
                 )
             )
-            return ClientCommandResult(message="household member removed").model_dump(
-                mode="json"
-            )
+            return ClientCommandResult(message="household member removed").model_dump(mode="json")
 
         try:
             data, replayed = await _idempotent(
@@ -626,9 +645,9 @@ async def household_invitations(
 ) -> list[WebHouseholdInvitation]:
     _require(principal, "ledger:read")
     async with _factory(request)() as session:
-        invitations = await _application(
-            session, _settings(request)
-        ).list_household_invitations(principal.context)
+        invitations = await _application(session, _settings(request)).list_household_invitations(
+            principal.context
+        )
         result = []
         for invitation in invitations:
             household = await session.get(Household, invitation.household_id)
@@ -749,6 +768,164 @@ async def cancel_household_invitation(
     )
 
 
+@router.get("/accounts", response_model=ClientAccountList, responses=ERRORS)
+async def accounts(
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    include_archived: bool = False,
+) -> ClientAccountList:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        rows = await _application(session, _settings(request)).list_accounts(
+            principal.context, include_archived=include_archived
+        )
+    return ClientAccountList(items=[_account(row) for row in rows])
+
+
+@router.get("/accounts/{account_id}", response_model=ClientAccount, responses=ERRORS)
+async def account_detail(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+) -> ClientAccount:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        try:
+            row = await _application(session, _settings(request)).get_account(
+                principal.context, account_id
+            )
+        except AccountError as exc:
+            _raise_account_error(exc)
+    return _account(row)
+
+
+@router.post("/accounts", response_model=ClientAccount, status_code=201, responses=ERRORS)
+async def create_account(
+    payload: ClientAccountCreateRequest,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ClientAccount:
+    _require(principal, "ledger:write")
+    async with _factory(request)() as session:
+        app = _application(session, _settings(request))
+
+        async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
+            row = await app.create_account(
+                principal.context,
+                name=payload.name,
+                account_type=payload.type,
+                subtype=payload.subtype,
+                provider=payload.provider,
+                currency=payload.currency,
+                opening_balance=payload.opening_balance,
+                make_default=payload.is_default,
+            )
+            return _account(row).model_dump(mode="json")
+
+        try:
+            data, _ = await _idempotent(
+                session,
+                principal,
+                operation="account.create",
+                key=idempotency_key,
+                payload=payload,
+                callback=apply,
+                status_code=201,
+            )
+        except AccountError as exc:
+            _raise_account_error(exc)
+        return ClientAccount.model_validate(data)
+
+
+async def _mutate_account(
+    *,
+    account_id: uuid.UUID,
+    operation: str,
+    payload: Any,
+    request: Request,
+    principal: ClientPrincipal,
+    idempotency_key: str | None,
+) -> ClientAccount:
+    _require(principal, "ledger:write")
+    async with _factory(request)() as session:
+        app = _application(session, _settings(request))
+
+        async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
+            if operation == "rename":
+                row = await app.rename_account(principal.context, account_id, payload.name)
+            elif operation == "archive":
+                row = await app.archive_account(principal.context, account_id)
+            else:
+                row = await app.set_default_account(principal.context, account_id)
+            return _account(row).model_dump(mode="json")
+
+        try:
+            data, _ = await _idempotent(
+                session,
+                principal,
+                operation=f"account.{operation}:{account_id}",
+                key=idempotency_key,
+                payload=payload,
+                callback=apply,
+            )
+        except AccountError as exc:
+            _raise_account_error(exc)
+        return ClientAccount.model_validate(data)
+
+
+@router.patch("/accounts/{account_id}", response_model=ClientAccount, responses=ERRORS)
+async def rename_account(
+    account_id: uuid.UUID,
+    payload: ClientAccountRenameRequest,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ClientAccount:
+    return await _mutate_account(
+        account_id=account_id,
+        operation="rename",
+        payload=payload,
+        request=request,
+        principal=principal,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/accounts/{account_id}/archive", response_model=ClientAccount, responses=ERRORS)
+async def archive_account(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ClientAccount:
+    return await _mutate_account(
+        account_id=account_id,
+        operation="archive",
+        payload={"account_id": str(account_id)},
+        request=request,
+        principal=principal,
+        idempotency_key=idempotency_key,
+    )
+
+
+@router.post("/accounts/{account_id}/default", response_model=ClientAccount, responses=ERRORS)
+async def set_default_account(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> ClientAccount:
+    return await _mutate_account(
+        account_id=account_id,
+        operation="default",
+        payload={"account_id": str(account_id)},
+        request=request,
+        principal=principal,
+        idempotency_key=idempotency_key,
+    )
+
+
 @router.get("/dashboard", response_model=DashboardData, responses=ERRORS)
 async def dashboard(
     request: Request,
@@ -778,19 +955,19 @@ async def entries(
         return await _application(session, _settings(request)).list_entries(
             principal.context,
             EntryQuery(
-            page=page,
-            page_size=page_size,
-            start=start,
-            end=end,
-            direction=None,
-            category=None,
-            source_type=None,
-            amount_min=None,
-            amount_max=None,
-            search=None,
-            deleted=deleted,
-            sort=sort,
-            order=order,
+                page=page,
+                page_size=page_size,
+                start=start,
+                end=end,
+                direction=None,
+                category=None,
+                source_type=None,
+                amount_min=None,
+                amount_max=None,
+                search=None,
+                deleted=deleted,
+                sort=sort,
+                order=order,
             ),
         )
 
@@ -810,10 +987,14 @@ async def create_entry(
             source_id = f"client:{record.id}"
             result = await app.execute_financial(
                 principal.context,
-                ParsedCommand(action=Action.CREATE, **payload.model_dump()),
+                ParsedCommand(
+                    action=Action.CREATE,
+                    **payload.model_dump(exclude={"account_id"}),
+                ),
                 source_type="client_api",
                 source_message_id=source_id,
                 commit_changes=False,
+                account_id=uuid.UUID(payload.account_id) if payload.account_id else None,
             )
             entry = await session.scalar(
                 select(LedgerEntry).where(
@@ -822,11 +1003,17 @@ async def create_entry(
                 )
             )
             resource = (
-                {"id": str(entry.id), "short_id": entry.short_id} if entry is not None else None
+                {
+                    "id": str(entry.id),
+                    "short_id": entry.short_id,
+                    "account_id": str(entry.account_id),
+                }
+                if entry is not None
+                else None
             )
-            return ClientCommandResult(
-                message=result.message, resource=resource
-            ).model_dump(mode="json")
+            return ClientCommandResult(message=result.message, resource=resource).model_dump(
+                mode="json"
+            )
 
         try:
             data, replayed = await _idempotent(
@@ -838,6 +1025,9 @@ async def create_entry(
                 callback=apply,
                 status_code=201,
             )
+        except AccountError as exc:
+            await session.rollback()
+            _raise_account_error(exc)
         except ValueError as exc:
             await session.rollback()
             raise client_error(422, "validation_error", str(exc)) from exc
@@ -898,9 +1088,8 @@ async def _mutate_entry(
                 principal,
                 operation=f"entry.{command.action.value}:{short_id}",
                 key=idempotency_key,
-                payload=command.model_dump(mode="json") | {
-                    "expected_updated_at": expected_updated_at.isoformat()
-                },
+                payload=command.model_dump(mode="json")
+                | {"expected_updated_at": expected_updated_at.isoformat()},
                 callback=apply,
             )
             return EntryDetail.model_validate(data)
@@ -1184,8 +1373,7 @@ async def _pending_action(
     processor = getattr(request.app.state, "processor", None)
     store = cast(
         PendingCommandStore,
-        getattr(processor, "_pending_store", None)
-        or PendingCommandStore(factory, settings),
+        getattr(processor, "_pending_store", None) or PendingCommandStore(factory, settings),
     )
     row = await store.get_by_code(principal.context.external_subject_id, code)
     if row is None or row.actor_user_id != principal.context.actor_user_id:
@@ -1224,14 +1412,12 @@ async def _pending_action(
                 )
             )
             async with factory() as read_session:
-                detail = await _application(
-                    read_session, settings
-                ).pending_detail(principal.context, code)
+                detail = await _application(read_session, settings).pending_detail(
+                    principal.context, code
+                )
             if detail is None:
                 raise LookupError
-            return PendingActionResponse(
-                message=message, pending=detail
-            ).model_dump(mode="json")
+            return PendingActionResponse(message=message, pending=detail).model_dump(mode="json")
 
         try:
             data, _ = await _idempotent(

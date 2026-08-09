@@ -262,3 +262,62 @@ async def test_bearer_rechecks_household_membership_and_falls_back(
         await session.commit()
     fallback = await service.authenticate(created.token)
     assert fallback.context.ledger_id == member.ledger_id
+
+
+async def test_account_api_and_explicit_entry_account_are_ledger_scoped(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, _ = await _credential(client_factory, subject="ou_account_api")
+    other_token, _ = await _credential(client_factory, subject="ou_account_api_other")
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        defaults = await client.get("/api/client/v1/accounts", headers=headers)
+        assert defaults.status_code == 200
+        assert len(defaults.json()["items"]) == 1
+        assert defaults.json()["items"][0]["is_default"] is True
+
+        created = await client.post(
+            "/api/client/v1/accounts",
+            headers=headers | {"Idempotency-Key": "create-wallet"},
+            json={
+                "name": "支付宝",
+                "type": "asset",
+                "subtype": "wallet",
+                "provider": "alipay",
+                "opening_balance": "100.00",
+            },
+        )
+        assert created.status_code == 201
+        account_id = created.json()["id"]
+        entry = await client.post(
+            "/api/client/v1/entries",
+            headers=headers | {"Idempotency-Key": "wallet-entry"},
+            json={
+                "amount": "20.00",
+                "direction": "expense",
+                "category": "餐饮",
+                "occurred_at": "2026-08-09T12:00:00+08:00",
+                "account_id": account_id,
+            },
+        )
+        assert entry.status_code == 201
+        assert entry.json()["resource"]["account_id"] == account_id
+
+        denied = await client.post(
+            "/api/client/v1/entries",
+            headers={
+                "Authorization": f"Bearer {other_token}",
+                "Idempotency-Key": "foreign-account",
+            },
+            json={
+                "amount": "20.00",
+                "direction": "expense",
+                "category": "餐饮",
+                "occurred_at": "2026-08-09T12:00:00+08:00",
+                "account_id": account_id,
+            },
+        )
+        assert denied.status_code == 404

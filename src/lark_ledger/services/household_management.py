@@ -23,6 +23,7 @@ from lark_ledger.models import (
     User,
     UserStatus,
 )
+from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.ledger_management import normalize_ledger_name
 
 
@@ -109,6 +110,7 @@ class HouseholdManagementService:
         )
         self._session.add_all([membership, ledger])
         await self._session.flush()
+        await AccountService.create_default_for_ledger(self._session, ledger)
         return HouseholdView(household, ledger, membership)
 
     async def list_for_user(self, user_id: uuid.UUID) -> list[HouseholdView]:
@@ -306,10 +308,7 @@ class HouseholdManagementService:
         expires_at = invitation.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=UTC)
-        if (
-            invitation.status == HouseholdInvitationStatus.PENDING.value
-            and expires_at <= current
-        ):
+        if invitation.status == HouseholdInvitationStatus.PENDING.value and expires_at <= current:
             invitation.status = HouseholdInvitationStatus.EXPIRED.value
             invitation.responded_at = current
         if invitation.status != HouseholdInvitationStatus.PENDING.value:

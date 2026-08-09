@@ -8,8 +8,9 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
-from lark_ledger.models import Direction, HouseholdInvitation, Ledger
+from lark_ledger.models import Account, AccountType, Direction, HouseholdInvitation, Ledger
 from lark_ledger.schemas import ExecutionResult, ParsedCommand
+from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.household_management import (
     HouseholdManagementError,
@@ -76,9 +77,7 @@ class ClientApplicationService:
         self._authorization = LedgerAuthorizationService(session)
 
     async def authorize(self, context: RequestContext) -> Ledger:
-        return await self._authorization.get_accessible(
-            context.actor_user_id, context.ledger_id
-        )
+        return await self._authorization.get_accessible(context.actor_user_id, context.ledger_id)
 
     async def list_ledgers(self, context: RequestContext) -> list[Ledger]:
         return await self._authorization.list_accessible(context.actor_user_id)
@@ -92,21 +91,13 @@ class ClientApplicationService:
 
     async def current_personal_ledger(self, context: RequestContext) -> Ledger:
         await self.authorize(context)
-        return await self._ledger_manager().get_owned(
-            context.actor_user_id, context.ledger_id
-        )
+        return await self._ledger_manager().get_owned(context.actor_user_id, context.ledger_id)
 
-    async def find_personal_ledger(
-        self, context: RequestContext, name: str
-    ) -> Ledger:
+    async def find_personal_ledger(self, context: RequestContext, name: str) -> Ledger:
         await self.authorize(context)
-        return await self._ledger_manager().find_owned_by_name(
-            context.actor_user_id, name
-        )
+        return await self._ledger_manager().find_owned_by_name(context.actor_user_id, name)
 
-    async def select_channel_ledger(
-        self, context: RequestContext, ledger_id: uuid.UUID
-    ) -> Ledger:
+    async def select_channel_ledger(self, context: RequestContext, ledger_id: uuid.UUID) -> Ledger:
         await self.authorize(context)
         if context.channel_identity_id is None:
             raise ValueError("channel identity is required for persisted selection")
@@ -124,11 +115,51 @@ class ClientApplicationService:
         await self.authorize(context)
         return await self._ledger_manager().rename(context.actor_user_id, ledger_id, name)
 
-    async def set_default_ledger(
-        self, context: RequestContext, ledger_id: uuid.UUID
-    ) -> Ledger:
+    async def set_default_ledger(self, context: RequestContext, ledger_id: uuid.UUID) -> Ledger:
         await self.authorize(context)
         return await self._ledger_manager().set_default(context.actor_user_id, ledger_id)
+
+    async def list_accounts(
+        self, context: RequestContext, *, include_archived: bool = False
+    ) -> list[Account]:
+        return await AccountService(self._session).list(context, include_archived=include_archived)
+
+    async def get_account(self, context: RequestContext, account_id: uuid.UUID) -> Account:
+        return await AccountService(self._session).get(context, account_id)
+
+    async def create_account(
+        self,
+        context: RequestContext,
+        *,
+        name: str,
+        account_type: AccountType,
+        subtype: str | None,
+        provider: str | None,
+        currency: str | None,
+        opening_balance: Decimal,
+        make_default: bool,
+    ) -> Account:
+        return await AccountService(self._session).create(
+            context,
+            name=name,
+            account_type=account_type,
+            subtype=subtype,
+            provider=provider,
+            currency=currency,
+            opening_balance=opening_balance,
+            make_default=make_default,
+        )
+
+    async def rename_account(
+        self, context: RequestContext, account_id: uuid.UUID, name: str
+    ) -> Account:
+        return await AccountService(self._session).rename(context, account_id, name)
+
+    async def archive_account(self, context: RequestContext, account_id: uuid.UUID) -> Account:
+        return await AccountService(self._session).archive(context, account_id)
+
+    async def set_default_account(self, context: RequestContext, account_id: uuid.UUID) -> Account:
+        return await AccountService(self._session).set_default(context, account_id)
 
     async def execute_financial(
         self,
@@ -139,6 +170,7 @@ class ClientApplicationService:
         source_message_id: str | None = None,
         expected_updated_at: datetime | None = None,
         commit_changes: bool = True,
+        account_id: uuid.UUID | None = None,
     ) -> ExecutionResult:
         await self.authorize(context)
         return await LedgerService(
@@ -147,6 +179,7 @@ class ClientApplicationService:
             timezone=self._timezone,
             exchange_rates=self._exchange_rates,
             commit_changes=commit_changes,
+            account_id=account_id,
         ).execute(
             context,
             command,
@@ -157,17 +190,13 @@ class ClientApplicationService:
 
     async def dashboard(self, context: RequestContext) -> DashboardData:
         await self.authorize(context)
-        return await WebLedgerQueryService(
-            self._session, timezone=self._timezone
-        ).dashboard(context)
+        return await WebLedgerQueryService(self._session, timezone=self._timezone).dashboard(
+            context
+        )
 
-    async def list_entries(
-        self, context: RequestContext, query: EntryQuery
-    ) -> EntryPage:
+    async def list_entries(self, context: RequestContext, query: EntryQuery) -> EntryPage:
         await self.authorize(context)
-        return await WebLedgerQueryService(
-            self._session, timezone=self._timezone
-        ).list_entries(
+        return await WebLedgerQueryService(self._session, timezone=self._timezone).list_entries(
             context,
             page=query.page,
             page_size=query.page_size,
@@ -184,13 +213,11 @@ class ClientApplicationService:
             order=query.order,
         )
 
-    async def entry_detail(
-        self, context: RequestContext, short_id: str
-    ) -> EntryDetail | None:
+    async def entry_detail(self, context: RequestContext, short_id: str) -> EntryDetail | None:
         await self.authorize(context)
-        return await WebLedgerQueryService(
-            self._session, timezone=self._timezone
-        ).entry_detail(context, short_id)
+        return await WebLedgerQueryService(self._session, timezone=self._timezone).entry_detail(
+            context, short_id
+        )
 
     async def budgets(self, context: RequestContext) -> BudgetOverview:
         await self.authorize(context)
@@ -265,25 +292,19 @@ class ClientApplicationService:
         self, context: RequestContext, household_id: uuid.UUID, name: str
     ) -> HouseholdView:
         await self.authorize(context)
-        return await self._household_manager().rename(
-            context.actor_user_id, household_id, name
-        )
+        return await self._household_manager().rename(context.actor_user_id, household_id, name)
 
     async def list_household_members(
         self, context: RequestContext, household_id: uuid.UUID
     ) -> list[HouseholdMemberView]:
         await self.authorize(context)
-        return await self._household_manager().list_members(
-            context.actor_user_id, household_id
-        )
+        return await self._household_manager().list_members(context.actor_user_id, household_id)
 
     async def invite_household_member(
         self, context: RequestContext, household_id: uuid.UUID, target: str
     ) -> HouseholdInvitation:
         await self.authorize(context)
-        return await self._household_manager().invite(
-            context.actor_user_id, household_id, target
-        )
+        return await self._household_manager().invite(context.actor_user_id, household_id, target)
 
     async def list_household_invitations(
         self, context: RequestContext
@@ -304,9 +325,7 @@ class ClientApplicationService:
             return await manager.cancel_invitation(context.actor_user_id, invitation_id)
         raise ValueError("unsupported invitation action")
 
-    async def leave_household(
-        self, context: RequestContext, household_id: uuid.UUID
-    ) -> None:
+    async def leave_household(self, context: RequestContext, household_id: uuid.UUID) -> None:
         await self.authorize(context)
         await self._household_manager().leave(context.actor_user_id, household_id)
 
@@ -317,9 +336,7 @@ class ClientApplicationService:
         user_id: uuid.UUID,
     ) -> None:
         await self.authorize(context)
-        await self._household_manager().remove_member(
-            context.actor_user_id, household_id, user_id
-        )
+        await self._household_manager().remove_member(context.actor_user_id, household_id, user_id)
 
     def _ledger_manager(self) -> LedgerManagementService:
         return LedgerManagementService(

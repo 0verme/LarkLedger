@@ -11,6 +11,7 @@
    全部按 Ledger 隔离。
 3. **家庭空间 MVP（已完成）**：Household、成员、邀请与家庭公共账本；个人账本默认不挂载、不共享，公共账本按查询无复制汇总。
 4. **统一 Client API（已完成）**：飞书与 Web 共用 `ClientApplicationService` 命令/查询边界；提供 `/api/client/v1`、可撤销 Bearer、持久化幂等快照与稳定错误契约。具体 ESP32、Telegram、微信客户端仍按后续验证顺序实施。
+5. **P26 Account Domain（已完成）**：建立账本范围内的现金、资产和负债账户；历史账目无损绑定默认账户，Web / Client API 提供账户生命周期能力，旧记账入口保持默认账户兼容。
 
 ## 分叉路线
 

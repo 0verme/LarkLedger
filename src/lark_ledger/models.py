@@ -11,6 +11,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     LargeBinary,
@@ -33,6 +34,17 @@ class Base(DeclarativeBase):
 class Direction(StrEnum):
     EXPENSE = "expense"
     INCOME = "income"
+
+
+class AccountType(StrEnum):
+    CASH = "cash"
+    ASSET = "asset"
+    LIABILITY = "liability"
+
+
+class AccountStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
 
 
 class UserStatus(StrEnum):
@@ -271,6 +283,52 @@ class ChannelIdentity(Base):
     )
 
 
+class Account(Base):
+    """Ledger-scoped place where personal or household funds are held."""
+
+    __tablename__ = "accounts"
+    __table_args__ = (
+        UniqueConstraint("ledger_id", "id", name="uq_accounts_ledger_id"),
+        UniqueConstraint("ledger_id", "normalized_name", name="uq_accounts_ledger_name"),
+        Index("ix_accounts_ledger_status", "ledger_id", "status", "created_at"),
+        Index(
+            "uq_accounts_ledger_default",
+            "ledger_id",
+            unique=True,
+            postgresql_where=text("is_default"),
+            sqlite_where=text("is_default = 1"),
+        ),
+        CheckConstraint("type IN ('cash', 'asset', 'liability')", name="ck_accounts_type"),
+        CheckConstraint("status IN ('active', 'archived')", name="ck_accounts_status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    type: Mapped[str] = mapped_column(String(16), nullable=False)
+    subtype: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    opening_balance: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), nullable=False, default=Decimal("0")
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=AccountStatus.ACTIVE.value
+    )
+    is_default: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
     __table_args__ = (
@@ -280,6 +338,12 @@ class LedgerEntry(Base):
         UniqueConstraint("ledger_id", "short_id", name="uq_entries_ledger_short_id"),
         Index("ix_entries_ledger_occurred", "ledger_id", "occurred_at"),
         Index("ix_entries_ledger_category", "ledger_id", "category"),
+        ForeignKeyConstraint(
+            ["ledger_id", "account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_entries_ledger_account",
+            ondelete="RESTRICT",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -287,6 +351,9 @@ class LedgerEntry(Base):
     ledger_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=True
     )
+    # Nullable in metadata so legacy fixture/data construction remains loadable;
+    # migration 0019 backfills and enforces NOT NULL in deployed databases.
+    account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     short_id: Mapped[str] = mapped_column(String(5), nullable=False)
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")

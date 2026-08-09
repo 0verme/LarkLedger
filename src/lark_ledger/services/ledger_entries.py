@@ -29,6 +29,7 @@ from lark_ledger.schemas import (
     ExecutionResult,
     ParsedCommand,
 )
+from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.exchange import ExchangeRateUnavailableError
 from lark_ledger.short_id import (
     MAX_SHORT_ID_ALLOCATION_ATTEMPTS,
@@ -59,6 +60,7 @@ class _ConvertedAmount:
 
 class _EntryMixin:
     session: AsyncSession
+
     async def _create(
         self,
         user_open_id: str,
@@ -94,9 +96,19 @@ class _EntryMixin:
         assert command.category is not None
         assert command.occurred_at is not None
         converted = await self._convert_command_amount(command)
+        account_service = AccountService(self.session)
+        requested_account_id = getattr(self, "account_id", None)
+        account = (
+            await account_service.get(
+                self._request_context(), requested_account_id, require_active=True
+            )
+            if requested_account_id is not None
+            else await account_service.get_default(self._request_context())
+        )
         entry = LedgerEntry(
             user_open_id=user_open_id,
             ledger_id=self._request_context().ledger_id,
+            account_id=account.id,
             short_id=await self._allocate_short_id(user_open_id),
             amount=converted.amount,
             currency=self.currency,
@@ -212,8 +224,7 @@ class _EntryMixin:
         ]
         if command.batch_truncated:
             lines.append(
-                f"⚠️ 图片中的流水超过 {MAX_BATCH_ENTRIES} 笔，"
-                f"本次仅处理前 {MAX_BATCH_ENTRIES} 笔。"
+                f"⚠️ 图片中的流水超过 {MAX_BATCH_ENTRIES} 笔，本次仅处理前 {MAX_BATCH_ENTRIES} 笔。"
             )
         return ExecutionResult(
             message="\n".join(lines),
@@ -311,22 +322,18 @@ class _EntryMixin:
         ]
         if command.batch_truncated:
             lines.append(
-                f"⚠️ 消息中的账目超过 {MAX_BATCH_ENTRIES} 笔，"
-                f"本次仅处理前 {MAX_BATCH_ENTRIES} 笔。"
+                f"⚠️ 消息中的账目超过 {MAX_BATCH_ENTRIES} 笔，本次仅处理前 {MAX_BATCH_ENTRIES} 笔。"
             )
         if command.budgets_truncated:
             lines.append(
-                f"⚠️ 消息中的预算超过 {MAX_BATCH_BUDGETS} 项，"
-                f"本次仅处理前 {MAX_BATCH_BUDGETS} 项。"
+                f"⚠️ 消息中的预算超过 {MAX_BATCH_BUDGETS} 项，本次仅处理前 {MAX_BATCH_BUDGETS} 项。"
             )
         return ExecutionResult(
             message="\n".join(lines),
             budget_alert="\n\n".join(alerts) or None,
         )
 
-    def _batch_entry_line(
-        self, index: int, entry: LedgerEntry, converted: _ConvertedAmount
-    ) -> str:
+    def _batch_entry_line(self, index: int, entry: LedgerEntry, converted: _ConvertedAmount) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         occurred = self._local_datetime(entry.occurred_at).strftime("%m-%d %H:%M")
         note = entry.note.strip()
@@ -379,9 +386,7 @@ class _EntryMixin:
             return None, "字段格式无效或超出支持范围"
         return item, None
 
-    async def _update_last(
-        self, user_open_id: str, command: ParsedCommand
-    ) -> ExecutionResult:
+    async def _update_last(self, user_open_id: str, command: ParsedCommand) -> ExecutionResult:
         entry = await self._find_latest_for_mutation(user_open_id)
         if entry is None:
             return ExecutionResult(message="还没有可以修改的记录。")
@@ -413,9 +418,7 @@ class _EntryMixin:
         self._assert_expected_updated_at(entry, expected_updated_at)
         if entry.deleted_at is not None:
             return ExecutionResult(
-                message=(
-                    f"{format_entry_ref(entry.short_id)} 已删除，请先恢复后再修改。"
-                )
+                message=(f"{format_entry_ref(entry.short_id)} 已删除，请先恢复后再修改。")
             )
         return await self._apply_entry_update(user_open_id, entry, command)
 
@@ -561,9 +564,7 @@ class _EntryMixin:
                 return ExecutionResult(
                     message=f"{format_entry_ref(entry.short_id)} 已经处于删除状态。"
                 )
-            return ExecutionResult(
-                message=f"{format_entry_ref(entry.short_id)} 已经处于删除状态。"
-            )
+            return ExecutionResult(message=f"{format_entry_ref(entry.short_id)} 已经处于删除状态。")
         before = snapshot_ledger_entry(entry)
         entry.deleted_at = datetime.now(UTC)
         entry.updated_at = datetime.now(UTC)
@@ -591,9 +592,7 @@ class _EntryMixin:
             )
         )
 
-    async def _apply_entry_restore(
-        self, user_open_id: str, entry: LedgerEntry
-    ) -> ExecutionResult:
+    async def _apply_entry_restore(self, user_open_id: str, entry: LedgerEntry) -> ExecutionResult:
         if entry.deleted_at is None:
             return ExecutionResult(
                 message=f"{format_entry_ref(entry.short_id)} 当前未被删除，无需恢复。"
@@ -642,9 +641,7 @@ class _EntryMixin:
             )
         )
 
-    async def _list_entries(
-        self, user_open_id: str, command: ParsedCommand
-    ) -> ExecutionResult:
+    async def _list_entries(self, user_open_id: str, command: ParsedCommand) -> ExecutionResult:
         requested = command.limit if command.limit is not None else DEFAULT_LIST_LIMIT
         capped = requested > MAX_LIST_LIMIT
         limit = min(max(requested, 1), MAX_LIST_LIMIT)
@@ -665,18 +662,11 @@ class _EntryMixin:
                 cursor_code = normalize_entry_ref(command.before_entry_ref)
             except ShortIdError:
                 return ExecutionResult(
-                    message=(
-                        "分页短 ID 格式无效。请使用："
-                        "查看 #A83F2 之前的10笔"
-                    )
+                    message=("分页短 ID 格式无效。请使用：查看 #A83F2 之前的10笔")
                 )
-            cursor = await self._entry_by_short_id(
-                user_open_id, cursor_code, include_deleted=True
-            )
+            cursor = await self._entry_by_short_id(user_open_id, cursor_code, include_deleted=True)
             if cursor is None:
-                return ExecutionResult(
-                    message="未找到该账目，或该账目不属于当前用户。"
-                )
+                return ExecutionResult(message="未找到该账目，或该账目不属于当前用户。")
             filters.append(self._keyset_before_cursor(cursor))
 
         # Fetch one extra row to detect whether another page exists.
@@ -697,9 +687,7 @@ class _EntryMixin:
         if not rows:
             return ExecutionResult(message="没有符合条件的账目。")
 
-        lines = [
-            self._entry_list_line(index, entry) for index, entry in enumerate(rows, start=1)
-        ]
+        lines = [self._entry_list_line(index, entry) for index, entry in enumerate(rows, start=1)]
         header = f"最近 {len(rows)} 笔账目（不含已撤销）"
         parts: list[str] = [header, "", *lines]
         notes: list[str] = []
@@ -713,19 +701,13 @@ class _EntryMixin:
             parts.extend(["", *notes])
         return ExecutionResult(message="\n".join(parts))
 
-    async def _get_entry(
-        self, user_open_id: str, command: ParsedCommand
-    ) -> ExecutionResult:
+    async def _get_entry(self, user_open_id: str, command: ParsedCommand) -> ExecutionResult:
         assert command.entry_ref is not None
         try:
             short_id = normalize_entry_ref(command.entry_ref)
         except ShortIdError:
-            return ExecutionResult(
-                message="短 ID 格式无效。请使用五位编号，例如：查看 #A83F2"
-            )
-        entry = await self._entry_by_short_id(
-            user_open_id, short_id, include_deleted=True
-        )
+            return ExecutionResult(message="短 ID 格式无效。请使用五位编号，例如：查看 #A83F2")
+        entry = await self._entry_by_short_id(user_open_id, short_id, include_deleted=True)
         if entry is None:
             return ExecutionResult(message="未找到该账目，或该账目不属于当前用户。")
         return ExecutionResult(message=self._entry_detail_message(entry))

@@ -4,6 +4,7 @@ The public import surface is unchanged; the implementation is split into
 internal mixins: ``ledger_entries``, ``ledger_budgets`` and ``ledger_reports``.
 """
 
+import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -79,6 +80,7 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin):
         exchange_rates: ExchangeRateService | None = None,
         short_id_factory: Callable[[], str] | None = None,
         commit_changes: bool = True,
+        account_id: uuid.UUID | None = None,
     ) -> None:
         """Ledger operations on ``session``.
 
@@ -96,6 +98,7 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin):
         self.exchange_rates = exchange_rates
         self._short_id_factory = short_id_factory or generate_short_id
         self.commit_changes = commit_changes
+        self.account_id = account_id
         self._active_context: RequestContext | None = None
 
     async def execute(

@@ -15,15 +15,20 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger import __version__
 from lark_ledger.client_schemas import (
+    ClientAccount,
+    ClientAccountCreateRequest,
+    ClientAccountList,
+    ClientAccountRenameRequest,
     ClientCredentialCreated,
     ClientCredentialCreateRequest,
     ClientCredentialList,
 )
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
-from lark_ledger.models import Direction, Household, HouseholdInvitation, Ledger
+from lark_ledger.models import Account, Direction, Household, HouseholdInvitation, Ledger
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
+from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
 from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.client_auth import ClientCredentialService
 from lark_ledger.services.dashboard_auth import (
@@ -277,9 +282,7 @@ async def list_client_credentials(
     return ClientCredentialList(items=items)
 
 
-@router.post(
-    "/client-credentials", response_model=ClientCredentialCreated, status_code=201
-)
+@router.post("/client-credentials", response_model=ClientCredentialCreated, status_code=201)
 async def create_client_credential(
     payload: ClientCredentialCreateRequest,
     request: Request,
@@ -322,6 +325,33 @@ def _ledger_http_error(exc: LedgerManagementError) -> HTTPException:
     if isinstance(exc, LedgerNotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, LedgerNameConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+def _web_account(row: Account) -> ClientAccount:
+    return ClientAccount.model_validate(
+        {
+            "id": str(row.id),
+            "ledger_id": str(row.ledger_id),
+            "name": row.name,
+            "type": row.type,
+            "subtype": row.subtype,
+            "provider": row.provider,
+            "currency": row.currency,
+            "opening_balance": row.opening_balance,
+            "status": row.status,
+            "is_default": row.is_default,
+            "created_at": row.created_at,
+            "updated_at": row.updated_at,
+        }
+    )
+
+
+def _account_http_error(exc: AccountError) -> HTTPException:
+    if isinstance(exc, AccountNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, AccountConflictError):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=422, detail=str(exc))
 
@@ -442,6 +472,127 @@ async def set_default_ledger(
             await session.rollback()
             raise _ledger_http_error(exc) from exc
         return _web_ledger(row, principal.ledger_id)
+
+
+@router.get("/accounts", response_model=ClientAccountList)
+async def list_accounts(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    include_archived: bool = False,
+) -> ClientAccountList:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        rows = await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).list_accounts(principal.request_context, include_archived=include_archived)
+    return ClientAccountList(items=[_web_account(row) for row in rows])
+
+
+@router.get("/accounts/{account_id}", response_model=ClientAccount)
+async def get_account(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> ClientAccount:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).get_account(principal.request_context, account_id)
+        except AccountError as exc:
+            raise _account_http_error(exc) from exc
+    return _web_account(row)
+
+
+@router.post("/accounts", response_model=ClientAccount, status_code=201)
+async def create_account(
+    body: ClientAccountCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientAccount:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).create_account(
+                principal.request_context,
+                name=body.name,
+                account_type=body.type,
+                subtype=body.subtype,
+                provider=body.provider,
+                currency=body.currency,
+                opening_balance=body.opening_balance,
+                make_default=body.is_default,
+            )
+            await session.commit()
+        except AccountError as exc:
+            await session.rollback()
+            raise _account_http_error(exc) from exc
+    return _web_account(row)
+
+
+async def _mutate_web_account(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: DashboardPrincipal,
+    *,
+    operation: str,
+    name: str | None = None,
+) -> ClientAccount:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        app = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            if operation == "rename":
+                assert name is not None
+                row = await app.rename_account(principal.request_context, account_id, name)
+            elif operation == "archive":
+                row = await app.archive_account(principal.request_context, account_id)
+            else:
+                row = await app.set_default_account(principal.request_context, account_id)
+            await session.commit()
+        except AccountError as exc:
+            await session.rollback()
+            raise _account_http_error(exc) from exc
+    return _web_account(row)
+
+
+@router.patch("/accounts/{account_id}", response_model=ClientAccount)
+async def rename_account(
+    account_id: uuid.UUID,
+    body: ClientAccountRenameRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientAccount:
+    return await _mutate_web_account(
+        account_id, request, principal, operation="rename", name=body.name
+    )
+
+
+@router.post("/accounts/{account_id}/archive", response_model=ClientAccount)
+async def archive_account(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientAccount:
+    return await _mutate_web_account(account_id, request, principal, operation="archive")
+
+
+@router.post("/accounts/{account_id}/default", response_model=ClientAccount)
+async def set_default_account(
+    account_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientAccount:
+    return await _mutate_web_account(account_id, request, principal, operation="default")
 
 
 def _household_http_error(exc: HouseholdManagementError) -> HTTPException:
@@ -779,9 +930,9 @@ async def dashboard(
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
-        return await WebLedgerQueryService(
-            session, timezone=settings.timezone
-        ).dashboard(principal.request_context)
+        return await WebLedgerQueryService(session, timezone=settings.timezone).dashboard(
+            principal.request_context
+        )
 
 
 @router.get("/entries", response_model=EntryPage)
@@ -811,9 +962,7 @@ async def entries(
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     settings = cast(Settings, request.app.state.settings)
     async with factory() as session:
-        return await WebLedgerQueryService(
-            session, timezone=settings.timezone
-        ).list_entries(
+        return await WebLedgerQueryService(session, timezone=settings.timezone).list_entries(
             principal.request_context,
             page=page,
             page_size=page_size,
@@ -841,9 +990,9 @@ async def entry_detail(
     settings = cast(Settings, request.app.state.settings)
     async with factory() as session:
         try:
-            detail = await WebLedgerQueryService(
-                session, timezone=settings.timezone
-            ).entry_detail(principal.request_context, short_id)
+            detail = await WebLedgerQueryService(session, timezone=settings.timezone).entry_detail(
+                principal.request_context, short_id
+            )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail="账目不存在") from exc
     if detail is None:
@@ -1001,8 +1150,7 @@ async def _pending_action(
     processor = getattr(request.app.state, "processor", None)
     store = cast(
         PendingCommandStore,
-        getattr(processor, "_pending_store", None)
-        or PendingCommandStore(factory, settings),
+        getattr(processor, "_pending_store", None) or PendingCommandStore(factory, settings),
     )
     row = await store.get_by_code(principal.user_open_id, code)
     if row is None:
@@ -1109,9 +1257,7 @@ async def admin_dead(
         return await WebAdminQueryService(session).dead_summary()
 
 
-@router.post(
-    "/admin/outbox/{outbox_id}/replay", response_model=ResultReplayResponse
-)
+@router.post("/admin/outbox/{outbox_id}/replay", response_model=ResultReplayResponse)
 async def replay_outbox_result(
     outbox_id: uuid.UUID,
     request: Request,
@@ -1180,9 +1326,7 @@ async def admin_config(
     del principal
     settings = cast(Settings, request.app.state.settings)
     provider = (
-        "DeepSeek-compatible"
-        if "deepseek" in settings.ai_base_url.lower()
-        else "OpenAI-compatible"
+        "DeepSeek-compatible" if "deepseek" in settings.ai_base_url.lower() else "OpenAI-compatible"
     )
     return SafeSystemConfig(
         version=__version__,
@@ -1305,9 +1449,7 @@ async def analytics_monthly(
     return (await _analytics_data(request, principal, period, start_date, end_date))[3]
 
 
-async def _budget_overview(
-    request: Request, principal: DashboardPrincipal
-) -> BudgetOverview:
+async def _budget_overview(request: Request, principal: DashboardPrincipal) -> BudgetOverview:
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
@@ -1420,9 +1562,7 @@ async def export_entries(
     elif payload.preset == "last_90_days":
         export_start_date, export_end_date = today - timedelta(days=89), today
     if export_start_date is not None and export_end_date is not None:
-        range_start = datetime.combine(
-            export_start_date, time.min, tzinfo=timezone
-        ).astimezone(UTC)
+        range_start = datetime.combine(export_start_date, time.min, tzinfo=timezone).astimezone(UTC)
         range_end = datetime.combine(
             export_end_date + timedelta(days=1), time.min, tzinfo=timezone
         ).astimezone(UTC)

@@ -22,7 +22,7 @@ from decimal import Decimal
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, or_, select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
@@ -578,24 +578,13 @@ class PendingCommandStore:
         ``business_committed_at`` pre-checks without re-running business.
         """
         async with self._factory() as session:
-            actor_context = await IdentityService(
-                session,
-                currency=self._settings.currency,
-                timezone=self._settings.timezone,
-            ).resolve_or_bootstrap(
-                channel="feishu",
-                external_subject_id=user_open_id,
-            )
+            # Lock the frozen transport identity first. Legacy pending rows may
+            # predate internal User/Ledger records; serializing here prevents
+            # concurrent confirms from racing identity/account bootstrap.
             row = await session.scalar(
                 select(PendingCommand)
                 .where(
-                    or_(
-                        PendingCommand.actor_user_id == actor_context.actor_user_id,
-                        and_(
-                            PendingCommand.actor_user_id.is_(None),
-                            PendingCommand.user_open_id == user_open_id,
-                        ),
-                    ),
+                    PendingCommand.user_open_id == user_open_id,
                     PendingCommand.confirmation_code == confirmation_code,
                 )
                 .with_for_update()
@@ -608,6 +597,14 @@ class PendingCommandStore:
                 session.add(reply)
                 await session.commit()
                 return message, [reply]
+            actor_context = await IdentityService(
+                session,
+                currency=self._settings.currency,
+                timezone=self._settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=user_open_id,
+            )
             legacy_unscoped = row.actor_user_id is None and row.ledger_id is None
             if not legacy_unscoped and (
                 row.actor_user_id != actor_context.actor_user_id or row.ledger_id is None

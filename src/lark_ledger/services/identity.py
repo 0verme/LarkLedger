@@ -1,8 +1,10 @@
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
 from lark_ledger.models import ChannelIdentity, Ledger, LedgerKind, User, UserStatus
+from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import normalize_ledger_name
 
@@ -31,34 +33,57 @@ class IdentityService:
         if not normalized_channel or not normalized_subject:
             raise ValueError("channel and external_subject_id are required")
 
+        ledger: Ledger | None = None
         identity = await self._session.scalar(
             select(ChannelIdentity).where(
                 ChannelIdentity.channel == normalized_channel,
                 ChannelIdentity.external_subject_id == normalized_subject,
             )
         )
+        created = False
         if identity is None:
-            user = User(display_name=display_name.strip(), status=UserStatus.ACTIVE.value)
-            self._session.add(user)
-            await self._session.flush()
-            ledger = Ledger(
-                owner_user_id=user.id,
-                name="我的账本",
-                normalized_name=normalize_ledger_name("我的账本")[1],
-                kind=LedgerKind.PERSONAL.value,
-                currency=self._currency,
-                timezone=self._timezone,
-                is_default=True,
-            )
-            identity = ChannelIdentity(
-                user_id=user.id,
-                channel=normalized_channel,
-                external_subject_id=normalized_subject,
-                current_ledger_id=ledger.id,
-            )
-            self._session.add_all([ledger, identity])
-            await self._session.flush()
-        else:
+            try:
+                async with self._session.begin_nested():
+                    user = User(
+                        display_name=display_name.strip(), status=UserStatus.ACTIVE.value
+                    )
+                    self._session.add(user)
+                    await self._session.flush()
+                    ledger = Ledger(
+                        owner_user_id=user.id,
+                        name="我的账本",
+                        normalized_name=normalize_ledger_name("我的账本")[1],
+                        kind=LedgerKind.PERSONAL.value,
+                        currency=self._currency,
+                        timezone=self._timezone,
+                        is_default=True,
+                    )
+                    self._session.add(ledger)
+                    await self._session.flush()
+                    identity = ChannelIdentity(
+                        user_id=user.id,
+                        channel=normalized_channel,
+                        external_subject_id=normalized_subject,
+                        current_ledger_id=ledger.id,
+                    )
+                    self._session.add(identity)
+                    await self._session.flush()
+                    await AccountService.create_default_for_ledger(self._session, ledger)
+                    created = True
+            except IntegrityError:
+                # Another request bootstrapped the same transport subject.
+                # The savepoint removes this request's orphan User/Ledger rows;
+                # reload the committed winner and continue deterministically.
+                identity = await self._session.scalar(
+                    select(ChannelIdentity).where(
+                        ChannelIdentity.channel == normalized_channel,
+                        ChannelIdentity.external_subject_id == normalized_subject,
+                    )
+                )
+                if identity is None:
+                    raise
+        if not created:
+            assert identity is not None
             loaded_user = await self._session.get(User, identity.user_id)
             if loaded_user is None:
                 raise RuntimeError("channel identity references a missing user")
@@ -75,7 +100,6 @@ class IdentityService:
             )
             if default_ledger is None:
                 raise RuntimeError("user has no default ledger")
-            ledger = None
             if identity.current_ledger_id is not None:
                 if await LedgerAuthorizationService(self._session).can_access(
                     user.id, identity.current_ledger_id

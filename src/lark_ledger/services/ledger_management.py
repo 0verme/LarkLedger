@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.models import ChannelIdentity, DashboardSession, Ledger, LedgerKind
+from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.ledger_authorization import (
     LedgerAuthorizationError,
     LedgerAuthorizationService,
@@ -128,6 +129,7 @@ class LedgerManagementService:
         )
         self._session.add(ledger)
         await self._session.flush()
+        await AccountService.create_default_for_ledger(self._session, ledger)
         return ledger
 
     async def rename(self, user_id: uuid.UUID, ledger_id: uuid.UUID, name: str) -> Ledger:

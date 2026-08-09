@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lark_ledger.models import Direction
+from lark_ledger.models import AccountStatus, AccountType, Direction
 
 ClientScope = Literal["ledger:read", "ledger:write", "pending:write"]
 
@@ -63,6 +63,41 @@ class ClientLedgerNameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
 
 
+class ClientAccount(BaseModel):
+    id: str
+    ledger_id: str
+    name: str
+    type: AccountType
+    subtype: str | None
+    provider: str | None
+    currency: str
+    opening_balance: Decimal
+    status: AccountStatus
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class ClientAccountList(BaseModel):
+    items: list[ClientAccount]
+
+
+class ClientAccountCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+    type: AccountType
+    subtype: str | None = Field(default=None, max_length=32)
+    provider: str | None = Field(default=None, max_length=64)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    opening_balance: Decimal = Field(default=Decimal("0"), max_digits=14, decimal_places=2)
+    is_default: bool = False
+
+
+class ClientAccountRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+
+
 class ClientEntryCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
@@ -71,6 +106,7 @@ class ClientEntryCreateRequest(BaseModel):
     note: str = Field(default="", max_length=500)
     occurred_at: datetime
     currency: str | None = Field(default=None, min_length=3, max_length=3)
+    account_id: str | None = None
 
 
 class ClientCommandResult(BaseModel):
