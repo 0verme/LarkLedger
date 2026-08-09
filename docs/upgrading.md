@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.4.0` |
 | Git tag | `v0.4.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest` 由发布流水线写入） |
-| Alembic head | `20260809_0015` |
+| Alembic head | `20260809_0016` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -22,6 +22,10 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
 
 ## 从 v0.3.0 升级到 v0.4.0
+
+当前 `Unreleased` 的阶段 2 migration `20260809_0016` 在 `0015` 身份地基之上增加账本规范化名称和飞书入口当前账本，并回填所有入口为用户默认账本。它还把短 ID、预算分类与活跃媒体指纹唯一约束改为账本作用域，使同一用户的不同账本可以安全复用。阶段 1 的可空兼容列本阶段继续保留，以便旧测试夹具和滚动升级；`0015` 已回填全部历史行，应用的新写入始终提供经过授权的 `ledger_id`。
+
+升级前必须备份并执行 `alembic upgrade head`。升级后核对 `alembic current` 为 `20260809_0016`，再分别在两个账本创建同分类预算、同短 ID 测试账目以及 Pending。降级到 `0015` 会移除入口选择和规范化名称；若多账本数据已经产生旧键冲突，降级会保留全部财务数据并不恢复无法无损建立的旧用户级唯一约束，因此代码回退前应先评估兼容性。
 
 v0.4.0 新增可选 Web Dashboard 与迁移 `20260808_0014`（`dashboard_sessions`）。先备份 PostgreSQL，再拉取 `v0.4.0` 或固定镜像 `ghcr.io/0verme/larkledger:0.4.0`，然后执行 `alembic upgrade head`。Dashboard 默认关闭，所以只升级代码和 migration 不会改变机器人、Worker 或现有公网路由。
 

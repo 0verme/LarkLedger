@@ -51,6 +51,17 @@ export type DashboardData = {
   categories: Array<{ category: string; amount: string; ratio: string }>;
 };
 
+export type Ledger = {
+  id: string;
+  name: string;
+  is_default: boolean;
+  is_current: boolean;
+  currency: string;
+  timezone: string;
+};
+
+export type LedgerList = { items: Ledger[] };
+
 export type PendingSummary = {
   confirmation_id: string;
   status: string;

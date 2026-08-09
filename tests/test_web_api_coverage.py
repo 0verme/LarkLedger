@@ -261,6 +261,35 @@ async def test_oauth_callback_success_sets_session_and_csrf_cookies(
             assert me.json()["open_id"] == "ou_new"
 
 
+async def test_web_session_selects_owned_ledger_and_rejects_foreign_id(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    owner_client, csrf = await _client(factory, "ou_owner")
+    outsider_client, outsider_csrf = await _client(factory, "ou_outsider")
+    async with owner_client, outsider_client:
+        created = await owner_client.post(
+            "/api/web/v1/ledgers",
+            headers={"X-CSRF-Token": csrf},
+            json={"name": "旅行"},
+        )
+        assert created.status_code == 201
+        ledger_id = created.json()["id"]
+        selected = await owner_client.post(
+            f"/api/web/v1/ledgers/{ledger_id}/select",
+            headers={"X-CSRF-Token": csrf},
+        )
+        assert selected.status_code == 200
+        assert selected.json()["is_current"] is True
+        current = await owner_client.get("/api/web/v1/ledgers/current")
+        assert current.json()["name"] == "旅行"
+
+        rejected = await outsider_client.post(
+            f"/api/web/v1/ledgers/{ledger_id}/select",
+            headers={"X-CSRF-Token": outsider_csrf},
+        )
+        assert rejected.status_code == 404
+
+
 async def test_oauth_callback_error_paths(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

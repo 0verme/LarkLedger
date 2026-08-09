@@ -10,12 +10,13 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse, Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger import __version__
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
-from lark_ledger.models import Direction
+from lark_ledger.models import Direction, Ledger
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.dashboard_auth import (
@@ -29,6 +30,12 @@ from lark_ledger.services.dashboard_auth import (
 )
 from lark_ledger.services.event_replay import EventReplayService
 from lark_ledger.services.ledger import EntryConflictError, LedgerService
+from lark_ledger.services.ledger_management import (
+    LedgerManagementError,
+    LedgerManagementService,
+    LedgerNameConflictError,
+    LedgerNotFoundError,
+)
 from lark_ledger.services.pending import PendingCommandStore
 from lark_ledger.services.replay import OutboxReplayService
 from lark_ledger.services.web_admin import WebAdminQueryService
@@ -58,6 +65,8 @@ from lark_ledger.web_schemas import (
     EntryVersionRequest,
     EventReplayRequest,
     ExportRequestBody,
+    LedgerList,
+    LedgerNameRequest,
     PendingActionResponse,
     PendingDetail,
     PendingGroup,
@@ -65,6 +74,7 @@ from lark_ledger.web_schemas import (
     ResultReplayResponse,
     SafeSystemConfig,
     SortOrder,
+    WebLedger,
 )
 
 router = APIRouter(prefix="/api/web/v1", tags=["web-dashboard"])
@@ -219,6 +229,143 @@ async def me(
         "role": principal.role,
         "expires_at": principal.expires_at.isoformat(),
     }
+
+
+def _web_ledger(ledger: Ledger, current_id: uuid.UUID) -> WebLedger:
+    return WebLedger(
+        id=str(ledger.id),
+        name=ledger.name,
+        is_default=ledger.is_default,
+        is_current=ledger.id == current_id,
+        currency=ledger.currency,
+        timezone=ledger.timezone,
+    )
+
+
+def _ledger_http_error(exc: LedgerManagementError) -> HTTPException:
+    if isinstance(exc, LedgerNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, LedgerNameConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/ledgers", response_model=LedgerList)
+async def list_ledgers(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> LedgerList:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        rows = await LedgerManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).list_owned(principal.user_id)
+        return LedgerList(items=[_web_ledger(row, principal.ledger_id) for row in rows])
+
+
+@router.get("/ledgers/current", response_model=WebLedger)
+async def current_ledger(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> WebLedger:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await LedgerManagementService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).get_owned(principal.user_id, principal.ledger_id)
+        except LedgerManagementError as exc:
+            raise _ledger_http_error(exc) from exc
+        return _web_ledger(row, principal.ledger_id)
+
+
+@router.post("/ledgers", response_model=WebLedger, status_code=201)
+async def create_ledger(
+    body: LedgerNameRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebLedger:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await LedgerManagementService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).create(principal.user_id, body.name)
+            await session.commit()
+        except LedgerManagementError as exc:
+            await session.rollback()
+            raise _ledger_http_error(exc) from exc
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="已有同名或容易混淆的账本") from exc
+        return _web_ledger(row, principal.ledger_id)
+
+
+@router.post("/ledgers/{ledger_id}/select", response_model=WebLedger)
+async def select_ledger(
+    ledger_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebLedger:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await LedgerManagementService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).select_for_session(principal.user_id, uuid.UUID(principal.session_id), ledger_id)
+            await session.commit()
+        except LedgerManagementError as exc:
+            await session.rollback()
+            raise _ledger_http_error(exc) from exc
+        return _web_ledger(row, row.id)
+
+
+@router.patch("/ledgers/{ledger_id}", response_model=WebLedger)
+async def rename_ledger(
+    ledger_id: uuid.UUID,
+    body: LedgerNameRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebLedger:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await LedgerManagementService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).rename(principal.user_id, ledger_id, body.name)
+            await session.commit()
+        except LedgerManagementError as exc:
+            await session.rollback()
+            raise _ledger_http_error(exc) from exc
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="已有同名或容易混淆的账本") from exc
+        return _web_ledger(row, principal.ledger_id)
+
+
+@router.post("/ledgers/{ledger_id}/default", response_model=WebLedger)
+async def set_default_ledger(
+    ledger_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebLedger:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await LedgerManagementService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).set_default(principal.user_id, ledger_id)
+            await session.commit()
+        except LedgerManagementError as exc:
+            await session.rollback()
+            raise _ledger_http_error(exc) from exc
+        return _web_ledger(row, principal.ledger_id)
 
 
 @router.get("/dashboard", response_model=DashboardData)

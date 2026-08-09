@@ -34,6 +34,12 @@ button { color: inherit; }
 .app-shell { min-height: 100vh; }
 .sidebar { position: fixed; z-index: 20; inset: 0 auto 0 0; width: 244px; padding: 26px 18px 18px; display: flex; flex-direction: column; background: #fff; border-right: 1px solid #e7e9ed; }
 .sidebar-brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 24px; font-size: 20px; letter-spacing: -.02em; }
+.ledger-switcher { padding: 0 8px 16px; }
+.ledger-switcher label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+.ledger-switcher > div { display: flex; gap: 6px; }
+.ledger-switcher select { min-width: 0; flex: 1; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; padding: 8px; }
+.ledger-switcher button { width: 36px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; cursor: pointer; }
+.ledger-switcher small { display: block; margin-top: 6px; color: #b42318; }
 .nav-group { margin-bottom: 18px; }
 .nav-group p { margin: 0 10px 7px; color: #a0a7b1; font-size: 11px; font-weight: 650; letter-spacing: .08em; }
 .nav-group a { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 0 11px; color: #65707d; text-decoration: none; border-radius: 10px; font-size: 14px; margin: 2px 0; }

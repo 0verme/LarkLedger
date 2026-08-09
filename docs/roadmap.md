@@ -5,9 +5,9 @@
 
 ## 共同主干
 
-1. **Identity & Ledger Foundation（进行中）**：内部 User、ChannelIdentity、Ledger、
+1. **Identity & Ledger Foundation（已完成）**：内部 User、ChannelIdentity、Ledger、
    RequestContext 和无损旧数据迁移。
-2. **个人多账本**：创建、列出、切换默认账本；短 ID、预算、统计、Pending 和 revision
+2. **个人多账本（已完成）**：创建、列出、切换默认账本；短 ID、预算、统计、Pending 和 revision
    全部按 Ledger 隔离。
 3. **家庭空间 MVP**：Household、成员、家庭公共账本、个人账本挂载和无复制聚合。
 4. **统一 Client API**：飞书与 Web 共用命令/查询边界，随后才开放设备认证和其他入口。

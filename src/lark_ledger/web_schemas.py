@@ -69,6 +69,23 @@ class DashboardData(BaseModel):
     categories: list[CategoryValue]
 
 
+class WebLedger(BaseModel):
+    id: str
+    name: str
+    is_default: bool
+    is_current: bool
+    currency: str
+    timezone: str
+
+
+class LedgerList(BaseModel):
+    items: list[WebLedger]
+
+
+class LedgerNameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
 class EntryUpdateRequest(BaseModel):
     expected_updated_at: datetime
     amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)

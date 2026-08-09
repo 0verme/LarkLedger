@@ -15,6 +15,7 @@ a row lock.
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -32,6 +33,7 @@ from lark_ledger.confirmation_id import (
 from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     Direction,
+    Ledger,
     PendingCommand,
     PendingStatus,
     ProcessedEvent,
@@ -445,14 +447,14 @@ class PendingCommandStore:
         return pending
 
     async def has_active_fingerprint(
-        self, user_open_id: str, source_fingerprint: str
+        self, ledger_id: uuid.UUID, source_fingerprint: str
     ) -> bool:
-        """Return whether this user's exact media already awaits a decision."""
+        """Return whether this ledger's exact media already awaits a decision."""
         async with self._factory() as session:
             pending_id = await session.scalar(
                 select(PendingCommand.id)
                 .where(
-                    PendingCommand.user_open_id == user_open_id,
+                    PendingCommand.ledger_id == ledger_id,
                     PendingCommand.source_fingerprint == source_fingerprint,
                     PendingCommand.status.in_(
                         [
@@ -606,6 +608,32 @@ class PendingCommandStore:
                 session.add(reply)
                 await session.commit()
                 return message, [reply]
+            legacy_unscoped = row.actor_user_id is None and row.ledger_id is None
+            if not legacy_unscoped and (
+                row.actor_user_id != actor_context.actor_user_id or row.ledger_id is None
+            ):
+                message = "该确认单所属账本已不可访问，未执行任何写入。"
+                reply = self._make_text_row(
+                    message_id=reply_to_message_id, event_id=confirm_event_id, text=message
+                )
+                session.add(reply)
+                await session.commit()
+                return message, [reply]
+            frozen_ledger_id = row.ledger_id or actor_context.ledger_id
+            owned_ledger = await session.scalar(
+                select(Ledger.id).where(
+                    Ledger.id == frozen_ledger_id,
+                    Ledger.owner_user_id == actor_context.actor_user_id,
+                )
+            )
+            if owned_ledger is None:
+                message = "该确认单所属账本已不可访问，未执行任何写入。"
+                reply = self._make_text_row(
+                    message_id=reply_to_message_id, event_id=confirm_event_id, text=message
+                )
+                session.add(reply)
+                await session.commit()
+                return message, [reply]
             if row.status != PendingStatus.PENDING.value:
                 message = self._terminal_message(row.status)
                 reply = self._make_text_row(
@@ -637,7 +665,7 @@ class PendingCommandStore:
                 ).execute(
                     RequestContext(
                         actor_user_id=actor_context.actor_user_id,
-                        ledger_id=row.ledger_id or actor_context.ledger_id,
+                        ledger_id=frozen_ledger_id,
                         source_channel=row.transport,
                         external_subject_id=user_open_id,
                     ),
@@ -771,10 +799,24 @@ class PendingCommandStore:
         """Render the user's recent pending confirmations as a text reply."""
         count = limit or self._settings.pending_max_list
         async with self._factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self._settings.currency,
+                timezone=self._settings.timezone,
+            ).resolve_or_bootstrap(
+                channel="feishu",
+                external_subject_id=user_open_id,
+            )
             rows = (
                 await session.execute(
                     select(PendingCommand)
-                    .where(PendingCommand.user_open_id == user_open_id)
+                    .where(
+                        PendingCommand.user_open_id == user_open_id,
+                        or_(
+                            PendingCommand.ledger_id == context.ledger_id,
+                            PendingCommand.ledger_id.is_(None),
+                        ),
+                    )
                     .order_by(PendingCommand.created_at.desc())
                     .limit(count)
                 )

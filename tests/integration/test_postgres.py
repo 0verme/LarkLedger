@@ -21,7 +21,9 @@ from lark_ledger.models import Direction, LedgerEntry, ProcessedEvent
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.events import EventService
+from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
+from lark_ledger.services.ledger_management import LedgerManagementService
 
 pytestmark = pytest.mark.postgres
 
@@ -53,7 +55,7 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260809_0015"
+    assert revision == "20260809_0016"
 
 
 async def test_readiness_uses_real_postgres_and_current_alembic_revision(
@@ -76,8 +78,8 @@ async def test_readiness_uses_real_postgres_and_current_alembic_revision(
     assert result["checks"]["database"] == {"status": "ok"}
     assert result["checks"]["migration"] == {
         "status": "ok",
-        "current": "20260809_0015",
-        "expected": "20260809_0015",
+        "current": "20260809_0016",
+        "expected": "20260809_0016",
     }
 
 
@@ -253,16 +255,24 @@ async def test_export_entries_query_on_postgres(
         assert "#EX002" in with_deleted.export.content.decode("utf-8-sig")
 
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "20260809_0015"
+        assert revision == "20260809_0016"
 
 
-async def test_short_id_unique_per_user_allows_cross_user_reuse(
+async def test_short_id_unique_per_ledger_allows_cross_ledger_reuse(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with postgres_session_factory() as session:
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_a")
+        second = await LedgerManagementService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).create(context.actor_user_id, "旅行")
+        second_id = second.id
         session.add(
             LedgerEntry(
                 user_open_id="ou_a",
+                ledger_id=context.ledger_id,
                 short_id="A83F2",
                 amount=Decimal("1.00"),
                 currency="CNY",
@@ -278,6 +288,7 @@ async def test_short_id_unique_per_user_allows_cross_user_reuse(
         session.add(
             LedgerEntry(
                 user_open_id="ou_a",
+                ledger_id=context.ledger_id,
                 short_id="A83F2",
                 amount=Decimal("2.00"),
                 currency="CNY",
@@ -294,7 +305,8 @@ async def test_short_id_unique_per_user_allows_cross_user_reuse(
 
         session.add(
             LedgerEntry(
-                user_open_id="ou_b",
+                user_open_id="ou_a",
+                ledger_id=second_id,
                 short_id="A83F2",
                 amount=Decimal("3.00"),
                 currency="CNY",

@@ -6,6 +6,10 @@
 
 ## 身份与账本边界（Unreleased）
 
+阶段 2 增加独立的 `LedgerManagementService`。用户默认账本保存在 `ledgers.is_default`（用户内部分唯一索引保证最多一个）；飞书入口当前账本保存在 `channel_identities.current_ledger_id`；Web 当前账本保存在 `dashboard_sessions.ledger_id`。`IdentityService` 和 Dashboard 认证层只在验证账本所有权后构造 `RequestContext`，API body/query 无权指定 `actor_user_id` 或覆盖目标账本。
+
+飞书账本命令在 `AIInterpreter` 之前解析。新入口或新 Dashboard Session 没有显式选择时回退到用户默认账本；切换当前账本与设置默认账本是两个独立操作。Pending 创建时冻结 `actor_user_id + ledger_id`，确认时重新检查所有权并使用冻结值，不读取确认时的当前账本。
+
 飞书 `open_id` 现在只作为 `ChannelIdentity` 的外部主体标识。入口在调用账务核心前
 解析出 `RequestContext(actor_user_id, ledger_id, source_channel)`；账目、预算和 Web
 查询以 `ledger_id` 为授权与数据隔离边界。迁移期保留旧 `user_open_id` 列用于安全
@@ -37,6 +41,7 @@ Event 与 Reply Outbox 中的外部标识承担接收、重放、审计和投递
 | `AIInterpreter` | 按独立配置路由文字、单图/多图和语音服务，解析单笔、复杂文字批量或最多 30 笔图片流水，并生成聚合消费建议 |
 | `ExchangeRateService` | 获取并缓存外币到默认账本币种的最新参考汇率 |
 | `LedgerService` | 执行固定的记账、修改、撤销、列表、导出查询、汇总、预算和报告逻辑 |
+| `LedgerManagementService` | 校验/规范化账本名，执行个人账本创建、列表、选择、默认和重命名，并验证所有权 |
 | `export` 服务 | 将账目序列化为 CSV Schema v1（注入防护、行数/体积上限、文件名） |
 | `ReportRenderer` | 生成消费报告 PNG 和飞书消息卡片；失败时降级为文字卡片 |
 | PostgreSQL / Alembic | 保存账目、预算、告警阈值和已处理事件，管理 Schema 版本 |

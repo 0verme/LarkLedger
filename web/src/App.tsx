@@ -20,7 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
-import { ApiError, api, type Me } from "./api";
+import { ApiError, api, type Ledger, type LedgerList, type Me } from "./api";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DeadPage, EventsPage, HealthPage, OutboxPage } from "./pages/AdminPages";
 import { EntriesPage } from "./pages/EntriesPage";
@@ -117,6 +117,22 @@ function Shell({ me }: { me: Me }) {
     mutationFn: () => api<void>("/auth/logout", { method: "POST" }),
     onSuccess: () => queryClient.setQueryData(["me"], null),
   });
+  const ledgers = useQuery({ queryKey: ["ledgers"], queryFn: () => api<LedgerList>("/ledgers") });
+  const selectLedger = useMutation({
+    mutationFn: (id: string) => api<Ledger>(`/ledgers/${id}/select`, { method: "POST" }),
+    onSuccess: async () => { await queryClient.invalidateQueries(); },
+  });
+  const createLedger = useMutation({
+    mutationFn: (name: string) => api<Ledger>("/ledgers", { method: "POST", body: JSON.stringify({ name }) }),
+    onSuccess: async (created) => {
+      await queryClient.invalidateQueries({ queryKey: ["ledgers"] });
+      selectLedger.mutate(created.id);
+    },
+  });
+  const askCreateLedger = () => {
+    const name = window.prompt("新账本名称");
+    if (name?.trim()) createLedger.mutate(name);
+  };
   const visibleGroups = groups.map((group) => ({
     ...group,
     items: group.items.filter((item) => !item.admin || me.role === "ADMIN"),
@@ -131,6 +147,24 @@ function Shell({ me }: { me: Me }) {
       <aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
         <div className="sidebar-brand"><span className="brand-mark small">飞</span><strong>飞账</strong></div>
         <button className="mobile-close" aria-label="关闭导航" onClick={() => setMobileOpen(false)}><X /></button>
+        <div className="ledger-switcher">
+          <label htmlFor="current-ledger">当前账本</label>
+          <div>
+            <select
+              id="current-ledger"
+              aria-label="当前账本"
+              value={(ledgers.data?.items ?? []).find((item) => item.is_current)?.id ?? ""}
+              disabled={ledgers.isLoading || selectLedger.isPending}
+              onChange={(event) => selectLedger.mutate(event.target.value)}
+            >
+              {(ledgers.data?.items ?? []).map((ledger) => (
+                <option key={ledger.id} value={ledger.id}>{ledger.name}{ledger.is_default ? "（默认）" : ""}</option>
+              ))}
+            </select>
+            <button type="button" aria-label="创建账本" onClick={askCreateLedger} disabled={createLedger.isPending}>＋</button>
+          </div>
+          {(ledgers.isError || selectLedger.isError || createLedger.isError) && <small>账本操作失败，请重试</small>}
+        </div>
         <nav aria-label="主导航">
           {visibleGroups.map((group, groupIndex) => (
             <div className="nav-group" key={group.label ?? groupIndex}>

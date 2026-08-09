@@ -8,6 +8,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 from lark_ledger.models import Base, Direction, LedgerEntry
+from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.ledger_management import LedgerManagementService
 from lark_ledger.short_id import (
     CROCKFORD_ALPHABET,
     SHORT_ID_LENGTH,
@@ -55,9 +57,12 @@ def test_normalize_rejects_invalid_refs(value: str) -> None:
         normalize_entry_ref(value)
 
 
-def _entry(user: str, short_id: str, amount: str, category: str) -> LedgerEntry:
+def _entry(
+    user: str, short_id: str, amount: str, category: str, *, ledger_id: object = None
+) -> LedgerEntry:
     return LedgerEntry(
         user_open_id=user,
+        ledger_id=ledger_id,  # type: ignore[arg-type]
         short_id=short_id,
         amount=Decimal(amount),
         currency="CNY",
@@ -69,11 +74,19 @@ def _entry(user: str, short_id: str, amount: str, category: str) -> LedgerEntry:
     )
 
 
-async def test_user_scoped_unique_and_cross_user_reuse(session: AsyncSession) -> None:
-    session.add(_entry("ou_a", "AAAAA", "1.00", "餐饮"))
+async def test_ledger_scoped_unique_and_cross_ledger_reuse(session: AsyncSession) -> None:
+    identities = IdentityService(session, currency="CNY", timezone="Asia/Shanghai")
+    context = await identities.resolve_or_bootstrap(
+        channel="feishu", external_subject_id="ou_a"
+    )
+    second = await LedgerManagementService(
+        session, currency="CNY", timezone="Asia/Shanghai"
+    ).create(context.actor_user_id, "旅行")
+    second_id = second.id
+    session.add(_entry("ou_a", "AAAAA", "1.00", "餐饮", ledger_id=context.ledger_id))
     await session.commit()
 
-    session.add(_entry("ou_a", "AAAAA", "2.00", "交通"))
+    session.add(_entry("ou_a", "AAAAA", "2.00", "交通", ledger_id=context.ledger_id))
     with pytest.raises(IntegrityError):
         await session.commit()
     await session.rollback()
@@ -82,24 +95,12 @@ async def test_user_scoped_unique_and_cross_user_reuse(session: AsyncSession) ->
     first.deleted_at = datetime(2026, 8, 5, 13, tzinfo=UTC)
     await session.commit()
 
-    session.add(_entry("ou_a", "AAAAA", "3.00", "其他"))
+    session.add(_entry("ou_a", "AAAAA", "3.00", "其他", ledger_id=context.ledger_id))
     with pytest.raises(IntegrityError):
         await session.commit()
     await session.rollback()
 
-    session.add(
-        LedgerEntry(
-            user_open_id="ou_b",
-            short_id="AAAAA",
-            amount=Decimal("4.00"),
-            currency="CNY",
-            direction=Direction.INCOME,
-            category="工资",
-            note="",
-            occurred_at=datetime(2026, 8, 5, 14, tzinfo=UTC),
-            source_type="text",
-        )
-    )
+    session.add(_entry("ou_a", "AAAAA", "4.00", "工资", ledger_id=second_id))
     await session.commit()
     count = len((await session.execute(select(LedgerEntry))).scalars().all())
     assert count == 2

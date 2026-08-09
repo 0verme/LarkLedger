@@ -10,10 +10,11 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from lark_ledger.config import Settings
-from lark_ledger.models import Base, Direction, PendingCommand
+from lark_ledger.models import Base, Direction, Ledger, PendingCommand
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.ai import CommandInterpretationError
 from lark_ledger.services.feishu import MAX_POST_IMAGES, MessageProcessor
+from lark_ledger.services.identity import IdentityService
 
 
 class CapturingInterpreter:
@@ -78,6 +79,44 @@ def post_event(content: dict[str, Any], message_id: str = "om_post") -> dict[str
             "content": json.dumps(content, ensure_ascii=False),
         },
     }
+
+
+def text_event(text: str, message_id: str) -> dict[str, Any]:
+    return {
+        "sender": {"sender_id": {"open_id": "ou_user"}},
+        "message": {
+            "message_id": message_id,
+            "message_type": "text",
+            "content": json.dumps({"text": text}, ensure_ascii=False),
+        },
+    }
+
+
+async def test_ledger_commands_are_deterministic_and_do_not_call_ai(session: Any) -> None:
+    interpreter = CapturingInterpreter()
+    feishu = RecordingFeishu()
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        lambda: session,  # type: ignore[arg-type]
+        feishu,  # type: ignore[arg-type]
+        interpreter,  # type: ignore[arg-type]
+    )
+
+    await processor.process(text_event("创建账本 旅行", "om_ledger_create"))
+    await processor.process(text_event("切换账本 旅行", "om_ledger_select"))
+    await processor.process(text_event("当前账本", "om_ledger_current"))
+
+    assert interpreter.calls == []
+    assert any("已创建账本：旅行" in text for text in feishu.texts)
+    assert any("已切换当前账本：旅行" in text for text in feishu.texts)
+    assert any("当前账本：旅行" in text for text in feishu.texts)
+    context = await IdentityService(
+        session, currency="CNY", timezone="Asia/Shanghai"
+    ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_user")
+    selected_name = await session.scalar(
+        select(Ledger.name).where(Ledger.id == context.ledger_id)
+    )
+    assert selected_name == "旅行"
 
 
 def test_parse_post_content_collects_text_and_deduplicates_images() -> None:

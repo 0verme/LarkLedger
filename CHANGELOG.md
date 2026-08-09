@@ -6,6 +6,12 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Added
 
+- **Personal multi-ledger MVP** adds an independent ledger management service,
+  deterministic Feishu commands, authenticated Web APIs, and a minimal
+  Dashboard selector for create/list/current/select/default/rename workflows.
+- Alembic migration `20260809_0016` persists per-channel current-ledger state,
+  normalizes names with owner-scoped uniqueness, and backfills existing
+  identities without removing legacy compatibility columns.
 - **Identity and Ledger foundation** introduces platform-independent `users`,
   `channel_identities`, and `ledgers`, plus a deterministic `RequestContext`
   carrying the actor, target ledger, and source channel.
@@ -15,6 +21,11 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Changed
 
+- Ledger short IDs, category budgets, active media fingerprints, analytics,
+  reports, exports, revisions, and pending confirmations are ledger-scoped.
+  Pending confirmation keeps its creation-time ledger across later switches.
+- New Dashboard sessions start from the user default ledger, while each active
+  session and Feishu identity retains its own explicit current selection.
 - New ledger entries, budgets, revisions, pending confirmations, and Dashboard
   sessions persist internal user/ledger identifiers. Ledger and Web queries use
   `ledger_id` as their primary scope, with a nullable legacy fallback retained

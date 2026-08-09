@@ -1,8 +1,8 @@
-"""User-scoped ledger entry short IDs for chat references.
+"""Ledger-scoped entry short IDs for chat references.
 
 Storage form is five Crockford Base32 characters without a leading ``#``.
 Display/reference form is ``#XXXXX``. Short IDs are not security credentials;
-callers must always combine them with ``user_open_id``.
+callers must always combine them with a server-authorized ``ledger_id``.
 """
 
 from __future__ import annotations

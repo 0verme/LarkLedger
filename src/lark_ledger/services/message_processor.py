@@ -19,6 +19,11 @@ from lark_ledger.entry_commands import (
     try_parse_deterministic_entry_command,
     try_parse_pending_directive,
 )
+from lark_ledger.ledger_commands import (
+    LedgerCommand,
+    LedgerCommandAction,
+    try_parse_ledger_command,
+)
 from lark_ledger.models import ProcessedEvent, ReplyOutbox
 from lark_ledger.outbox import (
     OUTBOX_PAYLOAD_VERSION,
@@ -40,6 +45,10 @@ from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnava
 from lark_ledger.services.feishu_client import FeishuClient, _media_fingerprint, logger
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
+from lark_ledger.services.ledger_management import (
+    LedgerManagementError,
+    LedgerManagementService,
+)
 from lark_ledger.services.outbox import ReplyOutboxStore
 from lark_ledger.services.pending import (
     PendingCommandStore,
@@ -108,6 +117,7 @@ class MessageProcessor:
             return
         message_type = str(message.get("message_type", ""))
         command: ParsedCommand | None = None
+        fingerprint_ledger_id: uuid.UUID | None = None
         stage = "message_decode"
         is_visual_message = message_type == "image"
 
@@ -198,8 +208,11 @@ class MessageProcessor:
             if (
                 self.settings.pending_enabled
                 and source_fingerprint is not None
+                and (
+                    fingerprint_ledger_id := await self._current_ledger_id(user_open_id)
+                )
                 and await self._pending_store.has_active_fingerprint(
-                    user_open_id, source_fingerprint
+                    fingerprint_ledger_id, source_fingerprint
                 )
             ):
                 await self._mark_event_business_committed(event_id)
@@ -210,6 +223,21 @@ class MessageProcessor:
                 )
                 return
             if not images:
+                ledger_command = try_parse_ledger_command(text)
+                if isinstance(ledger_command, str):
+                    await self.feishu.reply_text(message_id, ledger_command)
+                    return
+                if ledger_command is not None:
+                    stage = "ledger_management"
+                    outbox_rows = await self._handle_ledger_command(
+                        ledger_command,
+                        message_id=message_id,
+                        user_open_id=user_open_id,
+                        event_id=event_id,
+                    )
+                    stage = "reply"
+                    await self._signal_or_deliver(outbox_rows)
+                    return
                 # Confirmation directives (P07) are deterministic and must never
                 # reach the AI interpreter: 确认/取消/查看待确认 #C-A83F2.
                 directive = try_parse_pending_directive(text)
@@ -543,7 +571,7 @@ class MessageProcessor:
                 duplicate_exists = (
                     source_fingerprint is not None
                     and await self._pending_store.has_active_fingerprint(
-                        user_open_id, source_fingerprint
+                        context.ledger_id, source_fingerprint
                     )
                 )
                 if not duplicate_exists:
@@ -630,6 +658,87 @@ class MessageProcessor:
             event_id=event_id,
         )
         return rows
+
+    async def _current_ledger_id(self, user_open_id: str) -> uuid.UUID:
+        async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
+            await session.commit()
+            return context.ledger_id
+
+    async def _handle_ledger_command(
+        self,
+        command: LedgerCommand,
+        *,
+        message_id: str,
+        user_open_id: str,
+        event_id: str | None,
+    ) -> list[ReplyOutbox]:
+        async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
+            manager = LedgerManagementService(
+                session, currency=self.settings.currency, timezone=self.settings.timezone
+            )
+            try:
+                if command.action is LedgerCommandAction.LIST:
+                    ledgers = await manager.list_owned(context.actor_user_id)
+                    lines = [
+                        f"{'→' if item.id == context.ledger_id else ' '} {item.name}"
+                        f"{'（默认）' if item.is_default else ''}"
+                        for item in ledgers
+                    ]
+                    reply_text = "账本列表：\n" + "\n".join(lines)
+                elif command.action is LedgerCommandAction.CURRENT:
+                    ledger = await manager.get_owned(context.actor_user_id, context.ledger_id)
+                    reply_text = f"当前账本：{ledger.name}{'（默认）' if ledger.is_default else ''}"
+                elif command.action is LedgerCommandAction.CREATE:
+                    assert command.name is not None
+                    ledger = await manager.create(context.actor_user_id, command.name)
+                    reply_text = f"已创建账本：{ledger.name}。当前账本仍为原账本。"
+                else:
+                    assert command.name is not None
+                    ledger = await manager.find_owned_by_name(context.actor_user_id, command.name)
+                    if command.action is LedgerCommandAction.SELECT:
+                        if context.channel_identity_id is None:
+                            raise LedgerManagementError("当前入口身份无法保存账本选择")
+                        await manager.select_for_channel(
+                            context.actor_user_id, context.channel_identity_id, ledger.id
+                        )
+                        reply_text = f"已切换当前账本：{ledger.name}"
+                    elif command.action is LedgerCommandAction.SET_DEFAULT:
+                        ledger = await manager.set_default(context.actor_user_id, ledger.id)
+                        reply_text = f"已将默认账本设为：{ledger.name}。当前账本未切换。"
+                    else:
+                        assert command.new_name is not None
+                        ledger = await manager.rename(
+                            context.actor_user_id, ledger.id, command.new_name
+                        )
+                        reply_text = f"账本已重命名为：{ledger.name}"
+            except LedgerManagementError as exc:
+                reply_text = str(exc)
+
+            row = self._make_outbox_row(
+                event_id=event_id,
+                message_id=message_id,
+                reply_type=ReplyType.TEXT,
+                sequence=0,
+                payload=build_text_payload(reply_text),
+                blob=None,
+            )
+            session.add(row)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    parent.business_committed_at = datetime.now(UTC)
+            await session.commit()
+            return [row]
 
     async def _business_result_committed(self, event_id: str) -> bool:
         async with self.session_factory() as session:

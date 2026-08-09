@@ -10,6 +10,9 @@ from sqlalchemy.pool import StaticPool
 from lark_ledger.config import Settings
 from lark_ledger.models import Base, Direction, LedgerEntry
 from lark_ledger.schemas import Action, EntryCandidate, ParsedCommand
+from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.ledger import LedgerService
+from lark_ledger.services.ledger_management import LedgerManagementService
 from lark_ledger.services.risk import (
     MediaKind,
     RiskDecision,
@@ -237,6 +240,30 @@ async def test_duplicate_single_entry_routes_to_pending() -> None:
     assert assessment.decision is RiskDecision.PENDING
     assert assessment.reason is RiskReason.DUPLICATE
     assert [hit.existing_short_id for hit in assessment.duplicate_hits] == ["A83F2"]
+    await engine.dispose()
+
+
+async def test_duplicate_detection_does_not_cross_ledgers() -> None:
+    engine, factory = await _sqlite_factory()
+    async with factory() as session:
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_user")
+        await LedgerService(session).execute(context, _create(note="午饭"))
+        manager = LedgerManagementService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        )
+        travel = await manager.create(context.actor_user_id, "旅行")
+        assert context.channel_identity_id is not None
+        await manager.select_for_channel(
+            context.actor_user_id, context.channel_identity_id, travel.id
+        )
+        await session.commit()
+
+    assessment = await RiskRouter(factory, _settings()).route(
+        command=_create(note="午饭"), source_type="text", user_open_id="ou_user"
+    )
+    assert assessment.decision is RiskDecision.WRITE_THROUGH
     await engine.dispose()
 
 

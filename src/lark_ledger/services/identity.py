@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
 from lark_ledger.models import ChannelIdentity, Ledger, LedgerKind, User, UserStatus
+from lark_ledger.services.ledger_management import normalize_ledger_name
 
 
 class IdentityDisabledError(PermissionError):
@@ -42,6 +43,7 @@ class IdentityService:
             ledger = Ledger(
                 owner_user_id=user.id,
                 name="我的账本",
+                normalized_name=normalize_ledger_name("我的账本")[1],
                 kind=LedgerKind.PERSONAL.value,
                 currency=self._currency,
                 timezone=self._timezone,
@@ -51,6 +53,7 @@ class IdentityService:
                 user_id=user.id,
                 channel=normalized_channel,
                 external_subject_id=normalized_subject,
+                current_ledger_id=ledger.id,
             )
             self._session.add_all([ledger, identity])
             await self._session.flush()
@@ -71,7 +74,19 @@ class IdentityService:
             )
             if default_ledger is None:
                 raise RuntimeError("user has no default ledger")
-            ledger = default_ledger
+            ledger = None
+            if identity.current_ledger_id is not None:
+                ledger = await self._session.scalar(
+                    select(Ledger).where(
+                        Ledger.id == identity.current_ledger_id,
+                        Ledger.owner_user_id == user.id,
+                    )
+                )
+            if ledger is None:
+                ledger = default_ledger
+                identity.current_ledger_id = ledger.id
+
+        assert ledger is not None
 
         return RequestContext(
             actor_user_id=user.id,

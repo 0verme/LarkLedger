@@ -213,6 +213,31 @@ async def _processor(
     )
 
 
+async def test_pending_keeps_frozen_ledger_after_current_ledger_switch() -> None:
+    engine, factory = await _sqlite_factory()
+    feishu = RecordingFeishu()
+    processor = await _processor(factory, feishu, _create_command())
+
+    await processor.process(_image_event("om_pending_original"))
+    pending = (await _pending_rows(factory))[0]
+    frozen_ledger_id = pending.ledger_id
+    assert frozen_ledger_id is not None
+
+    await processor.process(_message_event("om_create_travel", "创建账本 旅行"))
+    await processor.process(_message_event("om_select_travel", "切换账本 旅行"))
+    await processor.process(
+        _message_event("om_confirm_original", f"确认 #C-{pending.confirmation_code[1:]}")
+    )
+
+    async with factory() as session:
+        entry = (await session.scalars(select(LedgerEntry))).one()
+        assert entry.ledger_id == frozen_ledger_id
+        refreshed = await session.get(PendingCommand, pending.id)
+        assert refreshed is not None
+        assert refreshed.ledger_id == frozen_ledger_id
+    await engine.dispose()
+
+
 def test_pending_preview_card_uses_native_json_v2_callbacks() -> None:
     card = build_pending_preview_card(
         PendingPreview(code="CA83F2", display_code="#C-A83F2"),

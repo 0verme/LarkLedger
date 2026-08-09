@@ -22,6 +22,7 @@ from lark_ledger.config import Settings
 from lark_ledger.context import RequestContext
 from lark_ledger.models import DashboardSession
 from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.ledger_management import LedgerManagementService
 
 SESSION_COOKIE = "lark_ledger_session"
 CSRF_COOKIE = "lark_ledger_csrf"
@@ -227,12 +228,17 @@ class DashboardAuthService:
                 external_subject_id=identity["open_id"],
                 display_name=identity.get("name", ""),
             )
+            default_ledger = await LedgerManagementService(
+                session,
+                currency=self._settings.currency,
+                timezone=self._settings.timezone,
+            ).get_default(context.actor_user_id)
             row = DashboardSession(
                 token_hash=_digest(session_token),
                 csrf_hash=_digest(csrf_token),
                 user_open_id=identity["open_id"],
                 user_id=context.actor_user_id,
-                ledger_id=context.ledger_id,
+                ledger_id=default_ledger.id,
                 display_name=identity.get("name", "")[:128],
                 avatar_url=identity.get("avatar_url", "")[:1024],
                 expires_at=expires_at,

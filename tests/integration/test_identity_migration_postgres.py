@@ -25,6 +25,7 @@ async def test_identity_ledger_migration_backfills_and_downgrades(
     scratch_dsn = url.set(database=scratch).render_as_string(hide_password=False)
     base_dsn = url.render_as_string(hide_password=False)
     entry_id = uuid.uuid4()
+    rolling_entry_id = uuid.uuid4()
     session_id = uuid.uuid4()
 
     maint_engine = create_async_engine(base_dsn)
@@ -59,6 +60,20 @@ async def test_identity_ledger_migration_backfills_and_downgrades(
                 {"id": session_id, "token": "a" * 64, "csrf": "b" * 64},
             )
 
+        await asyncio.to_thread(
+            command.upgrade, Config(str(_ALEMBIC_INI)), "20260809_0015"
+        )
+        async with scratch_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "INSERT INTO ledger_entries "
+                    "(id, user_open_id, short_id, amount, currency, direction, category, "
+                    "note, occurred_at, source_type) VALUES "
+                    "(:id, 'ou_migrate', 'B83F2', 18, 'CNY', 'EXPENSE', '交通', "
+                    "'rolling deploy', now(), 'text')"
+                ),
+                {"id": rolling_entry_id},
+            )
         await asyncio.to_thread(command.upgrade, Config(str(_ALEMBIC_INI)), "head")
         async with scratch_engine.connect() as connection:
             user = (
@@ -69,20 +84,28 @@ async def test_identity_ledger_migration_backfills_and_downgrades(
             identity = (
                 await connection.execute(
                     text(
-                        "SELECT user_id, channel, external_subject_id "
+                        "SELECT user_id, channel, external_subject_id, current_ledger_id "
                         "FROM channel_identities"
                     )
                 )
             ).one()
             ledger = (
                 await connection.execute(
-                    text("SELECT id, owner_user_id, kind, is_default FROM ledgers")
+                    text(
+                        "SELECT id, owner_user_id, kind, is_default, normalized_name FROM ledgers"
+                    )
                 )
             ).one()
             migrated_entry = (
                 await connection.execute(
                     text("SELECT user_open_id, ledger_id FROM ledger_entries WHERE id = :id"),
                     {"id": entry_id},
+                )
+            ).one()
+            rolling_entry = (
+                await connection.execute(
+                    text("SELECT user_open_id, ledger_id FROM ledger_entries WHERE id = :id"),
+                    {"id": rolling_entry_id},
                 )
             ).one()
             migrated_session = (
@@ -97,13 +120,34 @@ async def test_identity_ledger_migration_backfills_and_downgrades(
 
             assert user.display_name == "小飞"
             assert user.status == "active"
-            assert identity == (user.id, "feishu", "ou_migrate")
+            assert identity == (user.id, "feishu", "ou_migrate", ledger.id)
             assert ledger.owner_user_id == user.id
             assert ledger.kind == "personal"
             assert ledger.is_default is True
+            assert ledger.normalized_name
             assert migrated_entry == ("ou_migrate", ledger.id)
+            assert rolling_entry == ("ou_migrate", ledger.id)
             assert migrated_session == ("ou_migrate", user.id, ledger.id)
 
+        await asyncio.to_thread(
+            command.downgrade, Config(str(_ALEMBIC_INI)), "20260809_0015"
+        )
+        async with scratch_engine.connect() as connection:
+            kept_at_0015 = await connection.scalar(
+                text("SELECT user_open_id FROM ledger_entries WHERE id = :id"),
+                {"id": entry_id},
+            )
+            assert kept_at_0015 == "ou_migrate"
+            assert (
+                await connection.scalar(
+                    text(
+                        "SELECT count(*) FROM information_schema.columns "
+                        "WHERE table_name = 'channel_identities' "
+                        "AND column_name = 'current_ledger_id'"
+                    )
+                )
+                == 0
+            )
         await asyncio.to_thread(
             command.downgrade, Config(str(_ALEMBIC_INI)), "20260808_0014"
         )

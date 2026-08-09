@@ -74,6 +74,7 @@ class Ledger(Base):
             sqlite_where=text("is_default = 1"),
         ),
         Index("ix_ledgers_owner_created", "owner_user_id", "created_at"),
+        UniqueConstraint("owner_user_id", "normalized_name", name="uq_ledgers_owner_name"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -81,6 +82,7 @@ class Ledger(Base):
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(128), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False, default=LedgerKind.PERSONAL.value)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")
     timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
@@ -110,6 +112,9 @@ class ChannelIdentity(Base):
     )
     channel: Mapped[str] = mapped_column(String(32), nullable=False)
     external_subject_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    current_ledger_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -126,7 +131,6 @@ class LedgerEntry(Base):
         UniqueConstraint(
             "source_message_id", "source_item_index", name="uq_entries_source_item"
         ),
-        UniqueConstraint("user_open_id", "short_id", name="uq_entries_user_short_id"),
         UniqueConstraint("ledger_id", "short_id", name="uq_entries_ledger_short_id"),
         Index("ix_entries_ledger_occurred", "ledger_id", "occurred_at"),
         Index("ix_entries_ledger_category", "ledger_id", "category"),
@@ -161,7 +165,6 @@ class LedgerEntry(Base):
 class CategoryBudget(Base):
     __tablename__ = "category_budgets"
     __table_args__ = (
-        UniqueConstraint("user_open_id", "category", name="uq_budgets_user_category"),
         UniqueConstraint("ledger_id", "category", name="uq_budgets_ledger_category"),
     )
 
@@ -433,8 +436,8 @@ class PendingCommand(Base):
         ),
         UniqueConstraint("source_event_id", name="uq_pending_source_event"),
         Index(
-            "uq_pending_user_active_fingerprint",
-            "user_open_id",
+            "uq_pending_ledger_active_fingerprint",
+            "ledger_id",
             "source_fingerprint",
             unique=True,
             postgresql_where=text(
