@@ -2,7 +2,7 @@
 
 > Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
 
-本文说明 LarkLedger v0.4.0 的运行组件、消息数据流、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
+本文说明 LarkLedger v0.5.0 的运行组件、消息数据流、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
 ## 统一 Client Application Service（阶段 4）
 

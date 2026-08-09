@@ -4,6 +4,17 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-09
+
+### Added (v0.5.0 — Ledger-scoped Accounts & Transfers; P26/P27)
+
+- **Ledger-scoped Account domain** adds `accounts` (`cash` / `asset` / `liability`) with per-ledger default and archived status, opening balances, rename/set-default/archive lifecycle, and ledger-scoped uniqueness. Historical `ledger_entries` are losslessly backfilled to each ledger's default account. Alembic migration `20260809_0019`.
+- **Transfers and balance ledger** adds `transfers` and `transfer_revisions`, ledger-scoped composite foreign keys, distinct-account and positive-amount checks, reversal, amount revision, and derived per-account balance / asset / liability / net-worth queries. Transfers are never counted as income or expense. Alembic migration `20260809_0020`.
+- **Entry account binding everywhere**: Web / Client entry list, detail, dashboard recents and revision snapshots now return the ledger-scoped `account_id` / `account_name`; CSV export adds an `account_name` column. `PATCH /entries/{id}` accepts `account_id` with same-ledger validation, archived / cross-ledger rejection, and `extra="forbid"` on the update schema so unknown fields are never silently ignored.
+- **Frozen pending account targets**: non-transfer pending commands freeze a single `account_id` (create / update / batch) in addition to `ledger_id`; confirming after a ledger or default-account switch still writes to the frozen target. Transfer pendings freeze both sides plus the transfer id. Alembic migration `20260809_0021`.
+- **Feishu account capabilities**: `account_hint` on create / update_last / update_entry, new `list_accounts` and `assets` actions, deterministic account / balance / asset commands, server-side hint resolution (ambiguous / archived / cross-ledger names are rejected with a clear reply), and account names in bookkeeping replies.
+- **Web Account and Transfer pages**: account list / create / rename / set-default / archive / per-account balance / asset summary, transfer list / create / detail with audit / reverse, entry account column, account selectors in entry create/edit, and a `POST /entries` + `GET /transfers` + transfer-revision Web API surface.
+
 ### Added
 
 - **Unified Client API** adds the transport-neutral `ClientApplicationService`,

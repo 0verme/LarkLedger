@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.4.0** |
-| 包版本 / `__version__` | `0.4.0` |
-| Git tag | `v0.4.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest` 由发布流水线写入） |
-| Alembic head | `20260809_0020` |
+| 最新正式版本 | **v0.5.0** |
+| 包版本 / `__version__` | `0.5.0` |
+| Git tag | `v0.5.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.5.0`（亦有 `0.5` / `latest` 由发布流水线写入） |
+| Alembic head | `20260809_0021` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -20,6 +20,17 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
+
+## 从 v0.4.0 升级到 v0.5.0
+
+v0.5.0 在 v0.4.0（`dashboard_sessions`，0014）之上依次带来身份与账本地基（0015）、个人多账本（0016）、家庭空间（0017）、统一 Client API（0018）、**账本级账户**（0019）、**转账与余额**（0020）、**Pending 账户冻结**（0021）。升级前必须备份 PostgreSQL。
+
+- `20260809_0019` 为每个既有 Ledger 创建「默认账户」，并将历史 `ledger_entries` 无损回填到同 Ledger 默认账户；`account_id` 变为 NOT NULL 并建立 `(ledger_id, account_id)` 复合外键。降级会移除账户关联与账户表，但保留全部原账目数据。
+- `20260809_0020` 新增 `transfers`、`transfer_revisions`，并为 `pending_commands` 增加冻结的转出账户、转入账户与 transfer ID。复合外键保证账户与 transfer/pending 的 Ledger 一致，检查约束拒绝同账户转账。降级会删除全部 transfer 与 transfer revision 数据并移除 Pending 转账冻结列；既有 Account 与 LedgerEntry 不受影响。
+- `20260809_0021` 为 `pending_commands` 增加可空 `account_id`（普通收入/支出/修改/批量 Pending 冻结单一账户目标）及 `(ledger_id, account_id)` 复合外键，并更新排他目标约束：transfer 目标（from/to/transfer）与单一账户目标互斥。既有 Pending 行保留 `account_id IS NULL`，历史已执行 Pending 不受影响。降级会移除 `account_id` 与相关约束。
+- 升级后核对：`alembic current` 为 `20260809_0021`；每个 Ledger 恰好一个默认账户；每个 Entry 均有 `account_id`；无 orphan Account / Entry / Transfer / Revision；Pending 目标约束无异常。
+
+升级前请先备份 PostgreSQL 并验证可恢复，再拉取 `v0.5.0` 或固定镜像 `ghcr.io/0verme/larkledger:0.5.0`，执行 `alembic upgrade head`。不要在升级过程中运行多个会同时执行迁移的应用副本。
 
 ## 升级到阶段 4 统一 Client API（Unreleased）
 

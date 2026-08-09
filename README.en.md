@@ -10,8 +10,9 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works in v0.4.0
+## What works in v0.5.0
 
+- **Ledger-scoped accounts and transfers**: entries bind to a ledger account (cash / asset / liability) with opening balances, rename / default / archive lifecycle; transfers stay outside income / expense stats; per-account balance and total assets / liabilities / net worth are available from both Feishu and Web
 - **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies; simple single text entries still write straight through
 - **Recent list / single-entry detail** (`最近10笔`, `查看 #XXXXX`)
 - **Targeted update, soft-delete, and restore** by short ID (plus last-entry shortcuts)
@@ -27,7 +28,7 @@ Simple single text remains a direct write: `午饭32元` immediately creates the
 
 ## Web Dashboard
 
-v0.4.0 adds an optional Chinese-first Dashboard for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
+v0.5.0 keeps the optional Chinese-first Dashboard and adds account and transfer management pages for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
 
 The production image embeds the Vite build and serves it from FastAPI; Node.js is not needed at runtime. Enable it only behind HTTPS:
 
@@ -157,12 +158,12 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - The Dashboard has only `USER` and `ADMIN`; there is no enterprise multi-tenancy, organization tree, complex RBAC, or shared ledger
 - **JSON export is not a formal capability** (CSV only)
 
-Future roadmap themes are outside this release commitment; v0.4.0 does not expand into a multi-tenant finance ERP.
+Future roadmap themes are outside this release commitment; v0.5.0 does not expand into a multi-tenant finance ERP.
 
-Current release: **v0.4.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.4.0` (also `0.4` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.5.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.5.0` (also `0.5` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.4.0
+export LARK_LEDGER_IMAGE_TAG=0.5.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d

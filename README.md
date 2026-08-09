@@ -8,8 +8,9 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-## 当前能力（v0.4.0）
+## 当前能力（v0.5.0）
 
+- **账本级账户与转账**：每笔收支可绑定账户（现金 / 资产 / 负债）；账户支持期初余额、改名、设默认与归档；`转账` 独立于收支统计；飞书与 Web 均可按当前账本查看单账户余额、总资产、总负债与净资产
 - **个人多账本**：飞书确定性命令与 Web 选择器可创建、列出、切换、设默认和重命名个人账本；账目、预算、短 ID、统计、报告、导出、revision、判重与 Pending 全部按当前账本隔离
 - **家庭空间 MVP**：创建家庭、邀请已有内部用户、处理邀请与成员；每个家庭自动获得独立公共账本，个人账本不会因加入家庭而共享或复制
 - **文字记账**，成功回复含当前账本内唯一五位短 ID（`#XXXXX`）；简单明确的单笔文字仍直接入账
@@ -38,9 +39,11 @@
 
 ## Web Dashboard
 
-v0.4.0 提供可选的中文 Web Dashboard，生产镜像已内置前端静态资源，无需额外 Node.js 服务：
+v0.5.0 提供可选的中文 Web Dashboard，生产镜像已内置前端静态资源，无需额外 Node.js 服务：
 
-- 财务总览、服务端分页账目管理、revision 时间线、软删除与恢复
+- 财务总览、服务端分页账目管理、revision 时间线、软删除与恢复；账目列表显示账户、创建/编辑时可选择账户
+- **账户管理**：列表、创建、改名、设默认、归档、单账户余额与总资产/负债/净资产
+- **转账管理**：创建、详情（含操作记录）与撤销
 - 待确认查看、确认与取消（复用冻结预览，不重新调用 AI）
 - 趋势、分类、月度分析、预算、报告和受限 CSV 下载
 - 管理员 Event / Outbox / Dead / Replay、健康状态与只读脱敏配置
@@ -209,9 +212,9 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 - Dashboard 仅提供 `USER` / `ADMIN` 两种角色；无企业多租户、组织树、复杂 RBAC 或共享账本
 - JSON 导出**不是**正式能力（当前仅 CSV）
 
-后续路线不在本次发布承诺内；v0.4.0 不扩展为多租户财务 ERP。
+后续路线不在本次发布承诺内；v0.5.0 不扩展为多租户财务 ERP。
 
-镜像与版本：当前正式版本为 **v0.4.0**。预构建镜像：`ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.5.0**。预构建镜像：`ghcr.io/0verme/larkledger:0.5.0`（亦有 `0.5` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -261,8 +264,8 @@ pytest --cov
 ## 使用预构建镜像（可选）
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.4.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.4.0"
+export LARK_LEDGER_IMAGE_TAG=0.5.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.5.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -278,7 +281,7 @@ curl http://127.0.0.1:8000/healthz
 - [架构说明](docs/architecture.md)
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md) · [v0.4.0 发布说明](.github/release-notes/v0.4.0.md) · [v0.3.0 发布说明](.github/release-notes/v0.3.0.md)
+- [变更日志](CHANGELOG.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md) · [v0.4.0 发布说明](.github/release-notes/v0.4.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 
