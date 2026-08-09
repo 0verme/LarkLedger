@@ -173,6 +173,7 @@ class AccountService:
         account.name = display
         account.normalized_name = normalized
         await self._session.flush()
+        await self._session.refresh(account)
         return account
 
     async def archive(self, context: RequestContext, account_id: uuid.UUID) -> Account:
@@ -181,6 +182,7 @@ class AccountService:
             raise AccountConflictError("默认账户不能归档，请先设置其他默认账户")
         account.status = AccountStatus.ARCHIVED.value
         await self._session.flush()
+        await self._session.refresh(account)
         return account
 
     async def set_default(self, context: RequestContext, account_id: uuid.UUID) -> Account:
@@ -188,6 +190,7 @@ class AccountService:
         await self._clear_default(context.ledger_id)
         account.is_default = True
         await self._session.flush()
+        await self._session.refresh(account)
         return account
 
     async def _clear_default(self, ledger_id: uuid.UUID) -> None:

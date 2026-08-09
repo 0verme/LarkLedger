@@ -16,13 +16,22 @@ from lark_ledger.client_api import router
 from lark_ledger.client_schemas import ClientCredentialCreateRequest
 from lark_ledger.config import Settings
 from lark_ledger.main import create_app
-from lark_ledger.models import Base, ClientCredential, ClientIdempotencyRecord, LedgerEntry
+from lark_ledger.models import (
+    Base,
+    ClientCredential,
+    ClientIdempotencyRecord,
+    Direction,
+    LedgerEntry,
+    PendingCommand,
+)
+from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.client_auth import (
     ClientAuthenticationError,
     ClientCredentialService,
 )
 from lark_ledger.services.household_management import HouseholdManagementService
 from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.pending import PendingPreview, PendingPreviewItem
 
 
 @pytest_asyncio.fixture
@@ -321,3 +330,521 @@ async def test_account_api_and_explicit_entry_account_are_ledger_scoped(
             },
         )
         assert denied.status_code == 404
+
+
+async def test_client_account_entry_balance_and_reporting_lifecycle(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, _ = await _credential(client_factory, subject="ou_full_finance")
+    headers = {"Authorization": f"Bearer {token}"}
+    write_headers = headers | {"Idempotency-Key": "placeholder"}
+    occurred_at = "2026-08-09T12:00:00+08:00"
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        me = await client.get("/api/client/v1/me", headers=headers)
+        assert me.status_code == 200
+
+        ledgers = await client.get("/api/client/v1/ledgers", headers=headers)
+        assert ledgers.status_code == 200
+        original_id = ledgers.json()["items"][0]["id"]
+        current = await client.get("/api/client/v1/ledgers/current", headers=headers)
+        assert current.status_code == 200
+
+        created_ledger = await client.post(
+            "/api/client/v1/ledgers",
+            headers=write_headers | {"Idempotency-Key": "ledger-create"},
+            json={"name": "Acceptance ledger"},
+        )
+        assert created_ledger.status_code == 201
+        ledger_id = created_ledger.json()["id"]
+        renamed_ledger = await client.patch(
+            f"/api/client/v1/ledgers/{ledger_id}",
+            headers=write_headers | {"Idempotency-Key": "ledger-rename"},
+            json={"name": "Acceptance renamed"},
+        )
+        assert renamed_ledger.status_code == 200
+        assert renamed_ledger.json()["name"] == "Acceptance renamed"
+        assert (
+            await client.post(
+                f"/api/client/v1/ledgers/{ledger_id}/default",
+                headers=write_headers | {"Idempotency-Key": "ledger-default"},
+            )
+        ).status_code == 200
+        assert (
+            await client.post(
+                f"/api/client/v1/ledgers/{ledger_id}/select",
+                headers=write_headers | {"Idempotency-Key": "ledger-select"},
+            )
+        ).status_code == 200
+
+        account_rows = await client.get("/api/client/v1/accounts", headers=headers)
+        default_id = account_rows.json()["items"][0]["id"]
+        wallet = await client.post(
+            "/api/client/v1/accounts",
+            headers=write_headers | {"Idempotency-Key": "account-wallet"},
+            json={
+                "name": "Wallet",
+                "type": "asset",
+                "opening_balance": "100.00",
+                "subtype": "wallet",
+                "provider": "test",
+            },
+        )
+        assert wallet.status_code == 201
+        wallet_id = wallet.json()["id"]
+        liability = await client.post(
+            "/api/client/v1/accounts",
+            headers=write_headers | {"Idempotency-Key": "account-liability"},
+            json={
+                "name": "Credit card",
+                "type": "liability",
+                "opening_balance": "20.00",
+            },
+        )
+        assert liability.status_code == 201
+        liability_id = liability.json()["id"]
+        renamed = await client.patch(
+            f"/api/client/v1/accounts/{wallet_id}",
+            headers=write_headers | {"Idempotency-Key": "account-rename"},
+            json={"name": "Daily wallet"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "Daily wallet"
+        assert (
+            await client.get(f"/api/client/v1/accounts/{wallet_id}", headers=headers)
+        ).status_code == 200
+        assert (
+            await client.post(
+                f"/api/client/v1/accounts/{wallet_id}/default",
+                headers=write_headers | {"Idempotency-Key": "account-default"},
+            )
+        ).status_code == 200
+        archived = await client.post(
+            f"/api/client/v1/accounts/{default_id}/archive",
+            headers=write_headers | {"Idempotency-Key": "account-archive"},
+        )
+        assert archived.status_code == 200
+        assert archived.json()["status"] == "archived"
+        with_archived = await client.get(
+            "/api/client/v1/accounts?include_archived=true", headers=headers
+        )
+        assert any(item["id"] == default_id for item in with_archived.json()["items"])
+
+        income = await client.post(
+            "/api/client/v1/entries",
+            headers=write_headers | {"Idempotency-Key": "entry-income"},
+            json={
+                "amount": "50.00",
+                "direction": "income",
+                "category": "salary",
+                "note": "acceptance income",
+                "occurred_at": occurred_at,
+                "account_id": wallet_id,
+            },
+        )
+        assert income.status_code == 201
+        short_id = income.json()["resource"]["short_id"]
+        expense = await client.post(
+            "/api/client/v1/entries",
+            headers=write_headers | {"Idempotency-Key": "entry-expense"},
+            json={
+                "amount": "5.00",
+                "direction": "expense",
+                "category": "food",
+                "occurred_at": occurred_at,
+                "account_id": wallet_id,
+            },
+        )
+        assert expense.status_code == 201
+
+        balance = await client.get(
+            f"/api/client/v1/accounts/{wallet_id}/balance", headers=headers
+        )
+        assert balance.status_code == 200
+        assert balance.json()["current_balance"] == "145.00"
+        assets = await client.get("/api/client/v1/assets", headers=headers)
+        assert assets.status_code == 200
+        assert assets.json()["total_assets"] == "145.00"
+        assert assets.json()["total_liabilities"] == "20.00"
+        assert assets.json()["net_assets"] == "125.00"
+        assert (
+            await client.get(f"/api/client/v1/accounts/{liability_id}/balance", headers=headers)
+        ).status_code == 200
+
+        assert (await client.get("/api/client/v1/dashboard", headers=headers)).status_code == 200
+        listed = await client.get(
+            "/api/client/v1/entries",
+            headers=headers,
+            params={"start": "2026-08-01T00:00:00Z", "sort": "amount", "order": "asc"},
+        )
+        assert listed.status_code == 200
+        detail = await client.get(f"/api/client/v1/entries/{short_id}", headers=headers)
+        assert detail.status_code == 200
+        version = detail.json()["entry"]["updated_at"]
+        updated = await client.patch(
+            f"/api/client/v1/entries/{short_id}",
+            headers=write_headers | {"Idempotency-Key": "entry-update"},
+            json={"expected_updated_at": version, "amount": "60.00", "note": "updated"},
+        )
+        assert updated.status_code == 200
+        deleted = await client.request(
+            "DELETE",
+            f"/api/client/v1/entries/{short_id}",
+            headers=write_headers | {"Idempotency-Key": "entry-delete"},
+            json={"expected_updated_at": updated.json()["entry"]["updated_at"]},
+        )
+        assert deleted.status_code == 200
+        restored = await client.post(
+            f"/api/client/v1/entries/{short_id}/restore",
+            headers=write_headers | {"Idempotency-Key": "entry-restore"},
+            json={"expected_updated_at": deleted.json()["entry"]["updated_at"]},
+        )
+        assert restored.status_code == 200
+        assert restored.json()["entry"]["deleted_at"] is None
+
+        budget = await client.put(
+            "/api/client/v1/budgets/food",
+            headers=write_headers | {"Idempotency-Key": "budget-set"},
+            json={"amount": "200.00", "currency": "CNY"},
+        )
+        assert budget.status_code == 200
+        assert (await client.get("/api/client/v1/budgets", headers=headers)).status_code == 200
+        assert (
+            await client.delete(
+                "/api/client/v1/budgets/food",
+                headers=write_headers | {"Idempotency-Key": "budget-delete"},
+            )
+        ).status_code == 200
+        assert (
+            await client.get(
+                "/api/client/v1/analytics",
+                headers=headers,
+                params={"start_date": "2026-08-01", "end_date": "2026-08-31"},
+            )
+        ).status_code == 200
+        report = await client.get(
+            "/api/client/v1/reports",
+            headers=headers,
+            params={
+                "start": "2026-08-01T00:00:00Z",
+                "end": "2026-08-31T23:59:59Z",
+            },
+        )
+        assert report.status_code == 200
+        exported = await client.get(
+            "/api/client/v1/exports.csv",
+            headers=headers,
+            params={
+                "start": "2026-08-01T00:00:00Z",
+                "end": "2026-08-31T23:59:59Z",
+                "include_deleted": "true",
+            },
+        )
+        assert exported.status_code == 200
+        assert "text/csv" in exported.headers["content-type"]
+
+        assert (
+            await client.post(
+                f"/api/client/v1/ledgers/{original_id}/select",
+                headers=write_headers | {"Idempotency-Key": "ledger-select-back"},
+            )
+        ).status_code == 200
+
+
+async def test_client_household_invitation_membership_and_leave_lifecycle(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    owner_token, _ = await _credential(client_factory, subject="ou_household_api_owner")
+    member_token, _ = await _credential(client_factory, subject="ou_household_api_member")
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        household = await client.post(
+            "/api/client/v1/households",
+            headers=owner_headers | {"Idempotency-Key": "household-create"},
+            json={"name": "Acceptance family"},
+        )
+        assert household.status_code == 201
+        household_id = household.json()["id"]
+        assert (
+            await client.get("/api/client/v1/households", headers=owner_headers)
+        ).status_code == 200
+        renamed = await client.patch(
+            f"/api/client/v1/households/{household_id}",
+            headers=owner_headers | {"Idempotency-Key": "household-rename"},
+            json={"name": "Acceptance household"},
+        )
+        assert renamed.status_code == 200
+        assert (
+            await client.get(
+                f"/api/client/v1/households/{household_id}", headers=owner_headers
+            )
+        ).status_code == 200
+        assert (
+            await client.get(
+                f"/api/client/v1/households/{household_id}/members", headers=owner_headers
+            )
+        ).status_code == 200
+
+        invitation = await client.post(
+            f"/api/client/v1/households/{household_id}/invitations",
+            headers=owner_headers | {"Idempotency-Key": "household-invite"},
+            json={"target": "ou_household_api_member"},
+        )
+        assert invitation.status_code == 201
+        invitation_id = invitation.json()["id"]
+        member_invitations = await client.get(
+            "/api/client/v1/household-invitations", headers=member_headers
+        )
+        assert member_invitations.status_code == 200
+        assert member_invitations.json()[0]["id"] == invitation_id
+        accepted = await client.post(
+            f"/api/client/v1/household-invitations/{invitation_id}/accept",
+            headers=member_headers | {"Idempotency-Key": "household-accept"},
+        )
+        assert accepted.status_code == 200
+        members = await client.get(
+            f"/api/client/v1/households/{household_id}/members", headers=owner_headers
+        )
+        assert len(members.json()) == 2
+        left = await client.post(
+            f"/api/client/v1/households/{household_id}/leave",
+            headers=member_headers | {"Idempotency-Key": "household-leave"},
+        )
+        assert left.status_code == 200
+        assert left.json()["message"] == "household left"
+
+
+async def test_client_pending_query_confirm_cancel_and_frozen_scope(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    command = ParsedCommand(
+        action=Action.CREATE,
+        amount="32.00",
+        direction=Direction.EXPENSE,
+        category="acceptance",
+        note="frozen pending",
+        occurred_at=now,
+    )
+
+    def preview(code: str) -> dict[str, object]:
+        return PendingPreview(
+            code=code,
+            display_code=f"#C-{code[1:]}",
+            entries_total=1,
+            expense_count=1,
+            expense_total="32.00",
+            income_total="0.00",
+            currency="CNY",
+            risk_reason="acceptance",
+            expires_at=(now + timedelta(hours=1)).isoformat(),
+            items=[
+                PendingPreviewItem(
+                    index=None,
+                    direction="expense",
+                    amount="32.00",
+                    currency="CNY",
+                    category="acceptance",
+                    occurred_at="2026-08-09 12:00",
+                    note="frozen pending",
+                )
+            ],
+        ).as_json()
+
+    async with client_factory() as session:
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_client_pending")
+        credential = await ClientCredentialService.create(
+            session,
+            user_id=context.actor_user_id,
+            current_ledger_id=context.ledger_id,
+            request=ClientCredentialCreateRequest(
+                name="pending device",
+                scopes=["ledger:read", "ledger:write", "pending:write"],
+            ),
+        )
+        for code in ("CA83F2", "CB83F2"):
+            session.add(
+                PendingCommand(
+                    confirmation_code=code,
+                    user_open_id="ou_client_pending",
+                    actor_user_id=context.actor_user_id,
+                    ledger_id=context.ledger_id,
+                    source_message_id=f"om_{code}",
+                    transport="feishu",
+                    source_type="image",
+                    command_type=command.action.value,
+                    payload_version=1,
+                    payload_json=command.model_dump(mode="json"),
+                    preview_json=preview(code),
+                    risk_reason="acceptance",
+                    status="pending",
+                    expires_at=now + timedelta(hours=1),
+                )
+            )
+        await session.commit()
+
+    headers = {"Authorization": f"Bearer {credential.token}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        listed = await client.get("/api/client/v1/pending", headers=headers)
+        assert listed.status_code == 200
+        assert listed.json()["total"] == 2
+        detail = await client.get("/api/client/v1/pending/CA83F2", headers=headers)
+        assert detail.status_code == 200
+        assert detail.json()["pending"]["confirmation_id"] == "#C-A83F2"
+        assert (
+            await client.get("/api/client/v1/pending/NO!", headers=headers)
+        ).status_code == 404
+        assert (
+            await client.post(
+                "/api/client/v1/pending/NO!/confirm",
+                headers=headers | {"Idempotency-Key": "invalid-pending-confirm"},
+            )
+        ).status_code == 404
+
+        confirmed = await client.post(
+            "/api/client/v1/pending/CA83F2/confirm",
+            headers=headers | {"Idempotency-Key": "pending-confirm"},
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["pending"]["pending"]["status"] == "executed"
+        replayed = await client.post(
+            "/api/client/v1/pending/CA83F2/confirm",
+            headers=headers | {"Idempotency-Key": "pending-confirm"},
+        )
+        assert replayed.status_code == 200
+        cancelled = await client.post(
+            "/api/client/v1/pending/CB83F2/cancel",
+            headers=headers | {"Idempotency-Key": "pending-cancel"},
+        )
+        assert cancelled.status_code == 200
+        assert cancelled.json()["pending"]["pending"]["status"] == "cancelled"
+
+    async with client_factory() as session:
+        entry = await session.scalar(
+            select(LedgerEntry).where(LedgerEntry.ledger_id == context.ledger_id)
+        )
+        assert entry is not None
+        assert entry.amount == command.amount
+
+
+async def test_client_financial_error_envelopes_and_write_scope(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, _ = await _credential(client_factory, subject="ou_error_branches")
+    headers = {"Authorization": f"Bearer {token}"}
+    async with client_factory() as session:
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_read_only")
+        read_only = await ClientCredentialService.create(
+            session,
+            user_id=context.actor_user_id,
+            current_ledger_id=context.ledger_id,
+            request=ClientCredentialCreateRequest(
+                name="read only", scopes=["ledger:read"]
+            ),
+        )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        denied = await client.post(
+            "/api/client/v1/accounts",
+            headers={
+                "Authorization": f"Bearer {read_only.token}",
+                "Idempotency-Key": "denied-write",
+            },
+            json={"name": "Denied", "type": "asset"},
+        )
+        assert denied.status_code == 403
+        assert denied.json()["detail"]["code"] == "permission_denied"
+
+        ledger = await client.post(
+            "/api/client/v1/ledgers",
+            headers=headers | {"Idempotency-Key": "error-ledger-create"},
+            json={"name": "Error ledger"},
+        )
+        assert ledger.status_code == 201
+        duplicate = await client.post(
+            "/api/client/v1/ledgers",
+            headers=headers | {"Idempotency-Key": "error-ledger-duplicate"},
+            json={"name": "Error ledger"},
+        )
+        assert duplicate.status_code == 409
+        missing = uuid.uuid4()
+        assert (
+            await client.patch(
+                f"/api/client/v1/ledgers/{missing}",
+                headers=headers | {"Idempotency-Key": "missing-ledger-rename"},
+                json={"name": "Missing"},
+            )
+        ).status_code == 404
+        assert (
+            await client.post(
+                f"/api/client/v1/ledgers/{missing}/default",
+                headers=headers | {"Idempotency-Key": "missing-ledger-default"},
+            )
+        ).status_code == 404
+        assert (
+            await client.post(
+                f"/api/client/v1/ledgers/{missing}/select",
+                headers=headers | {"Idempotency-Key": "missing-ledger-select"},
+            )
+        ).status_code == 404
+
+        accounts = await client.get("/api/client/v1/accounts", headers=headers)
+        default_id = accounts.json()["items"][0]["id"]
+        assert (
+            await client.post(
+                f"/api/client/v1/accounts/{default_id}/archive",
+                headers=headers | {"Idempotency-Key": "archive-default"},
+            )
+        ).status_code == 409
+        assert (
+            await client.post(
+                "/api/client/v1/accounts",
+                headers=headers | {"Idempotency-Key": "duplicate-account"},
+                json={"name": accounts.json()["items"][0]["name"], "type": "asset"},
+            )
+        ).status_code == 409
+        assert (
+            await client.get(f"/api/client/v1/accounts/{missing}", headers=headers)
+        ).status_code == 404
+        assert (
+            await client.get(f"/api/client/v1/accounts/{missing}/balance", headers=headers)
+        ).status_code == 404
+
+        invalid_transfer = await client.post(
+            "/api/client/v1/transfers",
+            headers=headers | {"Idempotency-Key": "same-account-transfer"},
+            json={
+                "from_account_id": default_id,
+                "to_account_id": default_id,
+                "amount": "1.00",
+                "occurred_at": datetime.now(UTC).isoformat(),
+            },
+        )
+        assert invalid_transfer.status_code == 409
+        assert (
+            await client.get(f"/api/client/v1/transfers/{missing}", headers=headers)
+        ).status_code == 404
+        assert (
+            await client.post(
+                f"/api/client/v1/transfers/{missing}/reverse",
+                headers=headers | {"Idempotency-Key": "missing-transfer-reverse"},
+            )
+        ).status_code == 404
+        assert (
+            await client.get("/api/client/v1/entries/INVALID", headers=headers)
+        ).status_code == 404

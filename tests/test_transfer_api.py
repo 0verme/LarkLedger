@@ -161,3 +161,200 @@ async def test_api_rejects_bare_ids_outside_current_ledger(api_setup) -> None:
                 f"/api/client/v1/accounts/{outside_account.id}/balance", headers=headers
             )
         ).status_code == 404
+
+
+async def test_web_account_transfer_and_client_credential_lifecycle(api_setup) -> None:
+    app, factory, _, principal = api_setup
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://ledger.test"
+    ) as client:
+        listed_credentials = await client.get("/api/web/v1/client-credentials")
+        assert listed_credentials.status_code == 200
+        created_credential = await client.post(
+            "/api/web/v1/client-credentials",
+            json={
+                "name": "acceptance device",
+                "scopes": ["ledger:read", "ledger:write", "pending:write"],
+            },
+        )
+        assert created_credential.status_code == 201
+        credential_id = created_credential.json()["id"]
+        assert created_credential.json()["token"].startswith("llv1_")
+
+        initial = await client.get("/api/web/v1/accounts")
+        assert initial.status_code == 200
+        original_default = initial.json()["items"][0]["id"]
+        asset = await client.post(
+            "/api/web/v1/accounts",
+            json={
+                "name": "Web asset",
+                "type": "asset",
+                "opening_balance": "75.00",
+            },
+        )
+        assert asset.status_code == 201
+        asset_id = asset.json()["id"]
+        liability = await client.post(
+            "/api/web/v1/accounts",
+            json={
+                "name": "Web liability",
+                "type": "liability",
+                "opening_balance": "10.00",
+            },
+        )
+        assert liability.status_code == 201
+        liability_id = liability.json()["id"]
+        renamed = await client.patch(
+            f"/api/web/v1/accounts/{asset_id}", json={"name": "Web cash asset"}
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "Web cash asset"
+        assert (await client.get(f"/api/web/v1/accounts/{asset_id}")).status_code == 200
+        assert (
+            await client.post(f"/api/web/v1/accounts/{asset_id}/default")
+        ).status_code == 200
+        archived = await client.post(f"/api/web/v1/accounts/{original_default}/archive")
+        assert archived.status_code == 200
+        assert archived.json()["status"] == "archived"
+        assert (
+            await client.get("/api/web/v1/accounts?include_archived=true")
+        ).status_code == 200
+        assert (
+            await client.get(f"/api/web/v1/accounts/{asset_id}/balance")
+        ).status_code == 200
+        assets = await client.get("/api/web/v1/assets")
+        assert assets.status_code == 200
+        assert assets.json()["net_assets"] == "85.00"
+
+        transfer = await client.post(
+            "/api/web/v1/transfers",
+            json={
+                "from_account_id": asset_id,
+                "to_account_id": liability_id,
+                "amount": "5.00",
+                "occurred_at": "2026-08-09T12:00:00+08:00",
+                "note": "web transfer",
+            },
+        )
+        assert transfer.status_code == 201
+        transfer_id = transfer.json()["id"]
+        assert (
+            await client.get(f"/api/web/v1/transfers/{transfer_id}")
+        ).status_code == 200
+        reversed_transfer = await client.post(
+            f"/api/web/v1/transfers/{transfer_id}/reverse"
+        )
+        assert reversed_transfer.status_code == 200
+        assert reversed_transfer.json()["reversed_at"] is not None
+
+        missing_account = uuid.uuid4()
+        assert (
+            await client.get(f"/api/web/v1/accounts/{missing_account}")
+        ).status_code == 404
+        assert (
+            await client.get(f"/api/web/v1/accounts/{missing_account}/balance")
+        ).status_code == 404
+        assert (
+            await client.get(f"/api/web/v1/transfers/{uuid.uuid4()}")
+        ).status_code == 404
+
+        revoked = await client.delete(f"/api/web/v1/client-credentials/{credential_id}")
+        assert revoked.status_code == 204
+        async with factory() as session:
+            accounts = await AccountService(session).list(
+                principal.request_context, include_archived=True
+            )
+            assert len(accounts) == 4
+
+
+async def test_web_household_and_ledger_management_lifecycle(api_setup) -> None:
+    app, factory, _, owner = api_setup
+    async with factory() as session:
+        member_context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_web_member")
+        member = DashboardPrincipal(
+            session_id=uuid.uuid4(),
+            user_id=member_context.actor_user_id,
+            ledger_id=member_context.ledger_id,
+            user_open_id="ou_web_member",
+            display_name="member",
+            avatar_url="",
+            role="USER",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        await session.commit()
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://ledger.test"
+    ) as client:
+        ledgers = await client.get("/api/web/v1/ledgers")
+        assert ledgers.status_code == 200
+        assert (await client.get("/api/web/v1/ledgers/current")).status_code == 200
+        new_ledger = await client.post(
+            "/api/web/v1/ledgers", json={"name": "Web acceptance ledger"}
+        )
+        assert new_ledger.status_code == 201
+        ledger_id = new_ledger.json()["id"]
+        renamed_ledger = await client.patch(
+            f"/api/web/v1/ledgers/{ledger_id}", json={"name": "Web renamed ledger"}
+        )
+        assert renamed_ledger.status_code == 200
+        assert renamed_ledger.json()["name"] == "Web renamed ledger"
+        assert (
+            await client.post(f"/api/web/v1/ledgers/{ledger_id}/default")
+        ).status_code == 200
+
+        household = await client.post(
+            "/api/web/v1/households", json={"name": "Web acceptance family"}
+        )
+        assert household.status_code == 201
+        household_id = household.json()["id"]
+        assert (await client.get("/api/web/v1/households")).status_code == 200
+        detail = await client.get(f"/api/web/v1/households/{household_id}")
+        assert detail.status_code == 200
+        renamed = await client.patch(
+            f"/api/web/v1/households/{household_id}",
+            json={"name": "Web renamed family"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "Web renamed family"
+        assert (
+            await client.get(f"/api/web/v1/households/{household_id}/members")
+        ).status_code == 200
+        invitation = await client.post(
+            f"/api/web/v1/households/{household_id}/invitations",
+            json={"target": "ou_web_member"},
+        )
+        assert invitation.status_code == 201
+        invitation_id = invitation.json()["id"]
+
+        app.dependency_overrides[current_principal] = lambda: member
+        app.dependency_overrides[csrf_principal] = lambda: member
+        invitations = await client.get("/api/web/v1/household-invitations")
+        assert invitations.status_code == 200
+        assert invitations.json()[0]["id"] == invitation_id
+        accepted = await client.post(
+            f"/api/web/v1/household-invitations/{invitation_id}/accept"
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["status"] == "accepted"
+        assert (
+            await client.get(f"/api/web/v1/households/{household_id}")
+        ).status_code == 200
+        assert (
+            await client.post(f"/api/web/v1/households/{household_id}/leave")
+        ).status_code == 204
+
+        app.dependency_overrides[current_principal] = lambda: owner
+        app.dependency_overrides[csrf_principal] = lambda: owner
+        missing = uuid.uuid4()
+        assert (await client.get(f"/api/web/v1/households/{missing}")).status_code == 404
+        assert (
+            await client.patch(
+                f"/api/web/v1/households/{missing}", json={"name": "missing"}
+            )
+        ).status_code == 404
+        assert (
+            await client.get(f"/api/web/v1/households/{missing}/members")
+        ).status_code == 404

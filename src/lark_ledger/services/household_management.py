@@ -203,6 +203,8 @@ class HouseholdManagementService:
         view.ledger.name = f"{display}公共账本"
         view.ledger.normalized_name = f"{normalized}公共账本"
         await self._session.flush()
+        await self._session.refresh(view.household)
+        await self._session.refresh(view.ledger)
         return view
 
     async def resolve_target(self, target: str) -> tuple[User, ChannelIdentity | None]:
