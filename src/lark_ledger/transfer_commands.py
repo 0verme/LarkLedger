@@ -6,13 +6,16 @@ from decimal import Decimal, InvalidOperation
 
 from lark_ledger.schemas import Action, ParsedCommand
 
+# Account names are matched without digits so the amount can be glued to the
+# target name ("支付宝1000元") and still split cleanly; \s* between the target
+# name and the amount accepts both "支付宝 100元" and "支付宝100元".
 _ARROW_TRANSFER = re.compile(
     r"^\s*(?P<from>[^→>-]{1,64}?)\s*(?:→|->|转到|转入)\s*"
-    r"(?P<to>[^\d]{1,64}?)\s+(?P<amount>\d+(?:\.\d{1,2})?)\s*(?:元|块)?\s*$"
+    r"(?P<to>[^\d]{1,64}?)\s*(?P<amount>\d+(?:\.\d{1,2})?)\s*(?:元|块)?\s*$"
 )
 _FROM_TRANSFER = re.compile(
     r"^\s*(?:从)\s*(?P<from>.{1,64}?)\s*(?:转到|转入|转给)\s*"
-    r"(?P<to>[^\d]{1,64}?)\s+(?P<amount>\d+(?:\.\d{1,2})?)\s*(?:元|块)?\s*$"
+    r"(?P<to>[^\d]{1,64}?)\s*(?P<amount>\d+(?:\.\d{1,2})?)\s*(?:元|块)?\s*$"
 )
 
 
