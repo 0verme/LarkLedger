@@ -58,9 +58,35 @@ export type Ledger = {
   is_current: boolean;
   currency: string;
   timezone: string;
+  kind: "personal" | "household_shared" | "business";
+  household_id: string | null;
 };
 
 export type LedgerList = { items: Ledger[] };
+
+export type HouseholdMember = { user_id: string; display_name: string; role: "owner" | "member"; joined_at: string | null };
+export type Household = {
+  id: string;
+  name: string;
+  owner_user_id: string;
+  role: "owner" | "member";
+  status: string;
+  ledger: Ledger;
+  created_at: string;
+  updated_at: string;
+  members: HouseholdMember[] | null;
+};
+export type HouseholdList = { items: Household[] };
+export type HouseholdInvitation = {
+  id: string;
+  invitation_code: string;
+  household_id: string;
+  household_name: string;
+  target_user_id: string;
+  status: string;
+  expires_at: string;
+  created_at: string;
+};
 
 export type PendingSummary = {
   confirmation_id: string;

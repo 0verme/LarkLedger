@@ -3,6 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
 from lark_ledger.models import ChannelIdentity, Ledger, LedgerKind, User, UserStatus
+from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import normalize_ledger_name
 
 
@@ -76,12 +77,10 @@ class IdentityService:
                 raise RuntimeError("user has no default ledger")
             ledger = None
             if identity.current_ledger_id is not None:
-                ledger = await self._session.scalar(
-                    select(Ledger).where(
-                        Ledger.id == identity.current_ledger_id,
-                        Ledger.owner_user_id == user.id,
-                    )
-                )
+                if await LedgerAuthorizationService(self._session).can_access(
+                    user.id, identity.current_ledger_id
+                ):
+                    ledger = await self._session.get(Ledger, identity.current_ledger_id)
             if ledger is None:
                 ledger = default_ledger
                 identity.current_ledger_id = ledger.id

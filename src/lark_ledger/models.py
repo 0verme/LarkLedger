@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -45,6 +46,30 @@ class LedgerKind(StrEnum):
     BUSINESS = "business"
 
 
+class HouseholdStatus(StrEnum):
+    ACTIVE = "active"
+    ARCHIVED = "archived"
+
+
+class HouseholdRole(StrEnum):
+    OWNER = "owner"
+    MEMBER = "member"
+
+
+class HouseholdMemberStatus(StrEnum):
+    ACTIVE = "active"
+    LEFT = "left"
+    REMOVED = "removed"
+
+
+class HouseholdInvitationStatus(StrEnum):
+    PENDING = "pending"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+    CANCELLED = "cancelled"
+    EXPIRED = "expired"
+
+
 class User(Base):
     """Platform-independent person known to the ledger core."""
 
@@ -75,11 +100,27 @@ class Ledger(Base):
         ),
         Index("ix_ledgers_owner_created", "owner_user_id", "created_at"),
         UniqueConstraint("owner_user_id", "normalized_name", name="uq_ledgers_owner_name"),
+        Index(
+            "uq_ledgers_household_shared",
+            "household_id",
+            unique=True,
+            postgresql_where=text("kind = 'household_shared'"),
+            sqlite_where=text("kind = 'household_shared'"),
+        ),
+        CheckConstraint(
+            "(kind = 'household_shared' AND household_id IS NOT NULL AND owner_user_id IS NULL "
+            "AND is_default = false) OR "
+            "(kind <> 'household_shared' AND household_id IS NULL AND owner_user_id IS NOT NULL)",
+            name="ck_ledgers_ownership_scope",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    owner_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
+    )
+    household_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("households.id", ondelete="RESTRICT"), nullable=True
     )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     normalized_name: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -89,6 +130,113 @@ class Ledger(Base):
     is_default: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default=text("false")
     )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class Household(Base):
+    __tablename__ = "households"
+    __table_args__ = (
+        UniqueConstraint("owner_user_id", "normalized_name", name="uq_households_owner_name"),
+        Index("ix_households_owner_created", "owner_user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=HouseholdStatus.ACTIVE.value
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class HouseholdMember(Base):
+    __tablename__ = "household_members"
+    __table_args__ = (
+        UniqueConstraint("household_id", "user_id", name="uq_household_members_user"),
+        Index(
+            "uq_household_members_active_owner",
+            "household_id",
+            unique=True,
+            postgresql_where=text("role = 'owner' AND status = 'active'"),
+            sqlite_where=text("role = 'owner' AND status = 'active'"),
+        ),
+        Index("ix_household_members_user_status", "user_id", "status"),
+        CheckConstraint("role IN ('owner', 'member')", name="ck_household_members_role"),
+        CheckConstraint(
+            "status IN ('active', 'left', 'removed')", name="ck_household_members_status"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    joined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class HouseholdInvitation(Base):
+    __tablename__ = "household_invitations"
+    __table_args__ = (
+        UniqueConstraint("public_id", name="uq_household_invitations_public_id"),
+        Index(
+            "uq_household_invitations_active_target",
+            "household_id",
+            "target_user_id",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+            sqlite_where=text("status = 'pending'"),
+        ),
+        Index("ix_household_invitations_target_status", "target_user_id", "status"),
+        Index("ix_household_invitations_expires", "status", "expires_at"),
+        CheckConstraint(
+            "status IN ('pending', 'accepted', 'rejected', 'cancelled', 'expired')",
+            name="ck_household_invitations_status",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    public_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    household_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("households.id", ondelete="CASCADE"), nullable=False
+    )
+    inviter_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    target_channel_identity_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channel_identities.id", ondelete="SET NULL"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=HouseholdInvitationStatus.PENDING.value
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -128,9 +276,7 @@ class LedgerEntry(Base):
     __table_args__ = (
         Index("ix_entries_user_occurred", "user_open_id", "occurred_at"),
         Index("ix_entries_user_category", "user_open_id", "category"),
-        UniqueConstraint(
-            "source_message_id", "source_item_index", name="uq_entries_source_item"
-        ),
+        UniqueConstraint("source_message_id", "source_item_index", name="uq_entries_source_item"),
         UniqueConstraint("ledger_id", "short_id", name="uq_entries_ledger_short_id"),
         Index("ix_entries_ledger_occurred", "ledger_id", "occurred_at"),
         Index("ix_entries_ledger_category", "ledger_id", "category"),
@@ -164,9 +310,7 @@ class LedgerEntry(Base):
 
 class CategoryBudget(Base):
     __tablename__ = "category_budgets"
-    __table_args__ = (
-        UniqueConstraint("ledger_id", "category", name="uq_budgets_ledger_category"),
-    )
+    __table_args__ = (UniqueConstraint("ledger_id", "category", name="uq_budgets_ledger_category"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_open_id: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -245,9 +389,7 @@ class ProcessedEvent(Base):
     business_committed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    next_attempt_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -274,9 +416,7 @@ class EventReplayAudit(Base):
     """
 
     __tablename__ = "event_replay_audits"
-    __table_args__ = (
-        Index("ix_event_replay_audits_event_created", "event_id", "created_at"),
-    )
+    __table_args__ = (Index("ix_event_replay_audits_event_created", "event_id", "created_at"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_id: Mapped[str] = mapped_column(String(128), nullable=False)
@@ -342,9 +482,7 @@ class ReplyOutbox(Base):
     attempt_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
-    next_attempt_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     lease_owner: Mapped[str | None] = mapped_column(String(128), nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
@@ -431,9 +569,7 @@ class PendingCommand(Base):
 
     __tablename__ = "pending_commands"
     __table_args__ = (
-        UniqueConstraint(
-            "user_open_id", "confirmation_code", name="uq_pending_user_code"
-        ),
+        UniqueConstraint("user_open_id", "confirmation_code", name="uq_pending_user_code"),
         UniqueConstraint("source_event_id", name="uq_pending_source_event"),
         Index(
             "uq_pending_ledger_active_fingerprint",
@@ -441,12 +577,10 @@ class PendingCommand(Base):
             "source_fingerprint",
             unique=True,
             postgresql_where=text(
-                "source_fingerprint IS NOT NULL "
-                "AND status IN ('pending', 'executing')"
+                "source_fingerprint IS NOT NULL AND status IN ('pending', 'executing')"
             ),
             sqlite_where=text(
-                "source_fingerprint IS NOT NULL "
-                "AND status IN ('pending', 'executing')"
+                "source_fingerprint IS NOT NULL AND status IN ('pending', 'executing')"
             ),
         ),
         Index("ix_pending_status_expires", "status", "expires_at"),

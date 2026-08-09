@@ -361,11 +361,18 @@ class WebLedgerQueryService:
             return PendingCommand.user_open_id == scope
         legacy = cls._legacy_subject(scope)
         if legacy is None:
-            return PendingCommand.actor_user_id == scope.actor_user_id
+            return and_(
+                PendingCommand.actor_user_id == scope.actor_user_id,
+                PendingCommand.ledger_id == scope.ledger_id,
+            )
         return or_(
-            PendingCommand.actor_user_id == scope.actor_user_id,
+            and_(
+                PendingCommand.actor_user_id == scope.actor_user_id,
+                PendingCommand.ledger_id == scope.ledger_id,
+            ),
             and_(
                 PendingCommand.actor_user_id.is_(None),
+                PendingCommand.ledger_id.is_(None),
                 PendingCommand.user_open_id == legacy,
             ),
         )

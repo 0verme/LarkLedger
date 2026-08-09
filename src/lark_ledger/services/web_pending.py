@@ -101,11 +101,18 @@ class WebPendingQueryService:
         if isinstance(scope, str):
             return PendingCommand.user_open_id == scope
         if scope.external_subject_id is None:
-            return PendingCommand.actor_user_id == scope.actor_user_id
+            return and_(
+                PendingCommand.actor_user_id == scope.actor_user_id,
+                PendingCommand.ledger_id == scope.ledger_id,
+            )
         return or_(
-            PendingCommand.actor_user_id == scope.actor_user_id,
+            and_(
+                PendingCommand.actor_user_id == scope.actor_user_id,
+                PendingCommand.ledger_id == scope.ledger_id,
+            ),
             and_(
                 PendingCommand.actor_user_id.is_(None),
+                PendingCommand.ledger_id.is_(None),
                 PendingCommand.user_open_id == scope.external_subject_id,
             ),
         )

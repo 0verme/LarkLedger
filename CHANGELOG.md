@@ -6,6 +6,13 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Added
 
+- **Household Spaces MVP** adds owner/member households, persisted invitations,
+  deterministic Feishu commands, authenticated Web management, and one
+  automatically provisioned `household_shared` ledger per household.
+- Alembic migration `20260809_0017` adds households, memberships, invitations,
+  shared-ledger linkage, partial unique indexes, checks, and lossless 0016 data
+  compatibility.
+
 - **Personal multi-ledger MVP** adds an independent ledger management service,
   deterministic Feishu commands, authenticated Web APIs, and a minimal
   Dashboard selector for create/list/current/select/default/rename workflows.
@@ -20,6 +27,12 @@ All notable changes to LarkLedger are documented in this file. The project follo
   ledger ownership without deleting or rewriting legacy `user_open_id` values.
 
 ### Changed
+
+- Ledger authorization is centralized: personal ledgers require their owner,
+  while household ledgers require an active membership. Invalid persisted
+  Feishu or Dashboard selections fall back to the default personal ledger.
+- Frozen pending confirmations re-authorize their creation-time ledger before
+  execution; leaving or removal never redirects a pending write to another ledger.
 
 - Ledger short IDs, category budgets, active media fingerprints, analytics,
   reports, exports, revisions, and pending confirmations are ledger-scoped.

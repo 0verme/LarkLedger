@@ -55,7 +55,7 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260809_0016"
+    assert revision == "20260809_0017"
 
 
 async def test_readiness_uses_real_postgres_and_current_alembic_revision(
@@ -78,8 +78,8 @@ async def test_readiness_uses_real_postgres_and_current_alembic_revision(
     assert result["checks"]["database"] == {"status": "ok"}
     assert result["checks"]["migration"] == {
         "status": "ok",
-        "current": "20260809_0016",
-        "expected": "20260809_0016",
+        "current": "20260809_0017",
+        "expected": "20260809_0017",
     }
 
 
@@ -255,7 +255,7 @@ async def test_export_entries_query_on_postgres(
         assert "#EX002" in with_deleted.export.content.decode("utf-8-sig")
 
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "20260809_0016"
+        assert revision == "20260809_0017"
 
 
 async def test_short_id_unique_per_ledger_allows_cross_ledger_reuse(

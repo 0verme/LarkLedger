@@ -14,7 +14,7 @@ from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
-from lark_ledger.models import CategoryBudget, Ledger, LedgerEntry
+from lark_ledger.models import CategoryBudget, LedgerEntry
 from lark_ledger.schemas import (
     MAX_EXPORT_ROWS as MAX_EXPORT_ROWS,  # noqa: F401  # re-exported; tests patch lark_ledger.services.ledger.MAX_EXPORT_ROWS
 )
@@ -28,6 +28,10 @@ from lark_ledger.services.export import (
     build_export_file as build_export_file,  # noqa: F401  # re-exported; tests patch lark_ledger.services.ledger.build_export_file
 )
 from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.ledger_authorization import (
+    LedgerAuthorizationError,
+    LedgerAuthorizationService,
+)
 from lark_ledger.services.ledger_budgets import _BudgetMixin
 from lark_ledger.services.ledger_entries import (
     EntryConflictError as EntryConflictError,  # noqa: F401  # re-exported for existing callers
@@ -188,14 +192,12 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin):
 
     async def _authorize_context(self) -> None:
         context = self._request_context()
-        allowed = await self.session.scalar(
-            select(Ledger.id).where(
-                Ledger.id == context.ledger_id,
-                Ledger.owner_user_id == context.actor_user_id,
+        try:
+            await LedgerAuthorizationService(self.session).get_accessible(
+                context.actor_user_id, context.ledger_id
             )
-        )
-        if allowed is None:
-            raise LedgerAccessDeniedError("actor cannot access the requested ledger")
+        except LedgerAuthorizationError as exc:
+            raise LedgerAccessDeniedError("actor cannot access the requested ledger") from exc
 
     def _entry_scope(self, legacy_subject: str) -> Any:
         """Use ledger_id as the authority, with a nullable expand-migration fallback."""
@@ -279,9 +281,7 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin):
     def _conversion_note(converted: _ConvertedAmount) -> str:
         if not converted.was_converted:
             return ""
-        return (
-            f"（由 {converted.original_amount:.2f} {converted.original_currency} 约算）"
-        )
+        return f"（由 {converted.original_amount:.2f} {converted.original_currency} 约算）"
 
     def _current_local_datetime(self) -> datetime:
         return self._local_datetime(self.now or datetime.now(UTC))

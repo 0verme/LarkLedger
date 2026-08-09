@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lark_ledger import __version__
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
-from lark_ledger.models import Direction, Ledger
+from lark_ledger.models import Direction, Household, HouseholdInvitation, Ledger
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.dashboard_auth import (
@@ -29,6 +29,14 @@ from lark_ledger.services.dashboard_auth import (
     DashboardPrincipal,
 )
 from lark_ledger.services.event_replay import EventReplayService
+from lark_ledger.services.household_management import (
+    HouseholdConflictError,
+    HouseholdManagementError,
+    HouseholdManagementService,
+    HouseholdNotFoundError,
+    HouseholdPermissionError,
+    HouseholdView,
+)
 from lark_ledger.services.ledger import EntryConflictError, LedgerService
 from lark_ledger.services.ledger_management import (
     LedgerManagementError,
@@ -65,6 +73,9 @@ from lark_ledger.web_schemas import (
     EntryVersionRequest,
     EventReplayRequest,
     ExportRequestBody,
+    HouseholdCreateRequest,
+    HouseholdInviteRequest,
+    HouseholdList,
     LedgerList,
     LedgerNameRequest,
     PendingActionResponse,
@@ -74,6 +85,9 @@ from lark_ledger.web_schemas import (
     ResultReplayResponse,
     SafeSystemConfig,
     SortOrder,
+    WebHousehold,
+    WebHouseholdInvitation,
+    WebHouseholdMember,
     WebLedger,
 )
 
@@ -239,6 +253,8 @@ def _web_ledger(ledger: Ledger, current_id: uuid.UUID) -> WebLedger:
         is_current=ledger.id == current_id,
         currency=ledger.currency,
         timezone=ledger.timezone,
+        kind=ledger.kind,
+        household_id=str(ledger.household_id) if ledger.household_id else None,
     )
 
 
@@ -260,7 +276,7 @@ async def list_ledgers(
     async with factory() as session:
         rows = await LedgerManagementService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).list_owned(principal.user_id)
+        ).list_accessible(principal.user_id)
         return LedgerList(items=[_web_ledger(row, principal.ledger_id) for row in rows])
 
 
@@ -275,7 +291,7 @@ async def current_ledger(
         try:
             row = await LedgerManagementService(
                 session, currency=settings.currency, timezone=settings.timezone
-            ).get_owned(principal.user_id, principal.ledger_id)
+            ).get_accessible(principal.user_id, principal.ledger_id)
         except LedgerManagementError as exc:
             raise _ledger_http_error(exc) from exc
         return _web_ledger(row, principal.ledger_id)
@@ -366,6 +382,333 @@ async def set_default_ledger(
             await session.rollback()
             raise _ledger_http_error(exc) from exc
         return _web_ledger(row, principal.ledger_id)
+
+
+def _household_http_error(exc: HouseholdManagementError) -> HTTPException:
+    if isinstance(exc, HouseholdPermissionError):
+        return HTTPException(status_code=403, detail=str(exc))
+    if isinstance(exc, HouseholdNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, HouseholdConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+async def _web_household(
+    manager: HouseholdManagementService,
+    view: HouseholdView,
+    current_ledger_id: uuid.UUID,
+    *,
+    include_members: bool,
+) -> WebHousehold:
+    members = None
+    if include_members:
+        rows = await manager.list_members(view.membership.user_id, view.household.id)
+        members = [
+            WebHouseholdMember(
+                user_id=str(item.user.id),
+                display_name=item.user.display_name,
+                role=item.membership.role,
+                joined_at=item.membership.joined_at,
+            )
+            for item in rows
+        ]
+    return WebHousehold(
+        id=str(view.household.id),
+        name=view.household.name,
+        owner_user_id=str(view.household.owner_user_id),
+        role=view.membership.role,
+        status=view.household.status,
+        ledger=_web_ledger(view.ledger, current_ledger_id),
+        created_at=view.household.created_at,
+        updated_at=view.household.updated_at,
+        members=members,
+    )
+
+
+@router.get("/households", response_model=HouseholdList)
+async def list_households(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> HouseholdList:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        views = await manager.list_for_user(principal.user_id)
+        return HouseholdList(
+            items=[
+                await _web_household(manager, view, principal.ledger_id, include_members=False)
+                for view in views
+            ]
+        )
+
+
+@router.post("/households", response_model=WebHousehold, status_code=201)
+async def create_household(
+    body: HouseholdCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebHousehold:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            view = await manager.create(principal.user_id, body.name)
+            await session.commit()
+        except HouseholdManagementError as exc:
+            await session.rollback()
+            raise _household_http_error(exc) from exc
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="家庭名称或公共账本冲突") from exc
+        return await _web_household(manager, view, principal.ledger_id, include_members=True)
+
+
+@router.get("/households/{household_id}", response_model=WebHousehold)
+async def household_detail(
+    household_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> WebHousehold:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            view = await manager.get(principal.user_id, household_id)
+        except HouseholdManagementError as exc:
+            raise _household_http_error(exc) from exc
+        return await _web_household(manager, view, principal.ledger_id, include_members=True)
+
+
+@router.patch("/households/{household_id}", response_model=WebHousehold)
+async def rename_household(
+    household_id: uuid.UUID,
+    body: HouseholdCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebHousehold:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            view = await manager.rename(principal.user_id, household_id, body.name)
+            await session.commit()
+        except HouseholdManagementError as exc:
+            await session.rollback()
+            raise _household_http_error(exc) from exc
+        return await _web_household(manager, view, principal.ledger_id, include_members=True)
+
+
+@router.get("/households/{household_id}/members", response_model=list[WebHouseholdMember])
+async def household_members(
+    household_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> list[WebHouseholdMember]:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            rows = await manager.list_members(principal.user_id, household_id)
+        except HouseholdManagementError as exc:
+            raise _household_http_error(exc) from exc
+        return [
+            WebHouseholdMember(
+                user_id=str(item.user.id),
+                display_name=item.user.display_name,
+                role=item.membership.role,
+                joined_at=item.membership.joined_at,
+            )
+            for item in rows
+        ]
+
+
+async def _web_invitation(
+    session: AsyncSession, invitation: HouseholdInvitation
+) -> WebHouseholdInvitation:
+    household = await session.get(Household, invitation.household_id)
+    return WebHouseholdInvitation(
+        id=str(invitation.id),
+        invitation_code=invitation.public_id,
+        household_id=str(invitation.household_id),
+        household_name=household.name if household else "未知家庭",
+        target_user_id=str(invitation.target_user_id),
+        status=invitation.status,
+        expires_at=invitation.expires_at,
+        created_at=invitation.created_at,
+    )
+
+
+@router.post(
+    "/households/{household_id}/invitations",
+    response_model=WebHouseholdInvitation,
+    status_code=201,
+)
+async def invite_household_member(
+    household_id: uuid.UUID,
+    body: HouseholdInviteRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebHouseholdInvitation:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            invitation = await manager.invite(principal.user_id, household_id, body.target)
+            await session.commit()
+        except HouseholdManagementError as exc:
+            await session.rollback()
+            raise _household_http_error(exc) from exc
+        except IntegrityError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail="该用户已有待处理邀请") from exc
+        return await _web_invitation(session, invitation)
+
+
+@router.get("/household-invitations", response_model=list[WebHouseholdInvitation])
+async def household_invitations(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> list[WebHouseholdInvitation]:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        rows = await manager.list_invitations(principal.user_id)
+        await session.commit()
+        return [await _web_invitation(session, item) for item in rows]
+
+
+async def _respond_invitation(
+    *,
+    invitation_id: uuid.UUID,
+    request: Request,
+    principal: DashboardPrincipal,
+    action: str,
+) -> WebHouseholdInvitation:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            if action == "accept":
+                invitation = await manager.accept(principal.user_id, invitation_id)
+            elif action == "reject":
+                invitation = await manager.reject(principal.user_id, invitation_id)
+            else:
+                invitation = await manager.cancel_invitation(principal.user_id, invitation_id)
+            await session.commit()
+        except HouseholdManagementError as exc:
+            await session.rollback()
+            raise _household_http_error(exc) from exc
+        return await _web_invitation(session, invitation)
+
+
+@router.post(
+    "/household-invitations/{invitation_id}/accept",
+    response_model=WebHouseholdInvitation,
+)
+async def accept_household_invitation(
+    invitation_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebHouseholdInvitation:
+    return await _respond_invitation(
+        invitation_id=invitation_id, request=request, principal=principal, action="accept"
+    )
+
+
+@router.post(
+    "/household-invitations/{invitation_id}/reject",
+    response_model=WebHouseholdInvitation,
+)
+async def reject_household_invitation(
+    invitation_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebHouseholdInvitation:
+    return await _respond_invitation(
+        invitation_id=invitation_id, request=request, principal=principal, action="reject"
+    )
+
+
+@router.post(
+    "/household-invitations/{invitation_id}/cancel",
+    response_model=WebHouseholdInvitation,
+)
+async def cancel_household_invitation(
+    invitation_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebHouseholdInvitation:
+    return await _respond_invitation(
+        invitation_id=invitation_id, request=request, principal=principal, action="cancel"
+    )
+
+
+@router.post("/households/{household_id}/leave", status_code=204)
+async def leave_household(
+    household_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            await manager.leave(principal.user_id, household_id)
+            await session.commit()
+        except HouseholdManagementError as exc:
+            await session.rollback()
+            raise _household_http_error(exc) from exc
+    return Response(status_code=204)
+
+
+@router.delete("/households/{household_id}/members/{user_id}", status_code=204)
+async def remove_household_member(
+    household_id: uuid.UUID,
+    user_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            await manager.remove_member(principal.user_id, household_id, user_id)
+            await session.commit()
+        except HouseholdManagementError as exc:
+            await session.rollback()
+            raise _household_http_error(exc) from exc
+    return Response(status_code=204)
 
 
 @router.get("/dashboard", response_model=DashboardData)

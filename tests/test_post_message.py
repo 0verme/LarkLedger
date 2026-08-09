@@ -119,6 +119,33 @@ async def test_ledger_commands_are_deterministic_and_do_not_call_ai(session: Any
     assert selected_name == "旅行"
 
 
+async def test_household_commands_are_deterministic_and_do_not_call_ai(session: Any) -> None:
+    await IdentityService(
+        session, currency="CNY", timezone="Asia/Shanghai"
+    ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_target")
+    interpreter = CapturingInterpreter()
+    feishu = RecordingFeishu()
+    processor = MessageProcessor(
+        Settings(_env_file=None),
+        lambda: session,  # type: ignore[arg-type]
+        feishu,  # type: ignore[arg-type]
+        interpreter,  # type: ignore[arg-type]
+    )
+
+    await processor.process(text_event("创建家庭 小家", "om_house_create"))
+    await processor.process(text_event("家庭列表", "om_house_list"))
+    await processor.process(text_event("邀请家庭成员 ou_target", "om_house_invite"))
+    await processor.process(text_event("邀请家庭成员 小明", "om_house_invalid"))
+
+    assert interpreter.calls == []
+    assert any("已创建家庭：小家" in text and "小家公共账本" in text for text in feishu.texts)
+    assert any("家庭列表" in text and "小家" in text for text in feishu.texts)
+    assert any(
+        "邀请编号" in text and "小家公共账本" in text for text in feishu.texts
+    ), feishu.texts
+    assert any("open_id" in text for text in feishu.texts)
+
+
 def test_parse_post_content_collects_text_and_deduplicates_images() -> None:
     text, image_keys = MessageProcessor._parse_post_content(
         {

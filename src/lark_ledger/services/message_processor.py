@@ -19,12 +19,17 @@ from lark_ledger.entry_commands import (
     try_parse_deterministic_entry_command,
     try_parse_pending_directive,
 )
+from lark_ledger.household_commands import (
+    HouseholdCommand,
+    HouseholdCommandAction,
+    try_parse_household_command,
+)
 from lark_ledger.ledger_commands import (
     LedgerCommand,
     LedgerCommandAction,
     try_parse_ledger_command,
 )
-from lark_ledger.models import ProcessedEvent, ReplyOutbox
+from lark_ledger.models import Household, Ledger, ProcessedEvent, ReplyOutbox, User
 from lark_ledger.outbox import (
     OUTBOX_PAYLOAD_VERSION,
     ReplyStatus,
@@ -43,6 +48,11 @@ from lark_ledger.schemas import (
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.feishu_client import FeishuClient, _media_fingerprint, logger
+from lark_ledger.services.household_management import (
+    HouseholdManagementError,
+    HouseholdManagementService,
+    HouseholdView,
+)
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_management import (
@@ -178,9 +188,7 @@ class MessageProcessor:
                         )
                     )
                 elif not text:
-                    await self.feishu.reply_text(
-                        message_id, "这条富文本中没有可识别的文字或图片。"
-                    )
+                    await self.feishu.reply_text(message_id, "这条富文本中没有可识别的文字或图片。")
                     return
             elif message_type in {"audio", "file"}:
                 if not self.interpreter.transcription_configured:
@@ -202,15 +210,11 @@ class MessageProcessor:
                 )
                 return
             stage = "vision_interpretation" if images else "interpretation"
-            source_fingerprint = (
-                _media_fingerprint(source_type, text, images) if images else None
-            )
+            source_fingerprint = _media_fingerprint(source_type, text, images) if images else None
             if (
                 self.settings.pending_enabled
                 and source_fingerprint is not None
-                and (
-                    fingerprint_ledger_id := await self._current_ledger_id(user_open_id)
-                )
+                and (fingerprint_ledger_id := await self._current_ledger_id(user_open_id))
                 and await self._pending_store.has_active_fingerprint(
                     fingerprint_ledger_id, source_fingerprint
                 )
@@ -223,6 +227,21 @@ class MessageProcessor:
                 )
                 return
             if not images:
+                household_command = try_parse_household_command(text)
+                if isinstance(household_command, str):
+                    await self.feishu.reply_text(message_id, household_command)
+                    return
+                if household_command is not None:
+                    stage = "household_management"
+                    outbox_rows = await self._handle_household_command(
+                        household_command,
+                        message_id=message_id,
+                        user_open_id=user_open_id,
+                        event_id=event_id,
+                    )
+                    stage = "reply"
+                    await self._signal_or_deliver(outbox_rows)
+                    return
                 ledger_command = try_parse_ledger_command(text)
                 if isinstance(ledger_command, str):
                     await self.feishu.reply_text(message_id, ledger_command)
@@ -588,8 +607,7 @@ class MessageProcessor:
                 )
                 return []
         logger.info(
-            "pending confirmation created confirmation_code=%s event_id=%s "
-            "risk_reason=%s",
+            "pending confirmation created confirmation_code=%s event_id=%s risk_reason=%s",
             pending.confirmation_code,
             event_id,
             pending.risk_reason,
@@ -739,6 +757,181 @@ class MessageProcessor:
                     parent.business_committed_at = datetime.now(UTC)
             await session.commit()
             return [row]
+
+    async def _handle_household_command(
+        self,
+        command: HouseholdCommand,
+        *,
+        message_id: str,
+        user_open_id: str,
+        event_id: str | None,
+    ) -> list[ReplyOutbox]:
+        async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
+            manager = HouseholdManagementService(
+                session, currency=self.settings.currency, timezone=self.settings.timezone
+            )
+            try:
+                if command.action is HouseholdCommandAction.CREATE:
+                    assert command.argument is not None
+                    view = await manager.create(context.actor_user_id, command.argument)
+                    reply_text = (
+                        f"已创建家庭：{view.household.name}\n"
+                        f"公共账本：{view.ledger.name}\n"
+                        "当前账本未切换。"
+                    )
+                elif command.action is HouseholdCommandAction.LIST:
+                    households = await manager.list_for_user(context.actor_user_id)
+                    if not households:
+                        reply_text = "当前尚未加入家庭空间。"
+                    else:
+                        lines = [
+                            f"{item.household.name} · 公共账本：{item.ledger.name} · "
+                            f"角色：{item.membership.role}"
+                            for item in households
+                        ]
+                        reply_text = "家庭列表：\n" + "\n".join(lines)
+                elif command.action is HouseholdCommandAction.INVITATIONS:
+                    invitations = await manager.list_invitations(context.actor_user_id)
+                    pending = [item for item in invitations if item.status == "pending"]
+                    if not pending:
+                        reply_text = "当前没有待处理的家庭邀请。"
+                    else:
+                        lines = []
+                        for invitation in pending:
+                            household = await session.get(Household, invitation.household_id)
+                            lines.append(
+                                f"{invitation.public_id} · "
+                                f"{household.name if household else '未知家庭'} · "
+                                f"过期：{invitation.expires_at.isoformat()}"
+                            )
+                        reply_text = "家庭邀请列表：\n" + "\n".join(lines)
+                elif command.action in {
+                    HouseholdCommandAction.ACCEPT,
+                    HouseholdCommandAction.REJECT,
+                }:
+                    assert command.argument is not None
+                    invitation = (
+                        await manager.accept(context.actor_user_id, command.argument)
+                        if command.action is HouseholdCommandAction.ACCEPT
+                        else await manager.reject(context.actor_user_id, command.argument)
+                    )
+                    household = await session.get(Household, invitation.household_id)
+                    ledger = await session.scalar(
+                        select(Ledger).where(Ledger.household_id == invitation.household_id)
+                    )
+                    operation = (
+                        "接受" if command.action is HouseholdCommandAction.ACCEPT else "拒绝"
+                    )
+                    reply_text = (
+                        f"已{operation}家庭邀请：{household.name if household else '未知家庭'}。"
+                        + (f"\n公共账本：{ledger.name}" if ledger is not None else "")
+                    )
+                else:
+                    household_name = (
+                        command.argument
+                        if command.action
+                        in {
+                            HouseholdCommandAction.SELECT_LEDGER,
+                            HouseholdCommandAction.LEAVE,
+                        }
+                        else None
+                    )
+                    view = await self._resolve_household_for_command(
+                        manager, context.actor_user_id, context.ledger_id, household_name
+                    )
+                    if command.action is HouseholdCommandAction.CURRENT:
+                        reply_text = (
+                            f"当前家庭：{view.household.name}\n公共账本：{view.ledger.name}\n"
+                            f"角色：{view.membership.role}"
+                        )
+                    elif command.action is HouseholdCommandAction.MEMBERS:
+                        members = await manager.list_members(
+                            context.actor_user_id, view.household.id
+                        )
+                        lines = [
+                            f"{item.user.display_name or str(item.user.id)} · "
+                            f"{item.membership.role}"
+                            for item in members
+                        ]
+                        reply_text = (
+                            f"家庭：{view.household.name}\n公共账本：{view.ledger.name}\n成员：\n"
+                            + "\n".join(lines)
+                        )
+                    elif command.action is HouseholdCommandAction.INVITE:
+                        assert command.argument is not None
+                        invitation = await manager.invite(
+                            context.actor_user_id, view.household.id, command.argument
+                        )
+                        target = await session.get(User, invitation.target_user_id)
+                        target_name = (
+                            target.display_name
+                            if target and target.display_name
+                            else command.argument
+                        )
+                        reply_text = (
+                            f"已邀请 {target_name} 加入家庭："
+                            f"{view.household.name}\n公共账本：{view.ledger.name}\n"
+                            f"邀请编号：{invitation.public_id}"
+                        )
+                    elif command.action is HouseholdCommandAction.SELECT_LEDGER:
+                        if context.channel_identity_id is None:
+                            raise HouseholdManagementError("当前入口身份无法保存账本选择")
+                        await LedgerManagementService(
+                            session,
+                            currency=self.settings.currency,
+                            timezone=self.settings.timezone,
+                        ).select_for_channel(
+                            context.actor_user_id, context.channel_identity_id, view.ledger.id
+                        )
+                        reply_text = (
+                            f"已切换家庭账本：{view.household.name}\n公共账本：{view.ledger.name}"
+                        )
+                    else:
+                        await manager.leave(context.actor_user_id, view.household.id)
+                        reply_text = (
+                            f"已退出家庭：{view.household.name}。\n"
+                            f"已失去公共账本“{view.ledger.name}”的访问权限，当前账本已回退。"
+                        )
+            except HouseholdManagementError as exc:
+                reply_text = str(exc)
+
+            row = self._make_outbox_row(
+                event_id=event_id,
+                message_id=message_id,
+                reply_type=ReplyType.TEXT,
+                sequence=0,
+                payload=build_text_payload(reply_text),
+                blob=None,
+            )
+            session.add(row)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    parent.business_committed_at = datetime.now(UTC)
+            await session.commit()
+            return [row]
+
+    @staticmethod
+    async def _resolve_household_for_command(
+        manager: HouseholdManagementService,
+        user_id: uuid.UUID,
+        current_ledger_id: uuid.UUID,
+        name: str | None,
+    ) -> HouseholdView:
+        if name:
+            return await manager.find_by_name(user_id, name)
+        households = await manager.list_for_user(user_id)
+        current = [item for item in households if item.ledger.id == current_ledger_id]
+        if len(current) == 1:
+            return current[0]
+        if len(households) == 1:
+            return households[0]
+        raise HouseholdManagementError("请先切换家庭账本，或在只有一个家庭时再执行该命令")
 
     async def _business_result_committed(self, event_id: str) -> bool:
         async with self.session_factory() as session:
@@ -924,10 +1117,6 @@ class MessageProcessor:
     async def _notify_export_send_failed(self, message_id: str) -> None:
         """Best-effort direct notice outside the outbox (v0.2.0 UX)."""
         try:
-            await self.feishu.reply_text(
-                message_id, "账单已生成，但发送文件失败，请稍后重试。"
-            )
+            await self.feishu.reply_text(message_id, "账单已生成，但发送文件失败，请稍后重试。")
         except Exception:
-            logger.exception(
-                "failed to send export failure notice message_id=%s", message_id
-            )
+            logger.exception("failed to send export failure notice message_id=%s", message_id)

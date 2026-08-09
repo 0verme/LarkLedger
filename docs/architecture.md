@@ -4,11 +4,11 @@
 
 本文说明 LarkLedger v0.4.0 的运行组件、消息数据流、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
-## 身份与账本边界（Unreleased）
+## 身份、家庭与账本边界（Unreleased）
 
-阶段 2 增加独立的 `LedgerManagementService`。用户默认账本保存在 `ledgers.is_default`（用户内部分唯一索引保证最多一个）；飞书入口当前账本保存在 `channel_identities.current_ledger_id`；Web 当前账本保存在 `dashboard_sessions.ledger_id`。`IdentityService` 和 Dashboard 认证层只在验证账本所有权后构造 `RequestContext`，API body/query 无权指定 `actor_user_id` 或覆盖目标账本。
+阶段 3 增加独立的 `HouseholdManagementService` 与统一 `LedgerAuthorizationService`。个人账本要求 `owner_user_id` 匹配；`household_shared` 账本不伪装成某个成员所有，而是通过 `household_id` 和有效 `household_members` 关系授权。用户默认账本仍只允许 personal；飞书入口当前账本保存在 `channel_identities.current_ledger_id`，Web 当前账本保存在 `dashboard_sessions.ledger_id`。
 
-飞书账本命令在 `AIInterpreter` 之前解析。新入口或新 Dashboard Session 没有显式选择时回退到用户默认账本；切换当前账本与设置默认账本是两个独立操作。Pending 创建时冻结 `actor_user_id + ledger_id`，确认时重新检查所有权并使用冻结值，不读取确认时的当前账本。
+飞书个人账本与家庭命令都在 `AIInterpreter` 之前解析。新入口或新 Dashboard Session 没有显式选择时回退到用户默认个人账本；不会自动进入家庭账本。`IdentityService`、Dashboard 认证和账本选择都调用统一授权服务；失效持久选择会被清除并回退。Pending 创建时冻结 `actor_user_id + ledger_id`，确认时重新检查冻结账本权限并使用冻结值。
 
 飞书 `open_id` 现在只作为 `ChannelIdentity` 的外部主体标识。入口在调用账务核心前
 解析出 `RequestContext(actor_user_id, ledger_id, source_channel)`；账目、预算和 Web
@@ -19,10 +19,12 @@
 Feishu / Web
       │ external subject
       ▼
-ChannelIdentity ──► User ──► default Ledger
-                                │
-                                ▼
-                       Ledger Core / PostgreSQL
+ChannelIdentity ──► User ──► personal Ledger
+                       │
+                       └─► HouseholdMember ──► Household ──► shared Ledger
+                                                            │
+                                                            ▼
+                                                   Ledger Core / PostgreSQL
 ```
 
 Event 与 Reply Outbox 中的外部标识承担接收、重放、审计和投递职责，属于传输层元数据，
@@ -42,6 +44,8 @@ Event 与 Reply Outbox 中的外部标识承担接收、重放、审计和投递
 | `ExchangeRateService` | 获取并缓存外币到默认账本币种的最新参考汇率 |
 | `LedgerService` | 执行固定的记账、修改、撤销、列表、导出查询、汇总、预算和报告逻辑 |
 | `LedgerManagementService` | 校验/规范化账本名，执行个人账本创建、列表、选择、默认和重命名，并验证所有权 |
+| `HouseholdManagementService` | 创建/重命名家庭，管理成员与邀请，并原子创建家庭公共账本 |
+| `LedgerAuthorizationService` | 集中验证个人 owner 或家庭有效成员权限，供账务核心、会话解析、选择和 Pending 复用 |
 | `export` 服务 | 将账目序列化为 CSV Schema v1（注入防护、行数/体积上限、文件名） |
 | `ReportRenderer` | 生成消费报告 PNG 和飞书消息卡片；失败时降级为文字卡片 |
 | PostgreSQL / Alembic | 保存账目、预算、告警阈值和已处理事件，管理 Schema 版本 |

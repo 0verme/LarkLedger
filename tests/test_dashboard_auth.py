@@ -287,3 +287,78 @@ async def test_ledger_http_boundary_enforces_scope_csrf_and_versions(
         )
         assert restored.status_code == 200
         assert restored.json()["entry"]["deleted_at"] is None
+
+
+async def test_household_http_invitation_and_session_ledger_selection(
+    dashboard_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = dashboard_settings()
+    service = DashboardAuthService(settings, dashboard_factory)
+    owner = await service.create_session(
+        {"open_id": "ou_web_owner", "name": "所有者", "avatar_url": ""}
+    )
+    member = await service.create_session(
+        {"open_id": "ou_web_member", "name": "成员", "avatar_url": ""}
+    )
+    outsider = await service.create_session(
+        {"open_id": "ou_web_outsider", "name": "外部", "avatar_url": ""}
+    )
+    app = FastAPI()
+    app.state.settings = settings
+    app.state.session_factory = dashboard_factory
+    app.include_router(router)
+    app.dependency_overrides[_auth_service] = lambda: service
+
+    def client_for(created: Any) -> httpx.AsyncClient:
+        client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://ledger.test"
+        )
+        client.cookies.set(SESSION_COOKIE, created.session_token)
+        client.cookies.set(CSRF_COOKIE, created.csrf_token)
+        return client
+
+    owner_client = client_for(owner)
+    member_client = client_for(member)
+    outsider_client = client_for(outsider)
+    try:
+        created_response = await owner_client.post(
+            "/api/web/v1/households",
+            headers={"X-CSRF-Token": owner.csrf_token},
+            json={"name": "小家"},
+        )
+        assert created_response.status_code == 201
+        household = created_response.json()
+        assert household["ledger"]["kind"] == "household_shared"
+        invitation_response = await owner_client.post(
+            f"/api/web/v1/households/{household['id']}/invitations",
+            headers={"X-CSRF-Token": owner.csrf_token},
+            json={"target": "ou_web_member"},
+        )
+        assert invitation_response.status_code == 201
+        invitation = invitation_response.json()
+        assert (
+            await outsider_client.post(
+                f"/api/web/v1/household-invitations/{invitation['id']}/accept",
+                headers={"X-CSRF-Token": outsider.csrf_token},
+            )
+        ).status_code == 403
+        accepted = await member_client.post(
+            f"/api/web/v1/household-invitations/{invitation['id']}/accept",
+            headers={"X-CSRF-Token": member.csrf_token},
+        )
+        assert accepted.status_code == 200
+        selected = await member_client.post(
+            f"/api/web/v1/ledgers/{household['ledger']['id']}/select",
+            headers={"X-CSRF-Token": member.csrf_token},
+        )
+        assert selected.status_code == 200
+        principal = await service.authenticate(member.session_token)
+        assert str(principal.ledger_id) == household["ledger"]["id"]
+        assert principal.request_context.actor_user_id == member.principal.user_id
+        assert (
+            await outsider_client.get(f"/api/web/v1/households/{household['id']}")
+        ).status_code == 404
+    finally:
+        await owner_client.aclose()
+        await member_client.aclose()
+        await outsider_client.aclose()

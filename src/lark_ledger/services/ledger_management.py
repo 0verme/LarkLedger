@@ -8,6 +8,10 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.models import ChannelIdentity, DashboardSession, Ledger, LedgerKind
+from lark_ledger.services.ledger_authorization import (
+    LedgerAuthorizationError,
+    LedgerAuthorizationService,
+)
 
 MAX_LEDGER_NAME_LENGTH = 64
 
@@ -59,6 +63,17 @@ class LedgerManagementService:
                 )
             ).all()
         )
+
+    async def list_accessible(self, user_id: uuid.UUID) -> list[Ledger]:
+        return await LedgerAuthorizationService(self._session).list_accessible(user_id)
+
+    async def get_accessible(self, user_id: uuid.UUID, ledger_id: uuid.UUID) -> Ledger:
+        try:
+            return await LedgerAuthorizationService(self._session).get_accessible(
+                user_id, ledger_id
+            )
+        except LedgerAuthorizationError as exc:
+            raise LedgerNotFoundError("账本不存在或当前用户无权访问") from exc
 
     async def get_owned(self, user_id: uuid.UUID, ledger_id: uuid.UUID) -> Ledger:
         ledger = await self._session.scalar(
@@ -147,7 +162,7 @@ class LedgerManagementService:
     async def select_for_channel(
         self, user_id: uuid.UUID, identity_id: uuid.UUID, ledger_id: uuid.UUID
     ) -> Ledger:
-        ledger = await self.get_owned(user_id, ledger_id)
+        ledger = await self.get_accessible(user_id, ledger_id)
         identity = await self._session.get(ChannelIdentity, identity_id)
         if identity is None or identity.user_id != user_id:
             raise LedgerNotFoundError("入口身份不存在或不属于当前用户")
@@ -158,7 +173,7 @@ class LedgerManagementService:
     async def select_for_session(
         self, user_id: uuid.UUID, session_id: uuid.UUID, ledger_id: uuid.UUID
     ) -> Ledger:
-        ledger = await self.get_owned(user_id, ledger_id)
+        ledger = await self.get_accessible(user_id, ledger_id)
         dashboard_session = await self._session.get(DashboardSession, session_id)
         if dashboard_session is None or dashboard_session.user_id != user_id:
             raise LedgerNotFoundError("Dashboard 会话不存在或不属于当前用户")

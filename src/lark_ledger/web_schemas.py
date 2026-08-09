@@ -76,6 +76,8 @@ class WebLedger(BaseModel):
     is_current: bool
     currency: str
     timezone: str
+    kind: str
+    household_id: str | None = None
 
 
 class LedgerList(BaseModel):
@@ -84,6 +86,48 @@ class LedgerList(BaseModel):
 
 class LedgerNameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
+
+
+class HouseholdCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+
+
+class HouseholdInviteRequest(BaseModel):
+    target: str = Field(min_length=1, max_length=128)
+
+
+class WebHouseholdMember(BaseModel):
+    user_id: str
+    display_name: str
+    role: str
+    joined_at: datetime | None
+
+
+class WebHousehold(BaseModel):
+    id: str
+    name: str
+    owner_user_id: str
+    role: str
+    status: str
+    ledger: WebLedger
+    created_at: datetime
+    updated_at: datetime
+    members: list[WebHouseholdMember] | None = None
+
+
+class HouseholdList(BaseModel):
+    items: list[WebHousehold]
+
+
+class WebHouseholdInvitation(BaseModel):
+    id: str
+    invitation_code: str
+    household_id: str
+    household_name: str
+    target_user_id: str
+    status: str
+    expires_at: datetime
+    created_at: datetime
 
 
 class EntryUpdateRequest(BaseModel):

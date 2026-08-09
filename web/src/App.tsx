@@ -17,6 +17,7 @@ import {
   RotateCcw,
   Settings,
   ShieldCheck,
+  Users,
   X,
 } from "lucide-react";
 import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
@@ -26,6 +27,7 @@ import { DeadPage, EventsPage, HealthPage, OutboxPage } from "./pages/AdminPages
 import { EntriesPage } from "./pages/EntriesPage";
 import { AnalyticsPage, BudgetsPage, ExportsPage, ReportsPage } from "./pages/FinancePages";
 import { PendingPage } from "./pages/PendingPage";
+import { HouseholdsPage } from "./pages/HouseholdsPage";
 import { AboutPage, ConfigPage } from "./pages/SystemPages";
 
 type NavItem = { label: string; path: string; icon: typeof Activity; admin?: boolean };
@@ -36,6 +38,7 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
       { label: "总览", path: "/", icon: BarChart3 },
       { label: "账目", path: "/entries", icon: BookOpen },
       { label: "待确认", path: "/pending", icon: Clock3 },
+      { label: "家庭", path: "/households", icon: Users },
       { label: "预算", path: "/budgets", icon: PiggyBank },
       { label: "分析", path: "/analytics", icon: CircleDollarSign },
       { label: "报表", path: "/reports", icon: FileText },
@@ -97,6 +100,7 @@ function pageElement(item: NavItem) {
   if (item.path === "/") return <DashboardPage />;
   if (item.path === "/entries") return <EntriesPage />;
   if (item.path === "/pending") return <PendingPage />;
+  if (item.path === "/households") return <HouseholdsPage />;
   if (item.path === "/budgets") return <BudgetsPage />;
   if (item.path === "/analytics") return <AnalyticsPage />;
   if (item.path === "/reports") return <ReportsPage />;
@@ -158,7 +162,7 @@ function Shell({ me }: { me: Me }) {
               onChange={(event) => selectLedger.mutate(event.target.value)}
             >
               {(ledgers.data?.items ?? []).map((ledger) => (
-                <option key={ledger.id} value={ledger.id}>{ledger.name}{ledger.is_default ? "（默认）" : ""}</option>
+                <option key={ledger.id} value={ledger.id}>{ledger.kind === "household_shared" ? "家庭 · " : "个人 · "}{ledger.name}{ledger.is_default ? "（默认）" : ""}</option>
               ))}
             </select>
             <button type="button" aria-label="创建账本" onClick={askCreateLedger} disabled={createLedger.isPending}>＋</button>

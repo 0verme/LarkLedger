@@ -33,7 +33,6 @@ from lark_ledger.confirmation_id import (
 from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     Direction,
-    Ledger,
     PendingCommand,
     PendingStatus,
     ProcessedEvent,
@@ -48,6 +47,7 @@ from lark_ledger.outbox import (
 from lark_ledger.schemas import Action, ParsedCommand
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
+from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.risk import RiskAssessment, RiskReason
 from lark_ledger.services.worker import is_permanent_error
 from lark_ledger.short_id import MAX_SHORT_ID_ALLOCATION_ATTEMPTS
@@ -620,13 +620,9 @@ class PendingCommandStore:
                 await session.commit()
                 return message, [reply]
             frozen_ledger_id = row.ledger_id or actor_context.ledger_id
-            owned_ledger = await session.scalar(
-                select(Ledger.id).where(
-                    Ledger.id == frozen_ledger_id,
-                    Ledger.owner_user_id == actor_context.actor_user_id,
-                )
-            )
-            if owned_ledger is None:
+            if not await LedgerAuthorizationService(session).can_access(
+                actor_context.actor_user_id, frozen_ledger_id
+            ):
                 message = "该确认单所属账本已不可访问，未执行任何写入。"
                 reply = self._make_text_row(
                     message_id=reply_to_message_id, event_id=confirm_event_id, text=message

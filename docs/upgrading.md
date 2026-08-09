@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.4.0` |
 | Git tag | `v0.4.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest` 由发布流水线写入） |
-| Alembic head | `20260809_0016` |
+| Alembic head | `20260809_0017` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -22,6 +22,10 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
 
 ## 从 v0.3.0 升级到 v0.4.0
+
+阶段 3 migration `20260809_0017` 在 `0016` 之后新增 `households`、`household_members`、`household_invitations`，并允许 Ledger 以显式 `household_id` 作为 `household_shared` 授权根。升级不修改已有 User、个人 Ledger、ChannelIdentity、DashboardSession 或财务数据。升级后核对每个家庭只有一个 active owner 和一个 shared ledger；个人默认账本仍必须为 personal。
+
+降级到 `0016` 只在不存在家庭公共账本时执行，以避免把共享账本伪装成某个个人所有或删除财务数据。若已经启用家庭空间，先备份并完成明确的家庭数据退役方案；migration 会拒绝破坏性降级，不会自动删除或转移历史账目。
 
 当前 `Unreleased` 的阶段 2 migration `20260809_0016` 在 `0015` 身份地基之上增加账本规范化名称和飞书入口当前账本，并回填所有入口为用户默认账本。它还把短 ID、预算分类与活跃媒体指纹唯一约束改为账本作用域，使同一用户的不同账本可以安全复用。阶段 1 的可空兼容列本阶段继续保留，以便旧测试夹具和滚动升级；`0015` 已回填全部历史行，应用的新写入始终提供经过授权的 `ledger_id`。
 
@@ -238,4 +242,4 @@ Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 
 - **存量数据：** 旧行没有原始图片可用于安全回填指纹，因此保持 `NULL`，不自动合并或删除。
 - **回退：** 降级到 `20260806_0012` 会删除指纹索引和字段，不修改待确认状态或账本。
 
-当前 Alembic head：`20260807_0013`。
+当前 Alembic head：`20260809_0017`。

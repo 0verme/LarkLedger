@@ -22,6 +22,7 @@ from lark_ledger.config import Settings
 from lark_ledger.context import RequestContext
 from lark_ledger.models import DashboardSession
 from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import LedgerManagementService
 
 SESSION_COOKIE = "lark_ledger_session"
@@ -262,6 +263,15 @@ class DashboardAuthService:
             )
             if row is None or row.revoked_at is not None or _aware(row.expires_at) <= now:
                 raise DashboardAuthError("登录会话已失效")
+            if row.user_id is None or row.ledger_id is None:
+                raise DashboardAuthError("登录会话缺少内部账本身份")
+            if not await LedgerAuthorizationService(session).can_access(row.user_id, row.ledger_id):
+                fallback = await LedgerManagementService(
+                    session,
+                    currency=self._settings.currency,
+                    timezone=self._settings.timezone,
+                ).get_default(row.user_id)
+                row.ledger_id = fallback.id
             row.last_seen_at = now
             await session.commit()
             return self._principal(row)
