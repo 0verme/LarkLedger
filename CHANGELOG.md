@@ -4,6 +4,10 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Changed
+
+- 账本管理命令接受常用同义词（`新建账本` / `创建新账本` / `切换到账本` / `设置默认账本` / `查看账本` / `我的账本`）；输入明显是想管理账本但语法未匹配时，回复账本命令用法提示而不是通用帮助。
+
 ### Added (P28 — Budget 2.0)
 
 - **Period-scoped ledger budgets** add a `budgets` table keyed by `(ledger_id, period, category)` where `category IS NULL` is the ledger's total limit for the month and a non-empty category is a category limit. Periods are explicit first-day-of-month dates, never derived from timestamps. The legacy recurring `category_budgets` table is untouched and continues to act as the monthly default; a period row wins for its month. Alembic migration `20260809_0022`.
