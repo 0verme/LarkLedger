@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.event_payload import EventProcessStatus
 from lark_ledger.models import (
+    ClientIdempotencyRecord,
     PendingCommand,
     PendingStatus,
     ProcessedEvent,
@@ -61,6 +62,7 @@ class CleanupResult:
     event_dead: int = 0
     pending_expired: int = 0
     pending_deleted: int = 0
+    client_idempotency_deleted: int = 0
 
     @property
     def total(self) -> int:
@@ -73,6 +75,7 @@ class CleanupResult:
                 self.event_dead,
                 self.pending_expired,
                 self.pending_deleted,
+                self.client_idempotency_deleted,
             )
         )
 
@@ -246,6 +249,35 @@ class CleanupStore:
             await session.commit()
             return len(ids)
 
+    async def delete_client_idempotency_batch(
+        self, *, cutoff: datetime, batch_size: int
+    ) -> int:
+        """Delete only expired client snapshots; active keys are never selected."""
+        async with self._factory() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(ClientIdempotencyRecord.id)
+                        .where(ClientIdempotencyRecord.expires_at <= cutoff)
+                        .order_by(
+                            ClientIdempotencyRecord.expires_at,
+                            ClientIdempotencyRecord.id,
+                        )
+                        .limit(batch_size)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+            )
+            if not ids:
+                return 0
+            await session.execute(
+                delete(ClientIdempotencyRecord).where(
+                    ClientIdempotencyRecord.id.in_(ids)
+                )
+            )
+            await session.commit()
+            return len(ids)
+
 
 class CleanupService:
     """Apply terminal retention in outbox-before-event order."""
@@ -274,6 +306,7 @@ class CleanupService:
             "event_dead": current - timedelta(days=self._policy.event_dead_days),
             "pending_expired": current,
             "pending_deleted": current - timedelta(days=self._policy.pending_retention_days),
+            "client_idempotency_deleted": current,
         }
         counts: dict[str, int] = {}
         counts["outbox_sent"] = await self._timed_delete(
@@ -341,6 +374,14 @@ class CleanupService:
             self._store.delete_pending_terminal_batch(
                 cutoff=cutoffs["pending_deleted"],
                 now=current,
+                batch_size=self._batch_size,
+            ),
+        )
+        counts["client_idempotency_deleted"] = await self._timed_delete(
+            "client_idempotency_deleted",
+            cutoffs["client_idempotency_deleted"],
+            self._store.delete_client_idempotency_batch(
+                cutoff=cutoffs["client_idempotency_deleted"],
                 batch_size=self._batch_size,
             ),
         )

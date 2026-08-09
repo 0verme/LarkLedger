@@ -46,19 +46,14 @@ from lark_ledger.schemas import (
     ParsedCommand,
 )
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
+from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.feishu_client import FeishuClient, _media_fingerprint, logger
 from lark_ledger.services.household_management import (
     HouseholdManagementError,
-    HouseholdManagementService,
-    HouseholdView,
 )
 from lark_ledger.services.identity import IdentityService
-from lark_ledger.services.ledger import LedgerService
-from lark_ledger.services.ledger_management import (
-    LedgerManagementError,
-    LedgerManagementService,
-)
+from lark_ledger.services.ledger_management import LedgerManagementError
 from lark_ledger.services.outbox import ReplyOutboxStore
 from lark_ledger.services.pending import (
     PendingCommandStore,
@@ -492,17 +487,17 @@ class MessageProcessor:
                 channel="feishu",
                 external_subject_id=user_open_id,
             )
-            result = await LedgerService(
+            result = await ClientApplicationService(
                 session,
-                self.settings.currency,
-                self.settings.timezone,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
                 exchange_rates=self.exchange_rates,
-                commit_changes=False,
-            ).execute(
+            ).execute_financial(
                 context,
                 command,
                 source_type=source_type,
                 source_message_id=source_message_id,
+                commit_changes=False,
             )
             rows = await self._build_outbox_rows(
                 event_id=event_id,
@@ -701,12 +696,12 @@ class MessageProcessor:
                 currency=self.settings.currency,
                 timezone=self.settings.timezone,
             ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
-            manager = LedgerManagementService(
+            application = ClientApplicationService(
                 session, currency=self.settings.currency, timezone=self.settings.timezone
             )
             try:
                 if command.action is LedgerCommandAction.LIST:
-                    ledgers = await manager.list_owned(context.actor_user_id)
+                    ledgers = await application.list_personal_ledgers(context)
                     lines = [
                         f"{'→' if item.id == context.ledger_id else ' '} {item.name}"
                         f"{'（默认）' if item.is_default else ''}"
@@ -714,29 +709,27 @@ class MessageProcessor:
                     ]
                     reply_text = "账本列表：\n" + "\n".join(lines)
                 elif command.action is LedgerCommandAction.CURRENT:
-                    ledger = await manager.get_owned(context.actor_user_id, context.ledger_id)
+                    ledger = await application.current_personal_ledger(context)
                     reply_text = f"当前账本：{ledger.name}{'（默认）' if ledger.is_default else ''}"
                 elif command.action is LedgerCommandAction.CREATE:
                     assert command.name is not None
-                    ledger = await manager.create(context.actor_user_id, command.name)
+                    ledger = await application.create_personal_ledger(context, command.name)
                     reply_text = f"已创建账本：{ledger.name}。当前账本仍为原账本。"
                 else:
                     assert command.name is not None
-                    ledger = await manager.find_owned_by_name(context.actor_user_id, command.name)
+                    ledger = await application.find_personal_ledger(context, command.name)
                     if command.action is LedgerCommandAction.SELECT:
                         if context.channel_identity_id is None:
                             raise LedgerManagementError("当前入口身份无法保存账本选择")
-                        await manager.select_for_channel(
-                            context.actor_user_id, context.channel_identity_id, ledger.id
-                        )
+                        await application.select_channel_ledger(context, ledger.id)
                         reply_text = f"已切换当前账本：{ledger.name}"
                     elif command.action is LedgerCommandAction.SET_DEFAULT:
-                        ledger = await manager.set_default(context.actor_user_id, ledger.id)
+                        ledger = await application.set_default_ledger(context, ledger.id)
                         reply_text = f"已将默认账本设为：{ledger.name}。当前账本未切换。"
                     else:
                         assert command.new_name is not None
-                        ledger = await manager.rename(
-                            context.actor_user_id, ledger.id, command.new_name
+                        ledger = await application.rename_personal_ledger(
+                            context, ledger.id, command.new_name
                         )
                         reply_text = f"账本已重命名为：{ledger.name}"
             except LedgerManagementError as exc:
@@ -772,20 +765,20 @@ class MessageProcessor:
                 currency=self.settings.currency,
                 timezone=self.settings.timezone,
             ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
-            manager = HouseholdManagementService(
+            application = ClientApplicationService(
                 session, currency=self.settings.currency, timezone=self.settings.timezone
             )
             try:
                 if command.action is HouseholdCommandAction.CREATE:
                     assert command.argument is not None
-                    view = await manager.create(context.actor_user_id, command.argument)
+                    view = await application.create_household(context, command.argument)
                     reply_text = (
                         f"已创建家庭：{view.household.name}\n"
                         f"公共账本：{view.ledger.name}\n"
                         "当前账本未切换。"
                     )
                 elif command.action is HouseholdCommandAction.LIST:
-                    households = await manager.list_for_user(context.actor_user_id)
+                    households = await application.list_households(context)
                     if not households:
                         reply_text = "当前尚未加入家庭空间。"
                     else:
@@ -796,7 +789,7 @@ class MessageProcessor:
                         ]
                         reply_text = "家庭列表：\n" + "\n".join(lines)
                 elif command.action is HouseholdCommandAction.INVITATIONS:
-                    invitations = await manager.list_invitations(context.actor_user_id)
+                    invitations = await application.list_household_invitations(context)
                     pending = [item for item in invitations if item.status == "pending"]
                     if not pending:
                         reply_text = "当前没有待处理的家庭邀请。"
@@ -815,10 +808,12 @@ class MessageProcessor:
                     HouseholdCommandAction.REJECT,
                 }:
                     assert command.argument is not None
-                    invitation = (
-                        await manager.accept(context.actor_user_id, command.argument)
+                    invitation = await application.respond_household_invitation(
+                        context,
+                        command.argument,
+                        "accept"
                         if command.action is HouseholdCommandAction.ACCEPT
-                        else await manager.reject(context.actor_user_id, command.argument)
+                        else "reject",
                     )
                     household = await session.get(Household, invitation.household_id)
                     ledger = await session.scalar(
@@ -841,17 +836,15 @@ class MessageProcessor:
                         }
                         else None
                     )
-                    view = await self._resolve_household_for_command(
-                        manager, context.actor_user_id, context.ledger_id, household_name
-                    )
+                    view = await application.resolve_household(context, household_name)
                     if command.action is HouseholdCommandAction.CURRENT:
                         reply_text = (
                             f"当前家庭：{view.household.name}\n公共账本：{view.ledger.name}\n"
                             f"角色：{view.membership.role}"
                         )
                     elif command.action is HouseholdCommandAction.MEMBERS:
-                        members = await manager.list_members(
-                            context.actor_user_id, view.household.id
+                        members = await application.list_household_members(
+                            context, view.household.id
                         )
                         lines = [
                             f"{item.user.display_name or str(item.user.id)} · "
@@ -864,8 +857,8 @@ class MessageProcessor:
                         )
                     elif command.action is HouseholdCommandAction.INVITE:
                         assert command.argument is not None
-                        invitation = await manager.invite(
-                            context.actor_user_id, view.household.id, command.argument
+                        invitation = await application.invite_household_member(
+                            context, view.household.id, command.argument
                         )
                         target = await session.get(User, invitation.target_user_id)
                         target_name = (
@@ -881,18 +874,12 @@ class MessageProcessor:
                     elif command.action is HouseholdCommandAction.SELECT_LEDGER:
                         if context.channel_identity_id is None:
                             raise HouseholdManagementError("当前入口身份无法保存账本选择")
-                        await LedgerManagementService(
-                            session,
-                            currency=self.settings.currency,
-                            timezone=self.settings.timezone,
-                        ).select_for_channel(
-                            context.actor_user_id, context.channel_identity_id, view.ledger.id
-                        )
+                        await application.select_channel_ledger(context, view.ledger.id)
                         reply_text = (
                             f"已切换家庭账本：{view.household.name}\n公共账本：{view.ledger.name}"
                         )
                     else:
-                        await manager.leave(context.actor_user_id, view.household.id)
+                        await application.leave_household(context, view.household.id)
                         reply_text = (
                             f"已退出家庭：{view.household.name}。\n"
                             f"已失去公共账本“{view.ledger.name}”的访问权限，当前账本已回退。"
@@ -915,23 +902,6 @@ class MessageProcessor:
                     parent.business_committed_at = datetime.now(UTC)
             await session.commit()
             return [row]
-
-    @staticmethod
-    async def _resolve_household_for_command(
-        manager: HouseholdManagementService,
-        user_id: uuid.UUID,
-        current_ledger_id: uuid.UUID,
-        name: str | None,
-    ) -> HouseholdView:
-        if name:
-            return await manager.find_by_name(user_id, name)
-        households = await manager.list_for_user(user_id)
-        current = [item for item in households if item.ledger.id == current_ledger_id]
-        if len(current) == 1:
-            return current[0]
-        if len(households) == 1:
-            return households[0]
-        raise HouseholdManagementError("请先切换家庭账本，或在只有一个家庭时再执行该命令")
 
     async def _business_result_committed(self, event_id: str) -> bool:
         async with self.session_factory() as session:

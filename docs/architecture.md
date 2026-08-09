@@ -4,6 +4,14 @@
 
 本文说明 LarkLedger v0.4.0 的运行组件、消息数据流、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
+## 统一 Client Application Service（阶段 4）
+
+`ClientApplicationService` 是飞书、Web Dashboard 和 `/api/client/v1` 共用的应用层边界。它只接收认证适配器生成的 `RequestContext`，区分确定性管理命令、财务写命令、查询和 Pending 操作，并继续委托既有 `LedgerService`、`LedgerManagementService`、`HouseholdManagementService` 与查询服务。每次账本操作首先调用 `LedgerAuthorizationService`；传输层、AI 和请求 body 均不能覆盖 actor 或授权后的 ledger。
+
+客户端认证由 `ClientCredentialService` 负责：高熵 `llv1_` Bearer 的 SHA-256 摘要持久化到 `client_credentials`，明文仅创建时返回；凭证包含最小 scope、当前账本、创建/最后使用/过期/撤销时间。撤销、过期、用户禁用以及家庭成员关系失效都会在每次请求时重新验证。Web 仍使用服务端 `DashboardSession` Cookie + CSRF，飞书仍由 `ChannelIdentity` 解析 User，三种认证不会互相降级或混用。
+
+`client_idempotency_records` 以 `(actor_user_id, operation, ledger_id, idempotency_key)` 唯一约束绑定请求摘要和结构化响应快照，过期索引由 Cleanup Worker 分批清理。该表不复用 `processed_events` 或 `reply_outbox`，因此不会改变飞书事件 claim、回复投递或 Worker 重试语义。Pending 继续冻结 actor/ledger 并在行锁内一次执行。
+
 ## 身份、家庭与账本边界（Unreleased）
 
 阶段 3 增加独立的 `HouseholdManagementService` 与统一 `LedgerAuthorizationService`。个人账本要求 `owner_user_id` 匹配；`household_shared` 账本不伪装成某个成员所有，而是通过 `household_id` 和有效 `household_members` 关系授权。用户默认账本仍只允许 personal；飞书入口当前账本保存在 `channel_identities.current_ledger_id`，Web 当前账本保存在 `dashboard_sessions.ledger_id`。

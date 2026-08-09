@@ -21,6 +21,7 @@
 - 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
 - **可靠投递**：事件 / 回复后台 Worker、事务性回复 Outbox、PostgreSQL 租约与指数退避重试、readiness、终态清理与受控人工事件重放
 - **Web Dashboard**：飞书 OAuth、财务总览、账目与 revision、Pending、分析、预算、报表、CSV 下载及管理员可靠性控制台
+- **统一 Client API**：`/api/client/v1/*` 为设备和未来客户端提供结构化命令/查询边界；Bearer 凭证可撤销、只保存摘要，写请求使用持久化 `Idempotency-Key`
 - 自托管：FastAPI、React / TypeScript / Vite、PostgreSQL、Docker Compose
 
 完整消息示例见[用户手册](docs/help.md)。

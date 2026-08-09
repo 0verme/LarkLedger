@@ -10,7 +10,7 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 | 包版本 / `__version__` | `0.4.0` |
 | Git tag | `v0.4.0` |
 | GHCR | `ghcr.io/0verme/larkledger:0.4.0`（亦有 `0.4` / `latest` 由发布流水线写入） |
-| Alembic head | `20260809_0017` |
+| Alembic head | `20260809_0018` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -20,6 +20,12 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
+
+## 升级到阶段 4 统一 Client API（Unreleased）
+
+运行 `alembic upgrade head` 会从 `20260809_0017` 升级到 `20260809_0018`，新增 `client_credentials`、`client_idempotency_records` 和 `client_security_audits`。迁移不修改或删除 User、ChannelIdentity、Ledger、Household、DashboardSession、财务数据及旧 `user_open_id` 兼容列，并支持降级回 0017。
+
+升级后不会自动签发任何公网凭证。管理员应先保持 Dashboard 的 HTTPS、Cookie 与 CSRF 配置，再由已认证用户按需创建最小 scope 凭证。请妥善保存创建时唯一一次返回的明文 token；数据库备份只包含摘要，无法恢复明文。升级前后建议实际执行一次测试库 `upgrade -> downgrade 0017 -> upgrade head`。
 
 ## 从 v0.3.0 升级到 v0.4.0
 

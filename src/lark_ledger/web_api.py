@@ -14,11 +14,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger import __version__
+from lark_ledger.client_schemas import (
+    ClientCredentialCreated,
+    ClientCredentialCreateRequest,
+    ClientCredentialList,
+)
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
 from lark_ledger.models import Direction, Household, HouseholdInvitation, Ledger
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
+from lark_ledger.services.client_application import ClientApplicationService
+from lark_ledger.services.client_auth import ClientCredentialService
 from lark_ledger.services.dashboard_auth import (
     CSRF_COOKIE,
     CSRF_HEADER,
@@ -37,7 +44,7 @@ from lark_ledger.services.household_management import (
     HouseholdPermissionError,
     HouseholdView,
 )
-from lark_ledger.services.ledger import EntryConflictError, LedgerService
+from lark_ledger.services.ledger import EntryConflictError
 from lark_ledger.services.ledger_management import (
     LedgerManagementError,
     LedgerManagementService,
@@ -256,6 +263,59 @@ def _web_ledger(ledger: Ledger, current_id: uuid.UUID) -> WebLedger:
         kind=ledger.kind,
         household_id=str(ledger.household_id) if ledger.household_id else None,
     )
+
+
+@router.get("/client-credentials", response_model=ClientCredentialList)
+async def list_client_credentials(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> ClientCredentialList:
+    async with cast(
+        async_sessionmaker[AsyncSession], request.app.state.session_factory
+    )() as session:
+        items = await ClientCredentialService.list_for_user(session, principal.user_id)
+    return ClientCredentialList(items=items)
+
+
+@router.post(
+    "/client-credentials", response_model=ClientCredentialCreated, status_code=201
+)
+async def create_client_credential(
+    payload: ClientCredentialCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientCredentialCreated:
+    async with cast(
+        async_sessionmaker[AsyncSession], request.app.state.session_factory
+    )() as session:
+        try:
+            return await ClientCredentialService.create(
+                session,
+                user_id=principal.user_id,
+                current_ledger_id=principal.ledger_id,
+                request=payload,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.delete("/client-credentials/{credential_id}", status_code=204)
+async def revoke_client_credential(
+    credential_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    async with cast(
+        async_sessionmaker[AsyncSession], request.app.state.session_factory
+    )() as session:
+        try:
+            await ClientCredentialService.revoke(
+                session, user_id=principal.user_id, credential_id=credential_id
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail="credential not found") from exc
+    return Response(status_code=204)
 
 
 def _ledger_http_error(exc: LedgerManagementError) -> HTTPException:
@@ -810,11 +870,11 @@ async def _mutate_entry(
         if existing is None:
             raise HTTPException(status_code=404, detail="账目不存在")
         try:
-            await LedgerService(
+            await ClientApplicationService(
                 session,
                 currency=settings.currency,
                 timezone=settings.timezone,
-            ).execute(
+            ).execute_financial(
                 principal.request_context,
                 command,
                 source_type="web",
@@ -1275,12 +1335,12 @@ async def update_budget(
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     processor = getattr(request.app.state, "processor", None)
     async with factory() as session:
-        await LedgerService(
+        await ClientApplicationService(
             session,
             currency=settings.currency,
             timezone=settings.timezone,
             exchange_rates=getattr(processor, "exchange_rates", None),
-        ).execute(
+        ).execute_financial(
             principal.request_context,
             ParsedCommand(
                 action=Action.SET_BUDGET,
@@ -1288,6 +1348,7 @@ async def update_budget(
                 amount=payload.amount,
                 currency=payload.currency,
             ),
+            source_type="web",
         )
     return await _budget_overview(request, principal)
 
@@ -1301,11 +1362,12 @@ async def delete_budget(
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
-        await LedgerService(
+        await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).execute(
+        ).execute_financial(
             principal.request_context,
             ParsedCommand(action=Action.DELETE_BUDGET, category=category),
+            source_type="web",
         )
     return await _budget_overview(request, principal)
 
@@ -1324,11 +1386,12 @@ async def report(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
-        result = await LedgerService(
+        result = await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).execute(
+        ).execute_financial(
             principal.request_context,
             ParsedCommand(action=Action.REPORT, range_start=start, range_end=end),
+            source_type="web",
         )
     if result.report is None:
         raise HTTPException(status_code=404, detail=result.message)
@@ -1365,9 +1428,9 @@ async def export_entries(
         ).astimezone(UTC)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
-        result = await LedgerService(
+        result = await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).execute(
+        ).execute_financial(
             principal.request_context,
             ParsedCommand(
                 action=Action.EXPORT_ENTRIES,
@@ -1376,6 +1439,7 @@ async def export_entries(
                 export_all=export_all,
                 include_deleted=payload.include_deleted,
             ),
+            source_type="web",
         )
     if result.export is None:
         raise HTTPException(status_code=422, detail=result.message)

@@ -4,6 +4,29 @@
 
 飞账是运行在飞书 / Lark 中的 AI 记账机器人。你可以用日常语言记录收支，也可以修改或撤销最近一笔、查询汇总、管理分类月预算和生成消费报告。
 
+## Client API（v1）
+
+机器客户端使用 `/api/client/v1/*`，响应是稳定的结构化 JSON，不以 AI 展示文本作为业务结果。Bearer 凭证需要先在已登录的 Web Dashboard 会话中通过 `POST /api/web/v1/client-credentials` 创建；该请求仍受 Cookie + CSRF 保护。明文凭证只在创建响应中出现一次，服务端仅保存摘要。浏览器 Session Cookie 不能代替 Bearer，Bearer 也不能绕过 Web CSRF。
+
+```bash
+curl -H "Authorization: Bearer llv1_..." \
+  https://ledger.example/api/client/v1/me
+
+curl -X POST https://ledger.example/api/client/v1/entries \
+  -H "Authorization: Bearer llv1_..." \
+  -H "Idempotency-Key: device-20260809-0001" \
+  -H "Content-Type: application/json" \
+  -d '{"amount":"32.00","direction":"expense","category":"餐饮","note":"午饭","occurred_at":"2026-08-09T12:00:00+08:00"}'
+```
+
+- 写请求必须带 1–128 字符的 `Idempotency-Key`。同一用户、操作和账本中的相同键 + 相同负载返回原业务快照；负载不同返回 `conflict`。不同用户或账本可安全复用相同键。
+- 当前账本保存在具体凭证上。`POST /ledgers/{ledger_id}/select` 会重新认证并授权；家庭成员退出或被移除后，下次请求立即回退默认个人账本。
+- 列表端点使用 `page` / `page_size`；账目时间使用左闭右开 `start` / `end`，分析使用本地日期 `start_date` / `end_date`，服务端维持最大范围和导出大小限制。
+- 高风险写入仍进入既有 Pending。具有 `pending:write` scope 的凭证才能确认或取消；确认时重新检查冻结的 `actor_user_id + ledger_id`，重复确认只执行一次。
+- 稳定错误码为 `authentication_required`、`permission_denied`、`resource_not_found`、`validation_error`、`conflict`、`expired`、`rate_limited`、`temporary_failure`。未授权资源统一使用不可枚举的 not-found 响应。
+
+`/api/client/v1` 在 v1 内保持向后兼容：新增字段优先为可选字段，破坏性变更通过新的版本路径发布。完整 OpenAPI 可从运行实例的 `/openapi.json` 获取。
+
 > 群聊中请先 `@飞账`；与机器人单聊时可以直接发送。只有收到“已记录”“已修改”“已撤销”或查询结果，才表示操作成功。
 
 ## 快速上手

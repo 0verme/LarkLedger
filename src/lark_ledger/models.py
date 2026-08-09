@@ -650,3 +650,89 @@ class DashboardSession(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+
+class ClientCredential(Base):
+    """Revocable bearer credential. Only a SHA-256 digest is persisted."""
+
+    __tablename__ = "client_credentials"
+    __table_args__ = (
+        UniqueConstraint("token_digest", name="uq_client_credentials_token_digest"),
+        Index("ix_client_credentials_user_created", "user_id", "created_at"),
+        Index("ix_client_credentials_expires", "expires_at"),
+        CheckConstraint("scopes <> ''", name="ck_client_credentials_scopes_not_empty"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    current_ledger_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="SET NULL"), nullable=True
+    )
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    token_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    scopes: Mapped[str] = mapped_column(String(512), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ClientIdempotencyRecord(Base):
+    """Durable result snapshot for one actor, operation, ledger and key."""
+
+    __tablename__ = "client_idempotency_records"
+    __table_args__ = (
+        UniqueConstraint(
+            "actor_user_id",
+            "operation",
+            "ledger_id",
+            "idempotency_key",
+            name="uq_client_idempotency_scope",
+        ),
+        Index("ix_client_idempotency_expires", "expires_at"),
+        Index("ix_client_idempotency_actor_created", "actor_user_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="CASCADE"), nullable=False
+    )
+    operation: Mapped[str] = mapped_column(String(96), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    response_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    response_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class ClientSecurityAudit(Base):
+    """Minimal security audit without credential or financial payload material."""
+
+    __tablename__ = "client_security_audits"
+    __table_args__ = (
+        Index("ix_client_security_audits_actor_created", "actor_user_id", "created_at"),
+        Index("ix_client_security_audits_action_created", "action", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    credential_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )

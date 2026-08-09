@@ -6,6 +6,18 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Added
 
+- **Unified Client API** adds the transport-neutral `ClientApplicationService`,
+  versioned `/api/client/v1` identity, ledger, household, entry, budget,
+  analytics, report, CSV and Pending contracts, plus stable machine errors.
+- Revocable, scoped bearer credentials persist only SHA-256 digests and track
+  creation, last use, expiry and revocation; Web issuance remains protected by
+  Dashboard Session + CSRF.
+- Durable `Idempotency-Key` snapshots isolate actor, operation and ledger,
+  detect payload conflicts, replay structured results, and are cleaned by the
+  existing bounded Cleanup Worker.
+- Alembic migration `20260809_0018` adds client credentials, idempotency records
+  and minimal security audits without modifying existing identity or finance data.
+
 - **Household Spaces MVP** adds owner/member households, persisted invitations,
   deterministic Feishu commands, authenticated Web management, and one
   automatically provisioned `household_shared` ledger per household.

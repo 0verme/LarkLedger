@@ -2,11 +2,19 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, Response
 
 from lark_ledger import __version__
 from lark_ledger.api import router
+from lark_ledger.client_api import router as client_router
 from lark_ledger.config import EventMode, Settings, get_settings
 from lark_ledger.dashboard_static import DashboardSecurityHeaders, DashboardStaticFiles
 from lark_ledger.db import SessionFactory, engine
@@ -22,6 +30,7 @@ from lark_ledger.services.cleanup import (
 from lark_ledger.services.events import EventService
 from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.feishu import FeishuClient, MessageProcessor
+from lark_ledger.services.ledger_authorization import LedgerAuthorizationError
 from lark_ledger.services.outbox import ReplyOutboxStore
 from lark_ledger.services.reply_worker import ReplyDeliverer, ReplyWorker
 from lark_ledger.services.websocket import LongConnectionReceiver
@@ -158,6 +167,56 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     application.include_router(router)
+    application.include_router(client_router)
+
+    @application.exception_handler(HTTPException)
+    async def client_http_error(request: Request, exc: HTTPException) -> Response:
+        if not request.url.path.startswith("/api/client/v1/"):
+            return await http_exception_handler(request, exc)
+        detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": detail.get("code", "temporary_failure"),
+                    "message": detail.get("message", "request failed"),
+                }
+            },
+            headers=exc.headers,
+        )
+
+    @application.exception_handler(RequestValidationError)
+    async def client_validation_error(
+        request: Request, exc: RequestValidationError
+    ) -> Response:
+        if not request.url.path.startswith("/api/client/v1/"):
+            return await request_validation_exception_handler(request, exc)
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "validation_error",
+                    "message": "request validation failed",
+                }
+            },
+        )
+
+    @application.exception_handler(LedgerAuthorizationError)
+    async def ledger_authorization_error(
+        request: Request, exc: LedgerAuthorizationError
+    ) -> JSONResponse:
+        del exc
+        if request.url.path.startswith("/api/client/v1/"):
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": {
+                        "code": "resource_not_found",
+                        "message": "resource not found",
+                    }
+                },
+            )
+        return JSONResponse(status_code=403, content={"detail": "permission denied"})
     if initial_settings.dashboard_enabled:
         application.include_router(web_router)
         application.add_middleware(
