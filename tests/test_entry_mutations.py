@@ -11,9 +11,17 @@ from lark_ledger.entry_commands import (
     try_parse_deterministic_entry_command,
 )
 from lark_ledger.entry_revisions import SNAPSHOT_VERSION, RevisionChangeType
-from lark_ledger.models import Direction, LedgerEntry, LedgerEntryRevision
+from lark_ledger.models import (
+    AccountType,
+    Direction,
+    LedgerEntry,
+    LedgerEntryRevision,
+)
 from lark_ledger.schemas import Action, ParsedCommand
+from lark_ledger.services.accounts import AccountNotFoundError, AccountService
+from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import EntryConflictError, LedgerService
+from lark_ledger.services.transfers import TransferService
 
 
 async def _seed(
@@ -233,8 +241,11 @@ def test_mutation_schema_and_deterministic_commands() -> None:
     assert ParsedCommand(
         action=Action.UPDATE_ENTRY, entry_ref="A83F2", amount=Decimal("1")
     ).action is Action.UPDATE_ENTRY
-    with pytest.raises(ValidationError):
-        ParsedCommand(action=Action.UPDATE_ENTRY, entry_ref="A83F2")
+    # An UPDATE_ENTRY with no changed fields is allowed: the web / client APIs
+    # carry account_id out-of-band, so an account-only update legitimately has
+    # no changed command fields (the service turns it into a no-op when truly
+    # empty). DELETE_ENTRY without an entry_ref is still rejected.
+    ParsedCommand(action=Action.UPDATE_ENTRY, entry_ref="A83F2")
     with pytest.raises(ValidationError):
         ParsedCommand(action=Action.DELETE_ENTRY)
     delete = try_parse_deterministic_entry_command("删除 #a83f2")
@@ -250,3 +261,158 @@ def test_mutation_schema_and_deterministic_commands() -> None:
     )
     assert isinstance(bound, ParsedCommand)
     assert bound.entry_ref == "A83F2"
+
+
+async def test_update_entry_account_moves_entry_and_revision_and_balances(
+    session: AsyncSession,
+) -> None:
+    identity = IdentityService(session, currency="CNY", timezone="Asia/Shanghai")
+    context = await identity.resolve_or_bootstrap(
+        channel="feishu", external_subject_id="ou_account_move"
+    )
+    accounts = AccountService(session)
+    default = await accounts.get_default(context)
+    wallet = await accounts.create(
+        context,
+        name="支付宝",
+        account_type=AccountType.ASSET,
+        opening_balance=Decimal("0"),
+    )
+    created = await LedgerService(session).execute(
+        context,
+        ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("100"),
+            direction="expense",
+            category="餐饮",
+            occurred_at="2026-08-09T12:00:00+08:00",
+        ),
+    )
+    entry = await session.scalar(
+        select(LedgerEntry)
+        .where(LedgerEntry.ledger_id == context.ledger_id)
+        .order_by(LedgerEntry.created_at.desc())
+        .limit(1)
+    )
+    assert entry is not None
+    assert entry.account_id == default.id
+    assert "账户：默认账户" in created.message
+
+    # Account-only update via the API-style out-of-band account_id.
+    result = await LedgerService(session, account_id=wallet.id).execute(
+        context,
+        ParsedCommand(action=Action.UPDATE_ENTRY, entry_ref=entry.short_id),
+    )
+    assert "已修改" in result.message
+    assert "支付宝" in result.message
+    await session.refresh(entry)
+    assert entry.account_id == wallet.id
+
+    revision = (
+        await session.scalars(
+            select(LedgerEntryRevision)
+            .where(LedgerEntryRevision.entry_id == entry.id)
+            .order_by(LedgerEntryRevision.created_at.desc())
+            .limit(1)
+        )
+    ).one()
+    assert revision.before_json["account_id"] == str(default.id)
+    assert revision.after_json["account_id"] == str(wallet.id)
+
+    # The account move must be reflected in balances: the expense left the
+    # default account and now sits on the wallet.
+    assert (
+        await TransferService(session).account_balance(context, default.id)
+    ).current_balance == Decimal("0")
+    assert (
+        await TransferService(session).account_balance(context, wallet.id)
+    ).current_balance == Decimal("-100")
+
+
+async def test_update_entry_account_rejects_cross_ledger_and_archived(
+    session: AsyncSession,
+) -> None:
+    identity = IdentityService(session, currency="CNY", timezone="Asia/Shanghai")
+    context = await identity.resolve_or_bootstrap(
+        channel="feishu", external_subject_id="ou_account_reject"
+    )
+    accounts = AccountService(session)
+    wallet = await accounts.create(
+        context, name="招商银行", account_type=AccountType.ASSET
+    )
+    await LedgerService(session).execute(
+        context,
+        ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("10"),
+            direction="expense",
+            category="餐饮",
+            occurred_at="2026-08-09T12:00:00+08:00",
+        ),
+    )
+    entry = await session.scalar(
+        select(LedgerEntry)
+        .where(LedgerEntry.ledger_id == context.ledger_id)
+        .order_by(LedgerEntry.created_at.desc())
+        .limit(1)
+    )
+    assert entry is not None
+
+    other = await IdentityService(
+        session, currency="CNY", timezone="Asia/Shanghai"
+    ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_account_reject_other")
+    foreign = await accounts.get_default(other)
+    with pytest.raises(AccountNotFoundError):
+        await LedgerService(session, account_id=foreign.id).execute(
+            context,
+            ParsedCommand(action=Action.UPDATE_ENTRY, entry_ref=entry.short_id),
+        )
+
+    await accounts.archive(context, wallet.id)
+    with pytest.raises(AccountNotFoundError):
+        await LedgerService(session, account_id=wallet.id).execute(
+            context,
+            ParsedCommand(action=Action.UPDATE_ENTRY, entry_ref=entry.short_id),
+        )
+
+
+async def test_update_entry_with_account_hint_changes_account(session: AsyncSession) -> None:
+    identity = IdentityService(session, currency="CNY", timezone="Asia/Shanghai")
+    context = await identity.resolve_or_bootstrap(
+        channel="feishu", external_subject_id="ou_hint_update"
+    )
+    accounts = AccountService(session)
+    default = await accounts.get_default(context)
+    wallet = await accounts.create(
+        context, name="微信零钱", account_type=AccountType.ASSET
+    )
+    await LedgerService(session).execute(
+        context,
+        ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("8"),
+            direction="income",
+            category="红包",
+            occurred_at="2026-08-09T12:00:00+08:00",
+        ),
+    )
+    entry = await session.scalar(
+        select(LedgerEntry)
+        .where(LedgerEntry.ledger_id == context.ledger_id)
+        .order_by(LedgerEntry.created_at.desc())
+        .limit(1)
+    )
+    assert entry is not None
+    assert entry.account_id == default.id
+
+    result = await LedgerService(session).execute(
+        context,
+        ParsedCommand(
+            action=Action.UPDATE_ENTRY,
+            entry_ref=entry.short_id,
+            account_hint="微信零钱",
+        ),
+    )
+    assert "已修改" in result.message
+    await session.refresh(entry)
+    assert entry.account_id == wallet.id

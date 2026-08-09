@@ -12,7 +12,7 @@ export function DashboardPage() {
   const peak = Math.max(...data.trend.flatMap((point) => [Number(point.income), Number(point.expense)]), 1);
   return (
     <div className="dashboard-page">
-      <div className="page-heading"><div><p className="eyebrow">财务总览</p><h2>本月，保持清晰。</h2></div><Link className="quiet-button" to="/entries">查看全部账目</Link></div>
+      <div className="page-heading"><div><p className="eyebrow">财务总览</p><h2>本月，保持清晰。</h2></div><div className="heading-actions"><Link className="quiet-button" to="/transfers">转账记录</Link><Link className="quiet-button" to="/accounts">管理账户</Link><Link className="quiet-button" to="/entries">查看全部账目</Link></div></div>
       <section className="metric-grid">
         <article><span><ArrowDownRight size={17} /> 本月支出</span><strong>{money(data.month_expense)}</strong></article>
         <article><span><ArrowUpRight size={17} /> 本月收入</span><strong>{money(data.month_income)}</strong></article>

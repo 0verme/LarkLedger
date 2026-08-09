@@ -27,6 +27,8 @@ class Action(StrEnum):
     SET_BUDGETS = "set_budgets"
     LIST_BUDGETS = "list_budgets"
     DELETE_BUDGET = "delete_budget"
+    LIST_ACCOUNTS = "list_accounts"
+    ASSETS = "assets"
     HELP = "help"
 
 
@@ -102,6 +104,10 @@ class ParsedCommand(BaseModel):
     # AI/user supplied names only. Stable IDs are resolved by deterministic domain code.
     from_account_hint: str | None = Field(default=None, min_length=1, max_length=64)
     to_account_hint: str | None = Field(default=None, min_length=1, max_length=64)
+    # Ledger-scoped account name for create / update_last / update_entry and the
+    # optional single-account filter of list_accounts. Resolved server-side to an
+    # Account id; the AI never returns or invents account_id.
+    account_hint: str | None = Field(default=None, min_length=1, max_length=64)
 
     @field_validator("currency")
     @classmethod
@@ -134,7 +140,14 @@ class ParsedCommand(BaseModel):
             if self.direction is not None or self.category is not None:
                 raise ValueError("transfer does not accept direction or category")
         elif self.from_account_hint is not None or self.to_account_hint is not None:
-            raise ValueError("account hints are only supported for transfer")
+            raise ValueError("from/to account hints are only supported for transfer")
+        if self.account_hint is not None and self.action not in {
+            Action.CREATE,
+            Action.UPDATE_LAST,
+            Action.UPDATE_ENTRY,
+            Action.LIST_ACCOUNTS,
+        }:
+            raise ValueError(f"account_hint is not supported for {self.action}")
         if self.action is Action.CREATE_ENTRIES:
             if not self.entries:
                 raise ValueError("create_entries requires at least one entry candidate")
@@ -225,15 +238,11 @@ class ParsedCommand(BaseModel):
         if self.action is Action.UPDATE_ENTRY:
             if self.entry_ref is None or not str(self.entry_ref).strip():
                 raise ValueError("update_entry requires entry_ref")
-            changed_fields = (
-                self.amount,
-                self.direction,
-                self.category,
-                self.note,
-                self.occurred_at,
-            )
-            if all(value is None for value in changed_fields) and not self.clear_note:
-                raise ValueError("update_entry requires at least one changed field")
+            # No "at least one changed field" requirement here: the web / client
+            # APIs pass account_id out-of-band (never via this AI-facing schema),
+            # so an account-only update legitimately carries no changed command
+            # fields. A genuinely empty command is handled as a no-op by the
+            # service layer.
             if self.range_start is not None or self.range_end is not None:
                 raise ValueError("update_entry does not accept range filters")
             if self.limit is not None or self.before_entry_ref is not None:
@@ -296,6 +305,30 @@ class ParsedCommand(BaseModel):
                     raise ValueError("export_entries range must be increasing")
             elif self.range_start is not None or self.range_end is not None:
                 raise ValueError("export_entries range requires both range_start and range_end")
+        if self.action in {Action.LIST_ACCOUNTS, Action.ASSETS}:
+            if any(
+                value is not None
+                for value in (
+                    self.amount,
+                    self.currency,
+                    self.direction,
+                    self.category,
+                    self.note,
+                    self.occurred_at,
+                    self.range_start,
+                    self.range_end,
+                    self.limit,
+                    self.entry_ref,
+                    self.before_entry_ref,
+                    self.entries,
+                    self.budgets,
+                    self.from_account_hint,
+                    self.to_account_hint,
+                )
+            ):
+                raise ValueError(f"{self.action} only accepts account_hint")
+            if self.action is Action.ASSETS and self.account_hint is not None:
+                raise ValueError("assets does not accept account_hint")
         if (
             self.action is Action.UPDATE_LAST
             and all(
@@ -306,6 +339,7 @@ class ParsedCommand(BaseModel):
                     self.category,
                     self.note,
                     self.occurred_at,
+                    self.account_hint,
                 )
             )
             and not self.clear_note

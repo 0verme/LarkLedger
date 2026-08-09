@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import csv
 import io
-from collections.abc import Sequence
+import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -22,6 +23,8 @@ from lark_ledger.short_id import format_entry_ref
 CSV_SCHEMA_VERSION: Final[str] = "v1"
 
 # Fixed CSV Schema v1 column order. Do not add user_open_id / UUID / message ids.
+# ``account_name`` is the human-readable account label (never a UUID) so exports
+# stay readable while exposing the P26 account binding.
 CSV_HEADERS: Final[tuple[str, ...]] = (
     "short_id",
     "occurred_at",
@@ -34,6 +37,7 @@ CSV_HEADERS: Final[tuple[str, ...]] = (
     "created_at",
     "updated_at",
     "deleted_at",
+    "account_name",
 )
 
 # First non-whitespace characters that spreadsheets may treat as formulas.
@@ -94,7 +98,9 @@ def format_csv_direction(direction: Direction) -> str:
     return direction.value
 
 
-def entry_to_csv_row(entry: LedgerEntry, timezone: ZoneInfo) -> list[str]:
+def entry_to_csv_row(
+    entry: LedgerEntry, timezone: ZoneInfo, account_name: str | None = None
+) -> list[str]:
     """Map a ledger row to Schema v1 cells (sanitized where user-controlled)."""
     return [
         format_entry_ref(entry.short_id),
@@ -108,6 +114,7 @@ def entry_to_csv_row(entry: LedgerEntry, timezone: ZoneInfo) -> list[str]:
         format_csv_datetime(entry.created_at, timezone),
         format_csv_datetime(entry.updated_at, timezone),
         format_csv_datetime(entry.deleted_at, timezone),
+        sanitize_csv_cell(account_name or ""),
     ]
 
 
@@ -121,14 +128,18 @@ def entries_to_csv_bytes(
     entries: Sequence[LedgerEntry],
     *,
     timezone: ZoneInfo,
+    account_names: Mapping[uuid.UUID | None, str] | None = None,
     max_bytes: int = MAX_EXPORT_BYTES,
 ) -> bytes:
     """Serialize entries to UTF-8 BOM CSV bytes; raise if over max_bytes."""
+    names = account_names or {}
     buffer = io.StringIO(newline="")
     writer = csv.writer(buffer)
     writer.writerow(CSV_HEADERS)
     for entry in entries:
-        writer.writerow(entry_to_csv_row(entry, timezone))
+        writer.writerow(
+            entry_to_csv_row(entry, timezone, names.get(entry.account_id, ""))
+        )
     # utf-8-sig writes BOM so Windows Excel opens Chinese without mojibake.
     payload = buffer.getvalue().encode("utf-8-sig")
     if len(payload) > max_bytes:
@@ -144,9 +155,15 @@ def build_export_file(
     timezone: ZoneInfo,
     when: datetime,
     range_label: str,
+    account_names: Mapping[uuid.UUID | None, str] | None = None,
     max_bytes: int = MAX_EXPORT_BYTES,
 ) -> ExportFileResult:
-    content = entries_to_csv_bytes(entries, timezone=timezone, max_bytes=max_bytes)
+    content = entries_to_csv_bytes(
+        entries,
+        timezone=timezone,
+        account_names=account_names,
+        max_bytes=max_bytes,
+    )
     return ExportFileResult(
         filename=build_export_filename(when),
         content=content,

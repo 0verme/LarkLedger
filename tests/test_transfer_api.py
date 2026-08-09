@@ -117,7 +117,7 @@ async def test_client_and_web_transfer_permissions_and_balances(api_setup) -> No
         client_detail = await client.get(f"/api/client/v1/transfers/{transfer_id}", headers=headers)
         web_detail = await client.get(f"/api/web/v1/transfers/{transfer_id}")
         assert client_detail.status_code == web_detail.status_code == 200
-        assert client_detail.json()["ledger_id"] == web_detail.json()["ledger_id"]
+        assert client_detail.json()["ledger_id"] == web_detail.json()["transfer"]["ledger_id"]
 
         balance = await client.get(f"/api/client/v1/accounts/{wallet.id}/balance", headers=headers)
         assets = await client.get("/api/web/v1/assets")
@@ -358,3 +358,83 @@ async def test_web_household_and_ledger_management_lifecycle(api_setup) -> None:
         assert (
             await client.get(f"/api/web/v1/households/{missing}/members")
         ).status_code == 404
+
+
+async def test_web_create_entry_with_account_and_transfer_list_and_detail(
+    api_setup,
+) -> None:
+    app, factory, token, principal = api_setup
+    async with factory() as session:
+        accounts = await AccountService(session).list(principal.request_context)
+        bank, wallet = accounts
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://ledger.test"
+    ) as client:
+        # Web create entry with an explicit account.
+        created = await client.post(
+            "/api/web/v1/entries",
+            json={
+                "amount": "42.00",
+                "direction": "expense",
+                "category": "餐饮",
+                "note": "午餐",
+                "occurred_at": "2026-08-09T12:00:00+08:00",
+                "account_id": str(wallet.id),
+            },
+        )
+        assert created.status_code == 201
+        entry = created.json()["entry"]
+        assert entry["account_id"] == str(wallet.id)
+        assert entry["account_name"] == "钱包"
+        short_id = entry["short_id"]
+
+        # Web create with an unknown account is rejected.
+        bad = await client.post(
+            "/api/web/v1/entries",
+            json={
+                "amount": "1.00",
+                "direction": "expense",
+                "category": "餐饮",
+                "occurred_at": "2026-08-09T12:00:00+08:00",
+                "account_id": str(uuid.uuid4()),
+            },
+        )
+        assert bad.status_code == 404
+
+        # Web PATCH moves the entry's account.
+        patched = await client.patch(
+            f"/api/web/v1/entries/{short_id}",
+            json={"expected_updated_at": entry["updated_at"], "account_id": str(bank.id)},
+        )
+        assert patched.status_code == 200
+        assert patched.json()["entry"]["account_id"] == str(bank.id)
+        assert patched.json()["revisions"][0]["after"]["account_id"] == str(bank.id)
+
+        # Transfer list + detail with revisions.
+        transfer = await client.post(
+            "/api/web/v1/transfers",
+            json={
+                "from_account_id": str(bank.id),
+                "to_account_id": str(wallet.id),
+                "amount": "10.00",
+                "occurred_at": "2026-08-09T12:00:00+08:00",
+                "note": "归集",
+            },
+        )
+        assert transfer.status_code == 201
+        transfer_id = transfer.json()["id"]
+        listing = await client.get("/api/web/v1/transfers?page=1&page_size=20")
+        assert listing.status_code == 200
+        assert listing.json()["total"] == 1
+        assert listing.json()["items"][0]["id"] == transfer_id
+
+        detail = await client.get(f"/api/web/v1/transfers/{transfer_id}")
+        assert detail.status_code == 200
+        assert detail.json()["transfer"]["id"] == transfer_id
+        assert detail.json()["transfer"]["from_account_id"] == str(bank.id)
+        # A fresh transfer has no audit rows yet; reversing records one.
+        assert detail.json()["revisions"] == []
+        reversed_row = await client.post(f"/api/web/v1/transfers/{transfer_id}/reverse")
+        assert reversed_row.status_code == 200
+        detail = await client.get(f"/api/web/v1/transfers/{transfer_id}")
+        assert detail.json()["revisions"][0]["change_type"] == "reverse"

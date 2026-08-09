@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
 from lark_ledger.models import (
+    Account,
     CategoryBudget,
     Direction,
     LedgerEntry,
@@ -112,8 +113,9 @@ class WebLedgerQueryService:
             )
             .all()
         )
+        names = await self._account_names({row.account_id for row in rows})
         return EntryPage(
-            items=[self._entry(row) for row in rows],
+            items=[self._entry(row, names.get(row.account_id)) for row in rows],
             page=page,
             page_size=page_size,
             total=total,
@@ -146,8 +148,9 @@ class WebLedgerQueryService:
             )
             .all()
         )
+        names = await self._account_names({entry.account_id})
         return EntryDetail(
-            entry=self._entry(entry),
+            entry=self._entry(entry, names.get(entry.account_id)),
             revisions=[
                 WebRevision(
                     id=str(row.id),
@@ -212,6 +215,7 @@ class WebLedgerQueryService:
             )
             .all()
         )
+        recent_names = await self._account_names({row.account_id for row in recent})
         pending_count = int(
             await self._session.scalar(
                 select(func.count()).select_from(PendingCommand).where(
@@ -307,7 +311,9 @@ class WebLedgerQueryService:
             month_balance=income-expense,
             budget_usage_rate=(expense / total_budget * 100 if total_budget else None),
             pending_count=pending_count,
-            recent_entries=[self._entry(row) for row in recent],
+            recent_entries=[
+                self._entry(row, recent_names.get(row.account_id)) for row in recent
+            ],
             trend=trend,
             categories=categories,
         )
@@ -378,7 +384,7 @@ class WebLedgerQueryService:
         )
 
     @staticmethod
-    def _entry(row: LedgerEntry) -> WebEntry:
+    def _entry(row: LedgerEntry, account_name: str | None) -> WebEntry:
         return WebEntry(
             id=str(row.id),
             short_id=row.short_id,
@@ -392,4 +398,21 @@ class WebLedgerQueryService:
             created_at=row.created_at,
             updated_at=row.updated_at,
             deleted_at=row.deleted_at,
+            account_id=str(row.account_id) if row.account_id is not None else "",
+            account_name=account_name,
         )
+
+    async def _account_names(self, account_ids: set[Any]) -> dict[Any, str]:
+        """Resolve account display names scoped to the requested ids only."""
+        names: dict[Any, str] = {}
+        ids = {account_id for account_id in account_ids if account_id is not None}
+        if not ids:
+            return names
+        rows = (
+            await self._session.execute(
+                select(Account.id, Account.name).where(Account.id.in_(ids))
+            )
+        ).all()
+        for account_id, name in rows:
+            names[account_id] = name
+        return names

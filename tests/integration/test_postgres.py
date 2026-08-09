@@ -55,7 +55,7 @@ async def test_alembic_schema_is_at_head(
 ) -> None:
     async with postgres_session_factory() as session:
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "20260809_0020"
+    assert revision == "20260809_0021"
 
 
 async def test_readiness_uses_real_postgres_and_current_alembic_revision(
@@ -78,8 +78,8 @@ async def test_readiness_uses_real_postgres_and_current_alembic_revision(
     assert result["checks"]["database"] == {"status": "ok"}
     assert result["checks"]["migration"] == {
         "status": "ok",
-        "current": "20260809_0020",
-        "expected": "20260809_0020",
+        "current": "20260809_0021",
+        "expected": "20260809_0021",
     }
 
 
@@ -286,7 +286,7 @@ async def test_export_entries_query_on_postgres(
         assert "#EX002" in with_deleted.export.content.decode("utf-8-sig")
 
         revision = await session.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "20260809_0020"
+        assert revision == "20260809_0021"
 
 
 async def test_short_id_unique_per_ledger_allows_cross_ledger_reuse(
@@ -730,3 +730,50 @@ async def test_event_state_migration_roundtrip(
             autocommit = await conn.execution_options(isolation_level="AUTOCOMMIT")
             await autocommit.execute(text(f'DROP DATABASE IF EXISTS "{scratch}"'))
         await maint_engine.dispose()
+
+
+async def test_entry_account_update_moves_balance_on_postgres(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from lark_ledger.models import AccountType
+    from lark_ledger.services.accounts import AccountService
+    from lark_ledger.services.transfers import TransferService
+
+    async with postgres_session_factory() as session:
+        context = await IdentityService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_pg_account_move")
+        accounts = AccountService(session)
+        default = await accounts.get_default(context)
+        wallet = await accounts.create(
+            context, name="pg 钱包", account_type=AccountType.ASSET
+        )
+        await LedgerService(session).execute(
+            context,
+            ParsedCommand(
+                action=Action.CREATE,
+                amount=Decimal("60"),
+                direction="expense",
+                category="餐饮",
+                occurred_at="2026-08-09T12:00:00+08:00",
+            ),
+        )
+        entry = await session.scalar(
+            select(LedgerEntry)
+            .where(LedgerEntry.ledger_id == context.ledger_id)
+            .order_by(LedgerEntry.created_at.desc())
+            .limit(1)
+        )
+        assert entry is not None and entry.account_id == default.id
+        await LedgerService(session, account_id=wallet.id).execute(
+            context,
+            ParsedCommand(action=Action.UPDATE_ENTRY, entry_ref=entry.short_id),
+        )
+        await session.refresh(entry)
+        assert entry.account_id == wallet.id
+        assert (
+            await TransferService(session).account_balance(context, default.id)
+        ).current_balance == Decimal("0")
+        assert (
+            await TransferService(session).account_balance(context, wallet.id)
+        ).current_balance == Decimal("-60")

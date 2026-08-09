@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lark_ledger.client_schemas import ClientTransfer
 from lark_ledger.models import Direction
 
 
@@ -22,6 +24,10 @@ class WebEntry(BaseModel):
     created_at: datetime
     updated_at: datetime
     deleted_at: datetime | None
+    # Ledger-scoped account binding (P26). account_name is denormalized from the
+    # account row at read time and never leaks other ledgers' accounts.
+    account_id: str
+    account_name: str | None = None
 
 
 class EntryPage(BaseModel):
@@ -42,6 +48,19 @@ class WebRevision(BaseModel):
 
 class EntryDetail(BaseModel):
     entry: WebEntry
+    revisions: list[WebRevision]
+
+
+class TransferList(BaseModel):
+    items: list[ClientTransfer]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class WebTransferDetail(BaseModel):
+    transfer: ClientTransfer
     revisions: list[WebRevision]
 
 
@@ -131,12 +150,23 @@ class WebHouseholdInvitation(BaseModel):
 
 
 class EntryUpdateRequest(BaseModel):
+    """PATCH body for one ledger entry.
+
+    ``extra="forbid"`` guarantees a typo'd or future unknown field (e.g. an
+    ``account_id`` on a model that predates account support) is rejected instead
+    of silently ignored, so a client can never believe an account change landed
+    when it did not.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     expected_updated_at: datetime
     amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     direction: Direction | None = None
     category: str | None = Field(default=None, min_length=1, max_length=64)
     note: str | None = Field(default=None, max_length=500)
     occurred_at: datetime | None = None
+    account_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def has_change(self) -> EntryUpdateRequest:
@@ -148,10 +178,25 @@ class EntryUpdateRequest(BaseModel):
                 self.category,
                 self.note,
                 self.occurred_at,
+                self.account_id,
             )
         ):
             raise ValueError("at least one field must be updated")
         return self
+
+
+class EntryCreateRequest(BaseModel):
+    """POST body to create one ledger entry from the Web dashboard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    direction: Direction
+    category: str = Field(min_length=1, max_length=64)
+    note: str = Field(default="", max_length=500)
+    occurred_at: datetime
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    account_id: uuid.UUID | None = None
 
 
 class EntryVersionRequest(BaseModel):

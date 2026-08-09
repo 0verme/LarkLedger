@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import RedirectResponse, Response
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,7 +30,16 @@ from lark_ledger.client_schemas import (
 )
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
-from lark_ledger.models import Account, Direction, Household, HouseholdInvitation, Ledger, Transfer
+from lark_ledger.models import (
+    Account,
+    Direction,
+    Household,
+    HouseholdInvitation,
+    Ledger,
+    LedgerEntry,
+    Transfer,
+    TransferRevision,
+)
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
@@ -89,6 +99,7 @@ from lark_ledger.web_schemas import (
     BudgetUpdateRequest,
     DashboardData,
     DeletedFilter,
+    EntryCreateRequest,
     EntryDetail,
     EntryPage,
     EntrySort,
@@ -108,10 +119,13 @@ from lark_ledger.web_schemas import (
     ResultReplayResponse,
     SafeSystemConfig,
     SortOrder,
+    TransferList,
     WebHousehold,
     WebHouseholdInvitation,
     WebHouseholdMember,
     WebLedger,
+    WebRevision,
+    WebTransferDetail,
 )
 
 router = APIRouter(prefix="/api/web/v1", tags=["web-dashboard"])
@@ -718,22 +732,61 @@ async def create_web_transfer(
     return _web_transfer(row)
 
 
-@router.get("/transfers/{transfer_id}", response_model=ClientTransfer)
+@router.get("/transfers", response_model=TransferList)
+async def list_web_transfers(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+) -> TransferList:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        rows, total = await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).list_transfers(
+            principal.request_context, page=page, page_size=page_size
+        )
+    return TransferList(
+        items=[_web_transfer(row) for row in rows],
+        page=page,
+        page_size=page_size,
+        total=total,
+        pages=(total + page_size - 1) // page_size if total else 0,
+    )
+
+
+def _web_revision(row: TransferRevision) -> WebRevision:
+    return WebRevision(
+        id=str(row.id),
+        change_type=row.change_type,
+        before=row.before_json,
+        after=row.after_json,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/transfers/{transfer_id}", response_model=WebTransferDetail)
 async def get_web_transfer(
     transfer_id: uuid.UUID,
     request: Request,
     principal: Annotated[DashboardPrincipal, Depends(current_principal)],
-) -> ClientTransfer:
+) -> WebTransferDetail:
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
+        app = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
         try:
-            row = await ClientApplicationService(
-                session, currency=settings.currency, timezone=settings.timezone
-            ).get_transfer(principal.request_context, transfer_id)
+            row = await app.get_transfer(principal.request_context, transfer_id)
+            revisions = await app.transfer_revisions(principal.request_context, transfer_id)
         except TransferError as exc:
             raise _transfer_http_error(exc) from exc
-    return _web_transfer(row)
+    return WebTransferDetail(
+        transfer=_web_transfer(row),
+        revisions=[_web_revision(item) for item in revisions],
+    )
 
 
 @router.post("/transfers/{transfer_id}/reverse", response_model=ClientTransfer)
@@ -1141,6 +1194,57 @@ async def entries(
         )
 
 
+@router.post("/entries", response_model=EntryDetail, status_code=201)
+async def create_web_entry(
+    body: EntryCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> EntryDetail:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    source_id = f"web:{uuid.uuid4()}"
+    async with factory() as session:
+        app = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            await app.execute_financial(
+                principal.request_context,
+                ParsedCommand(
+                    action=Action.CREATE,
+                    amount=body.amount,
+                    direction=body.direction,
+                    category=body.category,
+                    note=body.note,
+                    occurred_at=body.occurred_at,
+                    currency=body.currency,
+                ),
+                source_type="web",
+                source_message_id=source_id,
+                account_id=body.account_id,
+            )
+        except AccountError as exc:
+            await session.rollback()
+            raise _account_http_error(exc) from exc
+        except ValueError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        entry = await session.scalar(
+            select(LedgerEntry).where(
+                LedgerEntry.ledger_id == principal.request_context.ledger_id,
+                LedgerEntry.source_message_id == source_id,
+            )
+        )
+        if entry is None:
+            raise HTTPException(status_code=500, detail="账目保存后未能读取，请稍后重试")
+        detail = await WebLedgerQueryService(
+            session, timezone=settings.timezone
+        ).entry_detail(principal.request_context, entry.short_id)
+    if detail is None:
+        raise HTTPException(status_code=500, detail="账目保存后未能读取，请稍后重试")
+    return detail
+
+
 @router.get("/entries/{short_id}", response_model=EntryDetail)
 async def entry_detail(
     short_id: str,
@@ -1168,6 +1272,7 @@ async def _mutate_entry(
     short_id: str,
     command: ParsedCommand,
     expected_updated_at: datetime,
+    account_id: uuid.UUID | None = None,
 ) -> EntryDetail:
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     settings = cast(Settings, request.app.state.settings)
@@ -1189,6 +1294,7 @@ async def _mutate_entry(
                 command,
                 source_type="web",
                 expected_updated_at=expected_updated_at,
+                account_id=account_id,
             )
         except EntryConflictError as exc:
             await session.rollback()
@@ -1213,6 +1319,7 @@ async def update_entry(
         principal=principal,
         short_id=short_id,
         expected_updated_at=payload.expected_updated_at,
+        account_id=payload.account_id,
         command=ParsedCommand(
             action=Action.UPDATE_ENTRY,
             entry_ref=short_id,

@@ -24,6 +24,7 @@ def snapshot_ledger_entry(entry: LedgerEntry) -> dict[str, Any]:
         "snapshot_version": SNAPSHOT_VERSION,
         "entry_id": str(entry.id),
         "short_id": entry.short_id,
+        "account_id": str(entry.account_id) if entry.account_id is not None else None,
         "amount": _decimal_str(entry.amount),
         "currency": entry.currency,
         "direction": (

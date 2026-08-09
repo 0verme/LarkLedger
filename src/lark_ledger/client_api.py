@@ -1238,6 +1238,7 @@ async def _mutate_entry(
     request: Request,
     principal: ClientPrincipal,
     idempotency_key: str | None,
+    account_id: uuid.UUID | None = None,
 ) -> EntryDetail:
     async with _factory(request)() as session:
         app = _application(session, _settings(request))
@@ -1252,6 +1253,7 @@ async def _mutate_entry(
                 source_type="client_api",
                 expected_updated_at=expected_updated_at,
                 commit_changes=False,
+                account_id=account_id,
             )
             detail = await app.entry_detail(principal.context, short_id)
             if detail is None:
@@ -1303,6 +1305,7 @@ async def update_entry(
         request=request,
         principal=principal,
         idempotency_key=idempotency_key,
+        account_id=payload.account_id,
     )
 
 

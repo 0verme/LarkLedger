@@ -113,11 +113,13 @@ class _ReportMixin:
             return ExecutionResult(message="该时间范围内没有可导出的账目。")
 
         try:
+            names = await self._account_names(fetched)
             export_file = _facade.build_export_file(
                 fetched,
                 timezone=self.timezone,
                 when=self._current_local_datetime(),
                 range_label=range_label,
+                account_names=names,
             )
         except ExportTooLargeError:
             return ExecutionResult(

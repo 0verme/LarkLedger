@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  ArrowLeftRight,
   BarChart3,
   BookOpen,
   ChevronRight,
@@ -10,6 +11,7 @@ import {
   Download,
   FileText,
   HeartPulse,
+  Landmark,
   LogOut,
   Menu,
   MessageSquareReply,
@@ -24,6 +26,8 @@ import { NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom"
 import { ApiError, api, type Ledger, type LedgerList, type Me } from "./api";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DeadPage, EventsPage, HealthPage, OutboxPage } from "./pages/AdminPages";
+import { AccountsPage } from "./pages/AccountsPage";
+import { TransfersPage } from "./pages/TransfersPage";
 import { EntriesPage } from "./pages/EntriesPage";
 import { AnalyticsPage, BudgetsPage, ExportsPage, ReportsPage } from "./pages/FinancePages";
 import { PendingPage } from "./pages/PendingPage";
@@ -37,6 +41,8 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
     items: [
       { label: "总览", path: "/", icon: BarChart3 },
       { label: "账目", path: "/entries", icon: BookOpen },
+      { label: "账户", path: "/accounts", icon: Landmark },
+      { label: "转账", path: "/transfers", icon: ArrowLeftRight },
       { label: "待确认", path: "/pending", icon: Clock3 },
       { label: "家庭", path: "/households", icon: Users },
       { label: "预算", path: "/budgets", icon: PiggyBank },
@@ -99,6 +105,8 @@ function LoadingScreen() {
 function pageElement(item: NavItem) {
   if (item.path === "/") return <DashboardPage />;
   if (item.path === "/entries") return <EntriesPage />;
+  if (item.path === "/accounts") return <AccountsPage />;
+  if (item.path === "/transfers") return <TransfersPage />;
   if (item.path === "/pending") return <PendingPage />;
   if (item.path === "/households") return <HouseholdsPage />;
   if (item.path === "/budgets") return <BudgetsPage />;

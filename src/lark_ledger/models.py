@@ -731,9 +731,18 @@ class PendingCommand(Base):
             name="fk_pending_ledger_to_account",
             ondelete="RESTRICT",
         ),
+        ForeignKeyConstraint(
+            ["ledger_id", "account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_pending_ledger_account",
+            ondelete="RESTRICT",
+        ),
         CheckConstraint(
-            "(from_account_id IS NULL AND to_account_id IS NULL AND transfer_id IS NULL) OR "
-            "(ledger_id IS NOT NULL AND from_account_id IS NOT NULL "
+            "(account_id IS NULL AND from_account_id IS NULL AND to_account_id IS NULL "
+            "AND transfer_id IS NULL) OR "
+            "(account_id IS NOT NULL AND from_account_id IS NULL AND to_account_id IS NULL "
+            "AND transfer_id IS NULL) OR "
+            "(account_id IS NULL AND ledger_id IS NOT NULL AND from_account_id IS NOT NULL "
             "AND to_account_id IS NOT NULL AND transfer_id IS NOT NULL "
             "AND from_account_id <> to_account_id)",
             name="ck_pending_transfer_target",
@@ -767,6 +776,9 @@ class PendingCommand(Base):
     from_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     to_account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     transfer_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Frozen single-account target for non-transfer write pendings (create /
+    # update / batch). NULL for legacy rows and for transfer / budget pendings.
+    account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     source_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -7,6 +7,8 @@ surface unchanged.
 # mypy: disable-error-code="attr-defined"
 
 import logging
+import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -17,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.entry_revisions import RevisionChangeType, snapshot_ledger_entry
-from lark_ledger.models import Direction, LedgerEntry, LedgerEntryRevision
+from lark_ledger.models import Account, Direction, LedgerEntry, LedgerEntryRevision
 from lark_ledger.schemas import (
     DEFAULT_LIST_LIMIT,
     MAX_BATCH_BUDGETS,
@@ -31,6 +33,7 @@ from lark_ledger.schemas import (
 )
 from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.exchange import ExchangeRateUnavailableError
+from lark_ledger.services.transfers import TransferService
 from lark_ledger.short_id import (
     MAX_SHORT_ID_ALLOCATION_ATTEMPTS,
     ShortIdError,
@@ -77,8 +80,11 @@ class _EntryMixin:
             source_message_id=source_message_id,
             source_item_index=source_item_index,
         )
+        names = await self._account_names([entry])
         return ExecutionResult(
-            message=self._created_message(entry, converted),
+            message=self._created_message(
+                entry, converted, names.get(entry.account_id, "")
+            ),
             budget_alert=budget_alert,
         )
 
@@ -96,15 +102,7 @@ class _EntryMixin:
         assert command.category is not None
         assert command.occurred_at is not None
         converted = await self._convert_command_amount(command)
-        account_service = AccountService(self.session)
-        requested_account_id = getattr(self, "account_id", None)
-        account = (
-            await account_service.get(
-                self._request_context(), requested_account_id, require_active=True
-            )
-            if requested_account_id is not None
-            else await account_service.get_default(self._request_context())
-        )
+        account = await self._resolve_entry_account(command)
         entry = LedgerEntry(
             user_open_id=user_open_id,
             ledger_id=self._request_context().ledger_id,
@@ -124,6 +122,57 @@ class _EntryMixin:
         budget_alert = await self._check_budget(entry)
         await self.session.flush()
         return entry, converted, budget_alert
+
+    async def _resolve_entry_account(self, command: ParsedCommand) -> Account:
+        """Resolve the ledger-scoped account a command targets.
+
+        Explicit ``account_id`` (web / client API) wins, then the AI/user
+        supplied ``account_hint`` name is resolved and validated against the
+        current ledger, and finally the ledger's active default account is used.
+        Archived or cross-ledger accounts are rejected by the account service.
+        """
+        requested_account_id = getattr(self, "account_id", None)
+        if requested_account_id is not None:
+            return await AccountService(self.session).get(
+                self._request_context(), requested_account_id, require_active=True
+            )
+        if command.account_hint is not None:
+            return await TransferService(self.session).resolve_account_hint(
+                self._request_context(), command.account_hint
+            )
+        return await AccountService(self.session).get_default(self._request_context())
+
+    async def _account_names(
+        self, entries: Sequence[LedgerEntry]
+    ) -> dict[uuid.UUID | None, str]:
+        """Resolve display names for the entries' accounts in one query.
+
+        ``None`` maps to the empty display name so unbound entries render as no
+        account without call-site None checks.
+        """
+        account_ids = {entry.account_id for entry in entries if entry.account_id is not None}
+        names: dict[uuid.UUID | None, str] = {None: ""}
+        if not account_ids:
+            return names
+        rows = (
+            await self.session.execute(
+                select(Account.id, Account.name).where(Account.id.in_(account_ids))
+            )
+        ).all()
+        for account_id, name in rows:
+            names[account_id] = name
+        return names
+
+    async def _ledger_account_names(self) -> dict[uuid.UUID | None, str]:
+        """Resolve display names for every account in the current ledger."""
+        rows = (
+            await self.session.execute(
+                select(Account.id, Account.name).where(
+                    Account.ledger_id == self._request_context().ledger_id
+                )
+            )
+        ).all()
+        return {None: "", **{account_id: name for account_id, name in rows}}
 
     async def _allocate_short_id(self, user_open_id: str) -> str:
         """Allocate a ledger-scoped short_id.
@@ -160,13 +209,17 @@ class _EntryMixin:
         )
         return existing is not None
 
-    def _created_message(self, entry: LedgerEntry, converted: _ConvertedAmount) -> str:
+    def _created_message(
+        self, entry: LedgerEntry, converted: _ConvertedAmount, account_name: str
+    ) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f"（{entry.note}）" if entry.note else ""
         conversion = self._conversion_note(converted)
+        account_part = f" · 账户：{account_name}" if account_name else ""
         return (
             f"已记录 {format_entry_ref(entry.short_id)} {sign} "
             f"{self._format_money(entry.amount)}{conversion} · {entry.category}{note}"
+            f"{account_part}"
         )
 
     async def _create_entries(
@@ -183,6 +236,7 @@ class _EntryMixin:
         alerts: list[str] = []
         income_total = Decimal("0")
         expense_total = Decimal("0")
+        names = await self._ledger_account_names()
 
         for index, candidate in enumerate(command.entries):
             item, error = self._validated_entry_candidate(candidate)
@@ -211,7 +265,11 @@ class _EntryMixin:
                     income_total += entry.amount
                 else:
                     expense_total += entry.amount
-                successes.append(self._batch_entry_line(index, entry, converted))
+                successes.append(
+                    self._batch_entry_line(
+                        index, entry, converted, names.get(entry.account_id, "")
+                    )
+                )
                 if budget_alert and budget_alert not in alerts:
                     alerts.append(budget_alert)
 
@@ -246,6 +304,7 @@ class _EntryMixin:
         alerts: list[str] = []
         income_total = Decimal("0")
         expense_total = Decimal("0")
+        names = await self._ledger_account_names()
 
         for index, entry_candidate in enumerate(command.entries or []):
             item, error = self._validated_entry_candidate(entry_candidate)
@@ -274,7 +333,11 @@ class _EntryMixin:
                     income_total += entry.amount
                 else:
                     expense_total += entry.amount
-                entry_successes.append(self._batch_entry_line(index, entry, converted))
+                entry_successes.append(
+                    self._batch_entry_line(
+                        index, entry, converted, names.get(entry.account_id, "")
+                    )
+                )
                 if budget_alert and budget_alert not in alerts:
                     alerts.append(budget_alert)
 
@@ -333,17 +396,25 @@ class _EntryMixin:
             budget_alert="\n\n".join(alerts) or None,
         )
 
-    def _batch_entry_line(self, index: int, entry: LedgerEntry, converted: _ConvertedAmount) -> str:
+    def _batch_entry_line(
+        self,
+        index: int,
+        entry: LedgerEntry,
+        converted: _ConvertedAmount,
+        account_name: str,
+    ) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         occurred = self._local_datetime(entry.occurred_at).strftime("%m-%d %H:%M")
         note = entry.note.strip()
         if len(note) > 30:
             note = note[:29] + "…"
         suffix = f" · {note}" if note else ""
+        account_part = f" · {account_name}" if account_name else ""
         return (
             f"✅ {format_entry_ref(entry.short_id)} 第 {index + 1} 笔："
             f"{sign} {self._format_money(entry.amount)}"
-            f"{self._conversion_note(converted)} · {entry.category} · {occurred}{suffix}"
+            f"{self._conversion_note(converted)} · {entry.category} · {occurred}"
+            f"{suffix}{account_part}"
         )
 
     @staticmethod
@@ -503,7 +574,23 @@ class _EntryMixin:
         converted = (
             await self._convert_command_amount(command) if command.amount is not None else None
         )
+        # Account change is optional: an explicit account_id (web / client API)
+        # or an account_hint (Feishu) moves the entry; otherwise the entry keeps
+        # its current account and is never silently redirected to the default.
+        requested_account_id = getattr(self, "account_id", None)
+        target_account: Account | None = None
+        if requested_account_id is not None:
+            target_account = await AccountService(self.session).get(
+                self._request_context(), requested_account_id, require_active=True
+            )
+        elif command.account_hint is not None:
+            target_account = await TransferService(self.session).resolve_account_hint(
+                self._request_context(), command.account_hint
+            )
         changed = False
+        if target_account is not None and entry.account_id != target_account.id:
+            entry.account_id = target_account.id
+            changed = True
         if converted is not None and entry.amount != converted.amount:
             entry.amount = converted.amount
             changed = True
@@ -543,11 +630,14 @@ class _EntryMixin:
         conversion = self._conversion_note(converted) if converted is not None else ""
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f" · {entry.note}" if entry.note else ""
+        names = await self._account_names([entry])
+        account_name = names.get(entry.account_id, "")
+        account_part = f"\n账户：{account_name}" if account_name else ""
         return ExecutionResult(
             message=(
                 f"已修改 {format_entry_ref(entry.short_id)}：\n"
                 f"{sign} {self._format_money(entry.amount)}{conversion} · "
-                f"{entry.category}{note}"
+                f"{entry.category}{note}{account_part}"
             ),
             budget_alert=budget_alert,
         )
@@ -687,7 +777,11 @@ class _EntryMixin:
         if not rows:
             return ExecutionResult(message="没有符合条件的账目。")
 
-        lines = [self._entry_list_line(index, entry) for index, entry in enumerate(rows, start=1)]
+        names = await self._account_names(rows)
+        lines = [
+            self._entry_list_line(index, entry, names.get(entry.account_id, ""))
+            for index, entry in enumerate(rows, start=1)
+        ]
         header = f"最近 {len(rows)} 笔账目（不含已撤销）"
         parts: list[str] = [header, "", *lines]
         notes: list[str] = []
@@ -710,7 +804,10 @@ class _EntryMixin:
         entry = await self._entry_by_short_id(user_open_id, short_id, include_deleted=True)
         if entry is None:
             return ExecutionResult(message="未找到该账目，或该账目不属于当前用户。")
-        return ExecutionResult(message=self._entry_detail_message(entry))
+        names = await self._account_names([entry])
+        return ExecutionResult(
+            message=self._entry_detail_message(entry, names.get(entry.account_id, ""))
+        )
 
     async def _entry_by_short_id(
         self,
@@ -729,17 +826,19 @@ class _EntryMixin:
             await self.session.execute(select(LedgerEntry).where(*filters).limit(1))
         ).scalar_one_or_none()
 
-    def _entry_list_line(self, index: int, entry: LedgerEntry) -> str:
+    def _entry_list_line(self, index: int, entry: LedgerEntry, account_name: str) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         when = self._local_datetime(entry.occurred_at).strftime("%m-%d %H:%M")
         note = self._note_preview(entry.note)
         note_part = f" · {note}" if note else ""
+        account_part = f" · {account_name}" if account_name else ""
         return (
             f"{index}. {format_entry_ref(entry.short_id)} · {when}\n"
-            f"   {sign} {self._format_money(entry.amount)} · {entry.category}{note_part}"
+            f"   {sign} {self._format_money(entry.amount)} · {entry.category}"
+            f"{note_part}{account_part}"
         )
 
-    def _entry_detail_message(self, entry: LedgerEntry) -> str:
+    def _entry_detail_message(self, entry: LedgerEntry, account_name: str) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         when = self._local_datetime(entry.occurred_at).strftime("%Y-%m-%d %H:%M")
         created = self._local_datetime(entry.created_at).strftime("%Y-%m-%d %H:%M")
@@ -758,6 +857,7 @@ class _EntryMixin:
                 f"方向：{sign}",
                 f"金额：{self._format_money(entry.amount)}",
                 f"币种：{entry.currency}",
+                f"账户：{account_name or '（默认账户）'}",
                 f"分类：{entry.category}",
                 f"备注：{note}",
                 f"来源类型：{entry.source_type}",

@@ -848,3 +848,103 @@ async def test_client_financial_error_envelopes_and_write_scope(
         assert (
             await client.get("/api/client/v1/entries/INVALID", headers=headers)
         ).status_code == 404
+
+
+async def test_client_patch_entry_account_moves_binding_and_rejects_foreign(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, _ = await _credential(client_factory, subject="ou_patch_account")
+    other_token, _ = await _credential(client_factory, subject="ou_patch_other")
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        me = await client.get("/api/client/v1/me", headers=headers)
+        ledger_id = me.json()["ledger_id"]
+        defaults = await client.get("/api/client/v1/accounts", headers=headers)
+        default_id = defaults.json()["items"][0]["id"]
+        wallet = await client.post(
+            "/api/client/v1/accounts",
+            headers=headers | {"Idempotency-Key": "patch-wallet"},
+            json={"name": "支付宝", "type": "asset", "opening_balance": "0"},
+        )
+        assert wallet.status_code == 201
+        wallet_id = wallet.json()["id"]
+
+        created = await client.post(
+            "/api/client/v1/entries",
+            headers=headers | {"Idempotency-Key": "patch-entry"},
+            json={
+                "amount": "50.00",
+                "direction": "expense",
+                "category": "餐饮",
+                "occurred_at": "2026-08-09T12:00:00+08:00",
+            },
+        )
+        assert created.status_code == 201
+        short_id = created.json()["resource"]["short_id"]
+        assert created.json()["resource"]["account_id"] == default_id
+
+        detail = await client.get(f"/api/client/v1/entries/{short_id}", headers=headers)
+        assert detail.status_code == 200
+        assert detail.json()["entry"]["account_id"] == default_id
+
+        updated = await client.patch(
+            f"/api/client/v1/entries/{short_id}",
+            headers=headers | {"Idempotency-Key": "patch-account"},
+            json={
+                "expected_updated_at": detail.json()["entry"]["updated_at"],
+                "account_id": wallet_id,
+            },
+        )
+        assert updated.status_code == 200
+        assert updated.json()["entry"]["account_id"] == wallet_id
+        assert updated.json()["entry"]["account_name"] == "支付宝"
+        assert updated.json()["revisions"][0]["change_type"] == "update"
+        assert (
+            updated.json()["revisions"][0]["before"]["account_id"] == default_id
+        )
+        assert updated.json()["revisions"][0]["after"]["account_id"] == wallet_id
+
+        # Balance moved between the two accounts.
+        default_balance = await client.get(
+            f"/api/client/v1/accounts/{default_id}/balance", headers=headers
+        )
+        assert default_balance.json()["current_balance"] == "0.00"
+        wallet_balance = await client.get(
+            f"/api/client/v1/accounts/{wallet_id}/balance", headers=headers
+        )
+        assert wallet_balance.json()["current_balance"] == "-50.00"
+
+        # A foreign-ledger account is rejected (404, nothing written).
+        foreign_me = await client.get(
+            "/api/client/v1/me", headers={"Authorization": f"Bearer {other_token}"}
+        )
+        foreign_ledger = foreign_me.json()["ledger_id"]
+        assert foreign_ledger != ledger_id
+        foreign_accounts = await client.get(
+            "/api/client/v1/accounts", headers={"Authorization": f"Bearer {other_token}"}
+        )
+        foreign_account_id = foreign_accounts.json()["items"][0]["id"]
+        rejected = await client.patch(
+            f"/api/client/v1/entries/{short_id}",
+            headers=headers | {"Idempotency-Key": "patch-foreign"},
+            json={
+                "expected_updated_at": updated.json()["entry"]["updated_at"],
+                "account_id": foreign_account_id,
+            },
+        )
+        assert rejected.status_code == 404
+
+        # Unknown fields are rejected instead of silently ignored (extra=forbid).
+        unknown = await client.patch(
+            f"/api/client/v1/entries/{short_id}",
+            headers=headers | {"Idempotency-Key": "patch-unknown"},
+            json={
+                "expected_updated_at": updated.json()["entry"]["updated_at"],
+                "amount": "99",
+                "accountId": wallet_id,
+            },
+        )
+        assert unknown.status_code == 422

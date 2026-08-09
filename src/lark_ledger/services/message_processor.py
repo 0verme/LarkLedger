@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from lark_ledger.account_commands import try_parse_account_command
 from lark_ledger.config import Settings
 from lark_ledger.entry_commands import (
     PendingDirective,
@@ -63,6 +64,7 @@ from lark_ledger.services.pending import (
 from lark_ledger.services.reply_worker import ReplyDeliverer
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
 from lark_ledger.services.risk import MediaKind, RiskAssessment, RiskDecision, RiskRouter
+from lark_ledger.services.transfers import AccountHintAmbiguousError
 from lark_ledger.services.worker import generate_owner_id
 from lark_ledger.transfer_commands import try_parse_transfer_command
 
@@ -284,6 +286,9 @@ class MessageProcessor:
                     return
                 if deterministic is not None:
                     command = deterministic
+                account_command = try_parse_account_command(text) if command is None else None
+                if account_command is not None:
+                    command = account_command
             if command is None:
                 command = await self.interpreter.interpret(text, now=now, images=images)
                 bound = bind_entry_refs_from_message(command, text)
@@ -369,6 +374,14 @@ class MessageProcessor:
             await self.feishu.reply_text(
                 message_id,
                 f"暂时无法获取汇率，请稍后重试。（错误编号：{error_id}）",
+            )
+        except AccountHintAmbiguousError:
+            # Controlled rejection: an account hint did not uniquely resolve to
+            # an active account in the current ledger. No business was written.
+            await self.feishu.reply_text(
+                message_id,
+                "账户名称不明确、已归档或不属于当前账本，本次未执行任何写入。"
+                "请使用准确的账户名称后重试，例如：查看支付宝余额、用招商银行记支出。",
             )
         except Exception:
             error_id = self._log_processing_error(stage, message_id, message_type)

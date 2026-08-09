@@ -19,6 +19,8 @@ export type Entry = {
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
+  account_id: string;
+  account_name: string | null;
 };
 
 export type EntryPage = {
@@ -60,6 +62,56 @@ export type AccountBalance = {
   opening_balance: string;
   current_balance: string;
   archived: boolean;
+};
+
+export type Account = {
+  id: string;
+  ledger_id: string;
+  name: string;
+  type: "cash" | "asset" | "liability";
+  subtype: string | null;
+  provider: string | null;
+  currency: string;
+  opening_balance: string;
+  status: "active" | "archived";
+  is_default: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AccountList = { items: Account[] };
+
+export type Transfer = {
+  id: string;
+  ledger_id: string;
+  from_account_id: string;
+  to_account_id: string;
+  amount: string;
+  currency: string;
+  note: string;
+  occurred_at: string;
+  reversed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TransferPage = {
+  items: Transfer[];
+  page: number;
+  page_size: number;
+  total: number;
+  pages: number;
+};
+
+export type TransferDetail = {
+  transfer: Transfer;
+  revisions: Array<{
+    id: string;
+    change_type: "create" | "update" | "reverse";
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+    created_at: string;
+  }>;
 };
 
 export type AssetSummary = {

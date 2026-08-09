@@ -33,6 +33,7 @@ from lark_ledger.confirmation_id import (
 from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     Direction,
+    LedgerEntry,
     PendingCommand,
     PendingStatus,
     ProcessedEvent,
@@ -45,13 +46,14 @@ from lark_ledger.outbox import (
     build_text_payload,
 )
 from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
+from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.risk import RiskAssessment, RiskReason
 from lark_ledger.services.transfers import TransferService
 from lark_ledger.services.worker import is_permanent_error
-from lark_ledger.short_id import MAX_SHORT_ID_ALLOCATION_ATTEMPTS
+from lark_ledger.short_id import MAX_SHORT_ID_ALLOCATION_ATTEMPTS, normalize_entry_ref
 
 logger = logging.getLogger(__name__)
 
@@ -423,6 +425,7 @@ class PendingCommandStore:
         from_account_id: uuid.UUID | None = None
         to_account_id: uuid.UUID | None = None
         transfer_id: uuid.UUID | None = None
+        account_id: uuid.UUID | None = None
         if command.action is Action.TRANSFER:
             assert command.from_account_hint is not None
             assert command.to_account_hint is not None
@@ -436,6 +439,46 @@ class PendingCommandStore:
             if from_account_id == to_account_id:
                 raise ValueError("转出和转入账户不能相同")
             transfer_id = uuid.uuid4()
+        elif command.action in {
+            Action.CREATE,
+            Action.UPDATE_LAST,
+            Action.CREATE_ENTRIES,
+            Action.BATCH,
+        }:
+            # Freeze the single account the frozen command targets. Resolve the
+            # hint at creation time so confirming after the user switches ledger
+            # or changes the default account still writes to the frozen target.
+            account_id = (
+                await TransferService(session).resolve_account_hint(
+                    context, command.account_hint
+                )
+            ).id if command.account_hint is not None else (
+                await AccountService(session).get_default(context)
+            ).id
+        elif (
+            command.action in {Action.UPDATE_ENTRY, Action.DELETE_ENTRY, Action.RESTORE_ENTRY}
+            and command.entry_ref
+        ):
+            # Freeze the entry's target account. An explicit hint names the new
+            # account; otherwise the entry's current account is frozen so an
+            # intervening default-account change never redirects the mutation.
+            if command.account_hint is not None:
+                account_id = (
+                    await TransferService(session).resolve_account_hint(
+                        context, command.account_hint
+                    )
+                ).id
+            else:
+                try:
+                    code = normalize_entry_ref(command.entry_ref)
+                except Exception:
+                    code = command.entry_ref
+                account_id = await session.scalar(
+                    select(LedgerEntry.account_id).where(
+                        LedgerEntry.ledger_id == context.ledger_id,
+                        LedgerEntry.short_id == code,
+                    )
+                )
         preview = build_pending_preview(
             command,
             source_type,
@@ -454,6 +497,7 @@ class PendingCommandStore:
             from_account_id=from_account_id,
             to_account_id=to_account_id,
             transfer_id=transfer_id,
+            account_id=account_id,
             source_event_id=event_id,
             source_message_id=message_id,
             source_fingerprint=source_fingerprint,
@@ -705,6 +749,7 @@ class PendingCommandStore:
                         self._settings.timezone,
                         exchange_rates=exchange_rates,
                         commit_changes=False,
+                        account_id=row.account_id,
                     ).execute(
                         frozen_context,
                         command,

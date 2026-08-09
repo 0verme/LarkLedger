@@ -276,3 +276,135 @@ async def test_pending_transfer_keeps_frozen_ledger_accounts_and_transfer_id() -
         stored = await db.get(PendingCommand, pending.id)
         assert stored is not None and stored.status == "executed"
     await engine.dispose()
+
+
+async def test_pending_create_freezes_account_across_ledger_and_default_switch() -> None:
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as connection:
+        from lark_ledger.models import Base
+
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    settings = Settings(_env_file=None, pending_expires_seconds=600)
+    store = PendingCommandStore(factory, settings)
+    now = datetime.now(UTC)
+    async with factory() as db:
+        context, default, wallet, _ = await _setup(db, "ou_pending_account")
+        # Change the default away from "默认账户" so a hint-free pending freezes
+        # the newly chosen default, then switch the default before confirming.
+        await AccountService(db).set_default(context, wallet.id)
+        pending = await store.create_pending(
+            session=db,
+            event_id="evt-pending-create",
+            message_id="om-pending-create",
+            source_fingerprint=None,
+            user_open_id="ou_pending_account",
+            command=ParsedCommand(
+                action=Action.CREATE,
+                amount=Decimal("45"),
+                direction="expense",
+                category="餐饮",
+                occurred_at=now,
+            ),
+            source_type="text",
+            risk=RiskAssessment(
+                decision=RiskDecision.PENDING,
+                reason=RiskReason.DUPLICATE,
+            ),
+            now=now,
+            context=context,
+        )
+        assert pending.account_id == wallet.id
+        assert pending.from_account_id is None and pending.to_account_id is None
+        # Switch to a brand new ledger with its own default account; confirming
+        # must still write to the frozen (original) ledger + frozen account.
+        new_ledger = await ClientApplicationService(
+            db, currency="CNY", timezone="Asia/Shanghai"
+        ).create_personal_ledger(context, "切换后的账本")
+        assert context.channel_identity_id is not None
+        await ClientApplicationService(
+            db, currency="CNY", timezone="Asia/Shanghai"
+        ).select_channel_ledger(context, new_ledger.id)
+        await db.commit()
+
+    message, _ = await store.confirm_and_execute(
+        user_open_id="ou_pending_account",
+        confirmation_code=pending.confirmation_code,
+        reply_to_message_id="om-confirm-create",
+        confirm_event_id=None,
+        exchange_rates=None,
+        now=now,
+    )
+    assert "已记录" in message
+    async with factory() as db:
+        row = await db.scalar(
+            select(LedgerEntry).where(LedgerEntry.ledger_id == context.ledger_id)
+        )
+        assert row is not None
+        assert row.account_id == wallet.id
+        assert row.ledger_id == context.ledger_id
+        stored = await db.get(PendingCommand, pending.id)
+        assert stored is not None and stored.status == "executed"
+    await engine.dispose()
+
+
+async def test_pending_create_with_account_hint_freezes_hinted_account() -> None:
+    engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    async with engine.begin() as connection:
+        from lark_ledger.models import Base
+
+        await connection.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    settings = Settings(_env_file=None, pending_expires_seconds=600)
+    store = PendingCommandStore(factory, settings)
+    now = datetime.now(UTC)
+    async with factory() as db:
+        context, default, wallet, _ = await _setup(db, "ou_pending_hint")
+        pending = await store.create_pending(
+            session=db,
+            event_id="evt-pending-hint",
+            message_id="om-pending-hint",
+            source_fingerprint=None,
+            user_open_id="ou_pending_hint",
+            command=ParsedCommand(
+                action=Action.CREATE,
+                amount=Decimal("12"),
+                direction="income",
+                category="退款",
+                occurred_at=now,
+                account_hint="支付宝",
+            ),
+            source_type="text",
+            risk=RiskAssessment(
+                decision=RiskDecision.PENDING,
+                reason=RiskReason.DUPLICATE,
+            ),
+            now=now,
+            context=context,
+        )
+        assert pending.account_id == wallet.id
+        await db.commit()
+
+    message, _ = await store.confirm_and_execute(
+        user_open_id="ou_pending_hint",
+        confirmation_code=pending.confirmation_code,
+        reply_to_message_id="om-confirm-hint",
+        confirm_event_id=None,
+        exchange_rates=None,
+        now=now,
+    )
+    assert "已记录" in message
+    async with factory() as db:
+        row = await db.scalar(
+            select(LedgerEntry).where(LedgerEntry.ledger_id == context.ledger_id)
+        )
+        assert row is not None and row.account_id == wallet.id
+    await engine.dispose()

@@ -15,6 +15,7 @@ from lark_ledger.models import (
     HouseholdInvitation,
     Ledger,
     Transfer,
+    TransferRevision,
 )
 from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.accounts import AccountService
@@ -196,6 +197,18 @@ class ClientApplicationService:
 
     async def get_transfer(self, context: RequestContext, transfer_id: uuid.UUID) -> Transfer:
         return await TransferService(self._session).get(context, transfer_id)
+
+    async def list_transfers(
+        self, context: RequestContext, *, page: int, page_size: int
+    ) -> tuple[list[Transfer], int]:
+        return await TransferService(self._session).list_paginated(
+            context, page=page, page_size=page_size
+        )
+
+    async def transfer_revisions(
+        self, context: RequestContext, transfer_id: uuid.UUID
+    ) -> list[TransferRevision]:
+        return await TransferService(self._session).revisions(context, transfer_id)
 
     async def reverse_transfer(self, context: RequestContext, transfer_id: uuid.UUID) -> Transfer:
         return await TransferService(self._session).reverse(context, transfer_id)

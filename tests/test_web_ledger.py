@@ -97,3 +97,50 @@ async def test_web_detail_revision_and_dashboard(session: AsyncSession) -> None:
     assert dashboard.budget_usage_rate == Decimal("20")
     assert dashboard.categories[0].category == "餐饮"
     assert len(dashboard.trend) == 30
+
+
+async def test_web_entry_includes_ledger_scoped_account(session: AsyncSession) -> None:
+    from lark_ledger.models import AccountType
+    from lark_ledger.services.accounts import AccountService
+    from lark_ledger.services.identity import IdentityService
+
+    context = await IdentityService(
+        session, currency="CNY", timezone="Asia/Shanghai"
+    ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_web_account")
+    accounts = AccountService(session)
+    wallet = await accounts.create(
+        context, name="支付宝", account_type=AccountType.ASSET
+    )
+    created = await LedgerService(session, account_id=wallet.id).execute(
+        context,
+        ParsedCommand(
+            action=Action.CREATE,
+            amount=Decimal("32"),
+            direction="expense",
+            category="餐饮",
+            occurred_at="2026-08-09T12:00:00+08:00",
+        ),
+    )
+    short_id = created.message.split("#")[1][:5]
+    query = WebLedgerQueryService(session)
+    page = await query.list_entries(context, page=1, page_size=25)
+    assert page.total == 1
+    item = page.items[0]
+    assert item.account_id == str(wallet.id)
+    assert item.account_name == "支付宝"
+
+    detail = await query.entry_detail(context, short_id)
+    assert detail is not None
+    assert detail.entry.account_name == "支付宝"
+
+    dashboard = await query.dashboard(context, now=datetime(2026, 8, 9, 8, tzinfo=UTC))
+    assert dashboard.recent_entries[0].account_id == str(wallet.id)
+
+
+async def test_web_entry_unbound_account_stays_empty_string(session: AsyncSession) -> None:
+    await _entry(session, "UNBD1", amount="9")
+    query = WebLedgerQueryService(session)
+    page = await query.list_entries("ou_a", page=1, page_size=25)
+    assert page.total == 1
+    assert page.items[0].account_id == ""
+    assert page.items[0].account_name is None

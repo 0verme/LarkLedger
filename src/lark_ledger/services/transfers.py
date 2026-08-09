@@ -154,6 +154,56 @@ class TransferService:
             raise TransferNotFoundError("转账不存在或不属于当前账本")
         return row
 
+    async def list_paginated(
+        self, context: RequestContext, *, page: int, page_size: int
+    ) -> tuple[list[Transfer], int]:
+        await self._authorization.get_accessible(context.actor_user_id, context.ledger_id)
+        total = int(
+            await self._session.scalar(
+                select(func.count()).select_from(Transfer).where(
+                    Transfer.ledger_id == context.ledger_id
+                )
+            )
+            or 0
+        )
+        rows = (
+            (
+                await self._session.scalars(
+                    select(Transfer)
+                    .where(Transfer.ledger_id == context.ledger_id)
+                    .order_by(
+                        Transfer.occurred_at.desc(),
+                        Transfer.created_at.desc(),
+                        Transfer.id.desc(),
+                    )
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            )
+            .all()
+        )
+        return list(rows), total
+
+    async def revisions(
+        self, context: RequestContext, transfer_id: uuid.UUID
+    ) -> list[TransferRevision]:
+        await self._authorization.get_accessible(context.actor_user_id, context.ledger_id)
+        rows = (
+            (
+                await self._session.scalars(
+                    select(TransferRevision)
+                    .where(
+                        TransferRevision.transfer_id == transfer_id,
+                        TransferRevision.ledger_id == context.ledger_id,
+                    )
+                    .order_by(TransferRevision.created_at.desc())
+                    .limit(100)
+                )
+            )
+            .all()
+        )
+        return list(rows)
+
     async def reverse(self, context: RequestContext, transfer_id: uuid.UUID) -> Transfer:
         row = await self._locked(context, transfer_id)
         if row.reversed_at is not None:

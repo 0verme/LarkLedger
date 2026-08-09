@@ -809,3 +809,35 @@ def test_build_export_file_result_shape() -> None:
     assert rows[1][2] == "income"
     assert rows[1][3] == "3.10"
     assert rows[1][6] == ""
+
+
+def test_csv_export_includes_account_name_column() -> None:
+    when = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    account_id = uuid.uuid4()
+    entry = LedgerEntry(
+        id=uuid.uuid4(),
+        user_open_id="ou_exporter",
+        ledger_id=uuid.uuid4(),
+        account_id=account_id,
+        short_id="AC001",
+        amount=Decimal("12.50"),
+        currency="CNY",
+        direction=Direction.EXPENSE,
+        category="餐饮",
+        note="午饭",
+        occurred_at=when,
+        source_type="text",
+        created_at=when,
+        updated_at=when,
+        deleted_at=None,
+    )
+    payload = entries_to_csv_bytes(
+        [entry], timezone=TZ, account_names={account_id: "支付宝"}
+    )
+    body = payload.decode("utf-8-sig")
+    rows = _parse_csv(payload)
+    assert rows[0] == list(CSV_HEADERS)
+    assert rows[0][-1] == "account_name"
+    assert rows[1][-1] == "支付宝"
+    # No UUID leaks into the export (account_id is only surfaced by name).
+    assert str(account_id) not in body

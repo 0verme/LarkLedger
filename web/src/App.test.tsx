@@ -170,4 +170,76 @@ describe("dashboard routing and protection", () => {
     fireEvent.click(await screen.findByRole("button", { name: "确认取消" }));
     expect((await screen.findAllByText("已取消")).length).toBeGreaterThan(0);
   });
+
+  it("manages accounts: list, create, set default and archive", async () => {
+    const wallet = { id: "account-1", ledger_id: "ledger-1", name: "支付宝", type: "asset", subtype: null, provider: null, currency: "CNY", opening_balance: "100.00", status: "active", is_default: true, created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z" };
+    const bank = { id: "account-2", ledger_id: "ledger-1", name: "招商银行", type: "asset", subtype: null, provider: null, currency: "CNY", opening_balance: "0", status: "active", is_default: false, created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z" };
+    const balance = (accountId: string, current: string) => ({ account_id: accountId, ledger_id: "ledger-1", account_name: accountId === "account-1" ? "支付宝" : "招商银行", account_type: "asset", currency: "CNY", opening_balance: "0", current_balance: current, archived: false });
+    const assetSummary = { ledger_id: "ledger-1", currency: "CNY", total_assets: "1000", total_liabilities: "200", net_assets: "800", accounts: [balance("account-1", "1000"), balance("account-2", "0")] };
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
+      if (url.includes("/assets")) return Promise.resolve(Response.json(assetSummary));
+      if (url.includes("/accounts")) {
+        if (init?.method === "POST") return Promise.resolve(Response.json({ ...bank, name: "招商银行", is_default: false }));
+        if (init?.method === "PATCH") return Promise.resolve(Response.json({ ...bank, name: "招商银行卡" }));
+        if (init?.method === "POST" && /\/default$/.test(url)) return Promise.resolve(Response.json({ ...bank, is_default: true }));
+        if (init?.method === "POST" && /\/archive$/.test(url)) return Promise.resolve(Response.json({ ...bank, status: "archived" }));
+        return Promise.resolve(Response.json({ items: [wallet, bank] }));
+      }
+      return Promise.resolve(Response.json({ items: [], page: 1, page_size: 25, total: 0, pages: 0 }));
+    }));
+    renderApp("/accounts");
+    expect(await screen.findByRole("heading", { name: "每一笔钱，都在它该在的地方。" })).toBeInTheDocument();
+    expect(await screen.findByText("招商银行")).toBeInTheDocument();
+    expect(screen.getByText("净资产")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "创建账户" }));
+    fireEvent.change(screen.getByLabelText("账户名称"), { target: { value: "招商银行" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建" }));
+    expect(await screen.findByText("账户已更新")).toBeInTheDocument();
+  });
+
+  it("lists, creates and reverses transfers", async () => {
+    const transfer = { id: "transfer-1", ledger_id: "ledger-1", from_account_id: "account-1", to_account_id: "account-2", amount: "100.00", currency: "CNY", note: "资金归集", occurred_at: "2026-08-08T04:00:00Z", reversed_at: null, created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z" };
+    const accounts = [
+      { id: "account-1", name: "支付宝", status: "active" },
+      { id: "account-2", name: "招商银行", status: "active" },
+    ];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
+      if (url.includes("/accounts")) return Promise.resolve(Response.json({ items: accounts }));
+      if (url.includes("/transfers")) {
+        if (init?.method === "POST" && /\/reverse$/.test(url)) return Promise.resolve(Response.json({ ...transfer, reversed_at: "2026-08-08T05:00:00Z" }));
+        if (init?.method === "POST") return Promise.resolve(Response.json({ ...transfer, id: "transfer-2" }));
+        if (/\/transfers\/transfer-1/.test(url)) return Promise.resolve(Response.json({ transfer, revisions: [{ id: "r1", change_type: "create", before: {}, after: {}, created_at: "2026-08-08T04:00:00Z" }] }));
+        return Promise.resolve(Response.json({ items: [transfer], page: 1, page_size: 20, total: 1, pages: 1 }));
+      }
+      return Promise.resolve(Response.json({ items: [], page: 1, page_size: 25, total: 0, pages: 0 }));
+    }));
+    renderApp("/transfers");
+    expect(await screen.findByRole("heading", { name: "转账，不改变你的总账。" })).toBeInTheDocument();
+    expect(await screen.findByText("资金归集")).toBeInTheDocument();
+    fireEvent.click(await screen.findByText("¥100.00"));
+    expect(await screen.findByRole("heading", { name: /100\.00/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "撤销转账" }));
+    expect(await screen.findByText("转账已撤销")).toBeInTheDocument();
+  });
+
+  it("shows entry account in list and edit dialog", async () => {
+    const entry = { id: "1", short_id: "A83F2", amount: "32.00", currency: "CNY", direction: "EXPENSE", category: "餐饮", note: "午饭", occurred_at: "2026-08-08T04:00:00Z", source_type: "text", created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z", deleted_at: null, account_id: "account-1", account_name: "支付宝" };
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
+      if (url.includes("/accounts")) return Promise.resolve(Response.json({ items: [{ id: "account-1", name: "支付宝", status: "active" }, { id: "account-2", name: "招商银行", status: "active" }] }));
+      if (url.includes("/entries/A83F2")) return Promise.resolve(Response.json({ entry, revisions: [{ id: "r1", change_type: "update", before: { account_id: "account-2", amount: "32.00" }, after: { account_id: "account-1", amount: "32.00" }, created_at: "2026-08-08T04:00:00Z" }] }));
+      return Promise.resolve(Response.json({ items: [entry], page: 1, page_size: 25, total: 1, pages: 1 }));
+    }));
+    renderApp("/entries");
+    expect(await screen.findByText("支付宝")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "#A83F2" }));
+    expect(await screen.findByText("交易账户已变更")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /修改/ }));
+    expect(await screen.findByLabelText("账户")).toHaveValue("account-1");
+  });
 });

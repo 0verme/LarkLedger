@@ -29,6 +29,7 @@ from lark_ledger.services.export import (
     build_export_file as build_export_file,  # noqa: F401  # re-exported; tests patch lark_ledger.services.ledger.build_export_file
 )
 from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.ledger_accounts import _AccountQueryMixin
 from lark_ledger.services.ledger_authorization import (
     LedgerAuthorizationError,
     LedgerAuthorizationService,
@@ -70,7 +71,7 @@ HELP_TEXT = (
 )
 
 
-class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin):
+class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin, _AccountQueryMixin):
     def __init__(
         self,
         session: AsyncSession,
@@ -181,6 +182,10 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin):
             result = await self._list_budgets(user_open_id, command)
         elif command.action is Action.DELETE_BUDGET:
             result = await self._delete_budget(user_open_id, command)
+        elif command.action is Action.LIST_ACCOUNTS:
+            result = await self._list_accounts(user_open_id, command)
+        elif command.action is Action.ASSETS:
+            result = await self._assets(user_open_id, command)
         else:
             result = ExecutionResult(message=HELP_TEXT)
 
