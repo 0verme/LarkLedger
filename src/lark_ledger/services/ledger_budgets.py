@@ -16,8 +16,10 @@ from lark_ledger.schemas import (
     ExecutionResult,
     ParsedCommand,
 )
+from lark_ledger.services.budget import BudgetService
 from lark_ledger.services.exchange import ExchangeRateUnavailableError
 from lark_ledger.services.ledger_entries import _ConvertedAmount, logger
+from lark_ledger.web_schemas import BudgetOverview
 
 
 class _BudgetMixin:
@@ -62,6 +64,40 @@ class _BudgetMixin:
             f"已设置每月{command.category}预算 "
             f"{self._format_money(converted.amount)}{conversion}\n"
             f"本月已用 ¥{spent:.2f} · {progress}"
+        )
+
+    async def _set_total_budget(
+        self, user_open_id: str, command: ParsedCommand
+    ) -> ExecutionResult:
+        assert command.amount is not None
+        converted = await self._convert_command_amount(command)
+        service = BudgetService(
+            self.session, currency=self.currency, timezone=str(self.timezone)
+        )
+        overview = await service.set_total_budget(
+            self._request_context(),
+            amount=converted.amount,
+            currency=self.currency,
+            now=self.now,
+        )
+        return ExecutionResult(message=self._total_budget_set_message(overview, converted))
+
+    def _total_budget_set_message(
+        self, overview: BudgetOverview, converted: _ConvertedAmount
+    ) -> str:
+        assert overview.total_budget is not None
+        period = f"{overview.period[:4]}年{int(overview.period[5:7])}月"
+        conversion = self._conversion_note(converted)
+        remaining = overview.total_remaining
+        if remaining is None:
+            remaining_text = "暂无预算数据"
+        elif remaining < 0:
+            remaining_text = f"已超出 {self._format_money(-remaining)}"
+        else:
+            remaining_text = f"剩余 {self._format_money(remaining)}"
+        return (
+            f"已设置{period}总预算 {self._format_money(overview.total_budget)}{conversion}\n"
+            f"本月已用 {self._format_money(overview.total_spent)} · {remaining_text}"
         )
 
     async def _set_budgets(
@@ -143,23 +179,41 @@ class _BudgetMixin:
     async def _list_budgets(
         self, user_open_id: str, command: ParsedCommand
     ) -> ExecutionResult:
-        query = select(CategoryBudget).where(self._budget_scope(user_open_id))
-        if command.category:
-            query = query.where(CategoryBudget.category == command.category)
-        budgets = (
-            (await self.session.execute(query.order_by(CategoryBudget.category))).scalars().all()
+        service = BudgetService(
+            self.session, currency=self.currency, timezone=str(self.timezone)
         )
-        if not budgets:
+        overview = await service.overview(self._request_context(), now=self.now)
+        lines: list[str] = []
+        # A category-filtered query reports only that category; the period total
+        # line is reserved for the unfiltered overview.
+        if not command.category and overview.total_budget is not None:
+            remaining = overview.total_remaining
+            if remaining is None:
+                remaining_text = "暂无预算数据"
+            elif remaining < 0:
+                remaining_text = f"已超出 {self._format_money(-remaining)}"
+            else:
+                remaining_text = f"剩余 {self._format_money(remaining)}"
+            lines.append(
+                f"总预算 {self._format_money(overview.total_budget)} · "
+                f"已用 {self._format_money(overview.total_spent)} · {remaining_text}"
+            )
+        for item in overview.items:
+            if command.category and item.category != command.category:
+                continue
+            if item.amount is None:
+                lines.append(
+                    f"• {item.category}：未设置预算，本月已用 ¥{item.spent:.2f}"
+                )
+            else:
+                lines.append(
+                    f"• {item.category}：¥{item.spent:.2f} / ¥{item.amount:.2f}"
+                    f"（{self._budget_progress(item.spent, item.amount)}）"
+                )
+        if not lines:
             if command.category:
                 return ExecutionResult(message=f"还没有设置{command.category}月预算。")
             return ExecutionResult(message="还没有设置任何月预算。")
-        lines: list[str] = []
-        for budget in budgets:
-            spent = await self._monthly_spend(user_open_id, budget.category)
-            lines.append(
-                f"• {budget.category}：¥{spent:.2f} / ¥{budget.amount:.2f}"
-                f"（{self._budget_progress(spent, budget.amount)}）"
-            )
         return ExecutionResult(message="本月预算进度\n" + "\n".join(lines))
 
     async def _delete_budget(

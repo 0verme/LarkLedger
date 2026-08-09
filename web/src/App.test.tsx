@@ -122,7 +122,7 @@ describe("dashboard routing and protection", () => {
 
   it("renders analytics and updates a category budget", async () => {
     const me = { open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" };
-    const budget = { currency: "CNY", total_budget: "200", total_spent: "40", total_remaining: "160", usage_rate: "20", items: [{ category: "餐饮", amount: "200", spent: "40", remaining: "160", usage_rate: "20" }] };
+    const budget = { currency: "CNY", period: "2026-08", total_budget: "200", total_spent: "40", total_remaining: "160", usage_rate: "20", status: "normal", total_limit_set: false, allocated: "200", unallocated: null, items: [{ category: "餐饮", amount: "200", spent: "40", remaining: "160", usage_rate: "20", status: "normal" }] };
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/me")) return Promise.resolve(Response.json(me));

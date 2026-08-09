@@ -19,6 +19,7 @@ from lark_ledger.models import (
 )
 from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.accounts import AccountService
+from lark_ledger.services.budget import BudgetService
 from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.household_management import (
     HouseholdManagementError,
@@ -280,9 +281,9 @@ class ClientApplicationService:
 
     async def dashboard(self, context: RequestContext) -> DashboardData:
         await self.authorize(context)
-        return await WebLedgerQueryService(self._session, timezone=self._timezone).dashboard(
-            context
-        )
+        return await WebLedgerQueryService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).dashboard(context)
 
     async def list_entries(self, context: RequestContext, query: EntryQuery) -> EntryPage:
         await self.authorize(context)
@@ -310,10 +311,49 @@ class ClientApplicationService:
         )
 
     async def budgets(self, context: RequestContext) -> BudgetOverview:
+        return await self.get_budget_overview(context)
+
+    async def get_budget_overview(
+        self, context: RequestContext, *, period: date | None = None
+    ) -> BudgetOverview:
         await self.authorize(context)
-        return await WebAnalyticsQueryService(
-            self._session, timezone=self._timezone, currency=self._currency
-        ).budgets(context)
+        return await BudgetService(
+            self._session, currency=self._currency, timezone=self._timezone
+        ).overview(context, period=period)
+
+    async def set_total_budget(
+        self,
+        context: RequestContext,
+        *,
+        period: date | None = None,
+        amount: Decimal,
+        currency: str | None = None,
+    ) -> BudgetOverview:
+        return await BudgetService(
+            self._session, currency=self._currency, timezone=self._timezone
+        ).set_total_budget(context, period=period, amount=amount, currency=currency)
+
+    async def set_category_budget(
+        self,
+        context: RequestContext,
+        *,
+        period: date | None = None,
+        category: str,
+        amount: Decimal,
+        currency: str | None = None,
+    ) -> BudgetOverview:
+        return await BudgetService(
+            self._session, currency=self._currency, timezone=self._timezone
+        ).set_category_budget(
+            context, period=period, category=category, amount=amount, currency=currency
+        )
+
+    async def delete_budget(
+        self, context: RequestContext, *, period: date | None = None, category: str | None = None
+    ) -> BudgetOverview:
+        return await BudgetService(
+            self._session, currency=self._currency, timezone=self._timezone
+        ).delete_budget(context, period=period, category=category)
 
     async def analytics(
         self, context: RequestContext, *, start_date: date, end_date: date

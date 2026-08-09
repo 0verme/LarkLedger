@@ -74,6 +74,8 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
   “导出本月账单”→ export_entries。
 - report：要求生成报告、图表或消费分析，给出左闭右开的 range_start、range_end。
 - set_budget：设置或修改长期生效的品类月预算，必须给出 amount 和 category。
+- set_total_budget：设置或修改本月的账本总预算（不区分品类），必须给出 amount，不要填写 category。
+  对照：“设置本月预算12000”“本月总预算12000”→ set_total_budget；“餐饮预算3000”→ set_budget。
 - set_budgets：一条消息设置多个品类月预算时使用，把每个品类、金额和可选币种放入
   budgets；最多 {max_batch_budgets} 项。示例“交通预算500，人情往来预算1000”必须解析成两个候选项。
 - list_budgets：查看月预算；查看指定品类时填写 category，否则留空。
@@ -102,8 +104,9 @@ JSON 示例：用户输入“2025-01-02 晚餐 100，交通预算 500”，输�
 金额始终为正数；收入/支出由 direction 表示。不要臆造不明确的金额。
 金额明确带有币种时填写 currency，使用三字母代码：人民币 CNY、美元 USD、欧元 EUR、
 日元 JPY、英镑 GBP、港币 HKD、韩元 KRW、澳元 AUD、加元 CAD、新加坡元 SGD。
-没有明确币种时 currency 留空并按默认币种处理。currency 只用于 create、update_last 和
-set_budget；批量账目和批量预算的币种写在各自候选项中。summary 和 report 始终使用默认币种。
+没有明确币种时 currency 留空并按默认币种处理。currency 只用于 create、update_last、
+set_budget 和 set_total_budget；批量账目和批量预算的币种写在各自候选项中。summary 和
+report 始终使用默认币种。
 list_entries / get_entry / delete_entry / restore_entry / export_entries 不使用 currency。
 update_entry 的 currency 仅在同时给出 amount 时可用于外币约算，与 update_last 相同。
 entry_ref 必须来自用户原文中的短 ID，禁止臆造。

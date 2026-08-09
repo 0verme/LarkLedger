@@ -43,6 +43,7 @@ from lark_ledger.models import (
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
+from lark_ledger.services.budget import parse_period
 from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.client_auth import ClientCredentialService
 from lark_ledger.services.dashboard_auth import (
@@ -1144,7 +1145,9 @@ async def dashboard(
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
-        return await WebLedgerQueryService(session, timezone=settings.timezone).dashboard(
+        return await WebLedgerQueryService(
+            session, timezone=settings.timezone, currency=settings.currency
+        ).dashboard(
             principal.request_context
         )
 
@@ -1717,21 +1720,73 @@ async def analytics_monthly(
     return (await _analytics_data(request, principal, period, start_date, end_date))[3]
 
 
-async def _budget_overview(request: Request, principal: DashboardPrincipal) -> BudgetOverview:
+def _budget_period(period: str | None) -> date | None:
+    if period is None or not period.strip():
+        return None
+    try:
+        return parse_period(period)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+async def _budget_overview(
+    request: Request, principal: DashboardPrincipal, period: date | None = None
+) -> BudgetOverview:
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     async with factory() as session:
-        return await WebAnalyticsQueryService(
-            session, timezone=settings.timezone, currency=settings.currency
-        ).budgets(principal.request_context)
+        return await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).get_budget_overview(principal.request_context, period=period)
 
 
 @router.get("/budgets", response_model=BudgetOverview)
 async def budgets(
     request: Request,
     principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: str | None = None,
 ) -> BudgetOverview:
-    return await _budget_overview(request, principal)
+    return await _budget_overview(request, principal, _budget_period(period))
+
+
+@router.put("/budgets/total", response_model=BudgetOverview)
+async def update_total_budget(
+    payload: BudgetUpdateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    period: str | None = None,
+) -> BudgetOverview:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    target = _budget_period(period)
+    async with factory() as session:
+        await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).set_total_budget(
+            principal.request_context,
+            period=target,
+            amount=payload.amount,
+            currency=payload.currency,
+        )
+        await session.commit()
+    return await _budget_overview(request, principal, target)
+
+
+@router.delete("/budgets/total", response_model=BudgetOverview)
+async def delete_total_budget(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    period: str | None = None,
+) -> BudgetOverview:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    target = _budget_period(period)
+    async with factory() as session:
+        await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).delete_budget(principal.request_context, period=target, category=None)
+        await session.commit()
+    return await _budget_overview(request, principal, target)
 
 
 @router.put("/budgets/{category}", response_model=BudgetOverview)
@@ -1740,27 +1795,26 @@ async def update_budget(
     payload: BudgetUpdateRequest,
     request: Request,
     principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    period: str | None = None,
 ) -> BudgetOverview:
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
-    processor = getattr(request.app.state, "processor", None)
+    target = _budget_period(period)
     async with factory() as session:
-        await ClientApplicationService(
-            session,
-            currency=settings.currency,
-            timezone=settings.timezone,
-            exchange_rates=getattr(processor, "exchange_rates", None),
-        ).execute_financial(
-            principal.request_context,
-            ParsedCommand(
-                action=Action.SET_BUDGET,
+        try:
+            await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).set_category_budget(
+                principal.request_context,
+                period=target,
                 category=category,
                 amount=payload.amount,
                 currency=payload.currency,
-            ),
-            source_type="web",
-        )
-    return await _budget_overview(request, principal)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        await session.commit()
+    return await _budget_overview(request, principal, target)
 
 
 @router.delete("/budgets/{category}", response_model=BudgetOverview)
@@ -1768,18 +1822,19 @@ async def delete_budget(
     category: str,
     request: Request,
     principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    period: str | None = None,
 ) -> BudgetOverview:
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    target = _budget_period(period)
     async with factory() as session:
         await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).execute_financial(
-            principal.request_context,
-            ParsedCommand(action=Action.DELETE_BUDGET, category=category),
-            source_type="web",
+        ).delete_budget(
+            principal.request_context, period=target, category=category
         )
-    return await _budget_overview(request, principal)
+        await session.commit()
+    return await _budget_overview(request, principal, target)
 
 
 @router.get("/reports", response_model=ReportData)

@@ -349,19 +349,39 @@ class AnalyticsOverview(BaseModel):
 
 
 class BudgetItem(BaseModel):
+    """One category's plan-vs-actual line for a period.
+
+    ``amount`` is ``None`` when the category has no budget at all (spent may
+    still be non-zero) — a missing budget is expressed by the record's absence,
+    never by a zero amount. ``status`` is ``none`` in that case.
+    """
+
     category: str
-    amount: Decimal
+    amount: Decimal | None
     spent: Decimal
-    remaining: Decimal
-    usage_rate: Decimal
+    remaining: Decimal | None
+    usage_rate: Decimal | None
+    status: BudgetStatus
 
 
 class BudgetOverview(BaseModel):
+    """Period-scoped budget overview: total limit, actuals, and per category.
+
+    ``total_budget`` is the explicit ledger total limit when set
+    (``total_limit_set``), otherwise the sum of effective category budgets, or
+    ``None`` when no budget exists for the period at all.
+    """
+
     currency: str
-    total_budget: Decimal
+    period: str
+    total_budget: Decimal | None
     total_spent: Decimal
-    total_remaining: Decimal
-    usage_rate: Decimal
+    total_remaining: Decimal | None
+    usage_rate: Decimal | None
+    status: BudgetStatus
+    total_limit_set: bool
+    allocated: Decimal
+    unallocated: Decimal | None
     items: list[BudgetItem]
 
 
@@ -390,6 +410,7 @@ DeletedFilter = Literal["active", "deleted", "all"]
 EntrySort = Literal["occurred_at", "amount", "updated_at"]
 SortOrder = Literal["asc", "desc"]
 PendingGroup = Literal["pending", "completed", "closed"]
+BudgetStatus = Literal["none", "normal", "warning", "exceeded"]
 AdminEventStatus = Literal[
     "received", "processing", "failed", "succeeded", "dead", "legacy", "legacy_succeeded"
 ]

@@ -200,4 +200,64 @@ async def test_web_report_budget_and_export_reuse_ledger_rules(
         deleted_budget = await client.delete(
             "/api/web/v1/budgets/%E9%A4%90%E9%A5%AE", headers=headers
         )
-        assert deleted_budget.json()["total_budget"] == "0"
+        # No budget records remain: the overview reports "no budget" as a null
+        # limit rather than zero, so a missing budget is never confused with a
+        # ¥0 limit.
+        assert deleted_budget.json()["total_budget"] is None
+        assert deleted_budget.json()["status"] == "none"
+
+
+async def test_web_total_budget_period_set_and_delete(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    client, csrf = await _client(factory, "ou_a")
+    headers = {"X-CSRF-Token": csrf}
+    async with client:
+        no_csrf = await client.put(
+            "/api/web/v1/budgets/total?period=2026-08", json={"amount": "1"}
+        )
+        assert no_csrf.status_code == 403
+        invalid = await client.put(
+            "/api/web/v1/budgets/total?period=2026-13",
+            headers=headers,
+            json={"amount": "1"},
+        )
+        assert invalid.status_code == 422
+        missing = await client.put(
+            "/api/web/v1/budgets/total?period=not-a-period",
+            headers=headers,
+            json={"amount": "1"},
+        )
+        assert missing.status_code == 422
+
+        created = await client.put(
+            "/api/web/v1/budgets/total?period=2026-08",
+            headers=headers,
+            json={"amount": "12000"},
+        )
+        assert created.status_code == 200
+        body = created.json()
+        assert body["period"] == "2026-08"
+        assert body["total_limit_set"] is True
+        assert body["total_budget"] == "12000.00"
+        assert body["status"] == "normal"
+
+        # Editing an existing total upserts instead of duplicating.
+        updated = await client.put(
+            "/api/web/v1/budgets/total?period=2026-08",
+            headers=headers,
+            json={"amount": "9000"},
+        )
+        assert updated.json()["total_budget"] == "9000.00"
+
+        listed = await client.get("/api/web/v1/budgets?period=2026-08")
+        assert listed.status_code == 200
+        assert listed.json()["total_budget"] == "9000.00"
+
+        deleted = await client.delete(
+            "/api/web/v1/budgets/total?period=2026-08", headers=headers
+        )
+        assert deleted.status_code == 200
+        assert deleted.json()["total_limit_set"] is False
+        assert deleted.json()["total_budget"] is None
+

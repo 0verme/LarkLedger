@@ -40,6 +40,7 @@ from lark_ledger.models import (
 )
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
+from lark_ledger.services.budget import parse_period
 from lark_ledger.services.client_application import ClientApplicationService, EntryQuery
 from lark_ledger.services.client_auth import (
     ClientAuthenticationError,
@@ -1347,14 +1348,94 @@ async def restore_entry(
     )
 
 
+def _client_period(period: str | None) -> date | None:
+    if period is None or not period.strip():
+        return None
+    try:
+        return parse_period(period)
+    except ValueError as exc:
+        raise client_error(422, "validation_error", str(exc)) from exc
+
+
 @router.get("/budgets", response_model=BudgetOverview, responses=ERRORS)
 async def budgets(
     request: Request,
     principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    period: str | None = None,
 ) -> BudgetOverview:
     _require(principal, "ledger:read")
     async with _factory(request)() as session:
-        return await _application(session, _settings(request)).budgets(principal.context)
+        return await _application(session, _settings(request)).get_budget_overview(
+            principal.context, period=_client_period(period)
+        )
+
+
+@router.put("/budgets/total", response_model=BudgetOverview, responses=ERRORS)
+async def update_total_budget(
+    payload: BudgetUpdateRequest,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    period: str | None = None,
+) -> BudgetOverview:
+    _require(principal, "ledger:write")
+    async with _factory(request)() as session:
+        app = _application(session, _settings(request))
+
+        async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
+            overview = await app.set_total_budget(
+                principal.context,
+                period=_client_period(period),
+                amount=payload.amount,
+                currency=payload.currency,
+            )
+            return overview.model_dump(mode="json")
+
+        try:
+            data, _ = await _idempotent(
+                session,
+                principal,
+                operation="budget.total.set",
+                key=idempotency_key,
+                payload=payload,
+                callback=apply,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise client_error(422, "validation_error", str(exc)) from exc
+        return BudgetOverview.model_validate(data)
+
+
+@router.delete("/budgets/total", response_model=BudgetOverview, responses=ERRORS)
+async def delete_total_budget(
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    period: str | None = None,
+) -> BudgetOverview:
+    _require(principal, "ledger:write")
+    async with _factory(request)() as session:
+        app = _application(session, _settings(request))
+
+        async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
+            overview = await app.delete_budget(
+                principal.context, period=_client_period(period), category=None
+            )
+            return overview.model_dump(mode="json")
+
+        try:
+            data, _ = await _idempotent(
+                session,
+                principal,
+                operation="budget.total.delete",
+                key=idempotency_key,
+                payload={"period": period},
+                callback=apply,
+            )
+        except ValueError as exc:
+            await session.rollback()
+            raise client_error(422, "validation_error", str(exc)) from exc
+        return BudgetOverview.model_validate(data)
 
 
 @router.put("/budgets/{category}", response_model=BudgetOverview, responses=ERRORS)
@@ -1364,24 +1445,21 @@ async def update_budget(
     request: Request,
     principal: Annotated[ClientPrincipal, Depends(client_principal)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    period: str | None = None,
 ) -> BudgetOverview:
     _require(principal, "ledger:write")
     async with _factory(request)() as session:
         app = _application(session, _settings(request))
 
         async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
-            await app.execute_financial(
+            overview = await app.set_category_budget(
                 principal.context,
-                ParsedCommand(
-                    action=Action.SET_BUDGET,
-                    category=category,
-                    amount=payload.amount,
-                    currency=payload.currency,
-                ),
-                source_type="client_api",
-                commit_changes=False,
+                period=_client_period(period),
+                category=category,
+                amount=payload.amount,
+                currency=payload.currency,
             )
-            return (await app.budgets(principal.context)).model_dump(mode="json")
+            return overview.model_dump(mode="json")
 
         try:
             data, _ = await _idempotent(
@@ -1404,19 +1482,17 @@ async def delete_budget(
     request: Request,
     principal: Annotated[ClientPrincipal, Depends(client_principal)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+    period: str | None = None,
 ) -> BudgetOverview:
     _require(principal, "ledger:write")
     async with _factory(request)() as session:
         app = _application(session, _settings(request))
 
         async def apply(_: ClientIdempotencyRecord) -> dict[str, Any]:
-            await app.execute_financial(
-                principal.context,
-                ParsedCommand(action=Action.DELETE_BUDGET, category=category),
-                source_type="client_api",
-                commit_changes=False,
+            overview = await app.delete_budget(
+                principal.context, period=_client_period(period), category=category
             )
-            return (await app.budgets(principal.context)).model_dump(mode="json")
+            return overview.model_dump(mode="json")
 
         try:
             data, _ = await _idempotent(

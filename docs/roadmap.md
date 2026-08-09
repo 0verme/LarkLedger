@@ -13,6 +13,7 @@
 4. **统一 Client API（已完成）**：飞书与 Web 共用 `ClientApplicationService` 命令/查询边界；提供 `/api/client/v1`、可撤销 Bearer、持久化幂等快照与稳定错误契约。具体 ESP32、Telegram、微信客户端仍按后续验证顺序实施。
 5. **P26 Account Domain（已完成）**：建立账本范围内的现金、资产和负债账户；历史账目无损绑定默认账户，Web / Client API 提供账户生命周期能力，旧记账入口保持默认账户兼容。
 6. **P27 Transfer & Balance（已完成）**：独立 Transfer 事实与 append-only audit 支持同账本账户转账、撤销和 revision；余额由 opening balance、有效收支与有效转账统一派生，提供账户余额、总资产、总负债和净资产视图。转账不进入收入、支出、预算或分类消费统计。
+7. **P28 Budget 2.0（已完成）**：账本范围的月度总预算与分类预算以显式月份为周期，计划 vs 实际、剩余、使用率与 `normal / warning / exceeded / none` 状态由统一 `BudgetService` 从实时账目事实派生；`category_budgets` 保留为月度默认预算，周期预算在当月覆盖它。预算只统计支出，转账永不进入预算，删除 / 恢复 / 金额与分类修订均按当前有效事实重算。Web 按月查看与设置总 / 分类预算，飞书支持设置本月总预算与查看预算进度。
 
 ## 分叉路线
 

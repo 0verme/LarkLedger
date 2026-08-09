@@ -25,6 +25,7 @@ class Action(StrEnum):
     REPORT = "report"
     SET_BUDGET = "set_budget"
     SET_BUDGETS = "set_budgets"
+    SET_TOTAL_BUDGET = "set_total_budget"
     LIST_BUDGETS = "list_budgets"
     DELETE_BUDGET = "delete_budget"
     LIST_ACCOUNTS = "list_accounts"
@@ -356,12 +357,18 @@ class ParsedCommand(BaseModel):
                 Action.UPDATE_LAST,
                 Action.UPDATE_ENTRY,
                 Action.SET_BUDGET,
+                Action.SET_TOTAL_BUDGET,
             }:
                 raise ValueError(f"currency is not supported for {self.action}")
         if self.action is Action.SET_BUDGET:
             missing = [name for name in ("amount", "category") if getattr(self, name) is None]
             if missing:
                 raise ValueError(f"set_budget is missing: {', '.join(missing)}")
+        if self.action is Action.SET_TOTAL_BUDGET:
+            if self.amount is None:
+                raise ValueError("set_total_budget requires amount")
+            if self.category is not None:
+                raise ValueError("set_total_budget does not accept category")
         if self.action is Action.SET_BUDGETS:
             if not self.budgets:
                 raise ValueError("set_budgets requires at least one budget candidate")

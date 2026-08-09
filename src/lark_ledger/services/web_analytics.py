@@ -12,13 +12,13 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
-from lark_ledger.models import CategoryBudget, Direction, LedgerEntry
+from lark_ledger.models import Direction, LedgerEntry
+from lark_ledger.services.budget import BudgetService
 from lark_ledger.web_schemas import (
     AnalyticsCategory,
     AnalyticsMonthlyPoint,
     AnalyticsSummary,
     AnalyticsTrendPoint,
-    BudgetItem,
     BudgetOverview,
 )
 
@@ -148,60 +148,16 @@ class WebAnalyticsQueryService:
         )
 
     async def budgets(
-        self, user_open_id: RequestContext | str, *, now: datetime | None = None
+        self,
+        user_open_id: RequestContext | str,
+        *,
+        now: datetime | None = None,
+        period: date | None = None,
     ) -> BudgetOverview:
-        current = self._local(now or datetime.now(UTC))
-        month_start = current.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        month_end = (
-            month_start.replace(year=month_start.year + 1, month=1)
-            if month_start.month == 12
-            else month_start.replace(month=month_start.month + 1)
-        )
-        budgets = (
-            await self._session.scalars(
-                select(CategoryBudget)
-                .where(self._budget_scope(user_open_id))
-                .order_by(CategoryBudget.category)
-            )
-        ).all()
-        expenses = (
-            await self._session.execute(
-                select(LedgerEntry.category, LedgerEntry.amount).where(
-                    self._entry_scope(user_open_id),
-                    LedgerEntry.direction == Direction.EXPENSE,
-                    LedgerEntry.deleted_at.is_(None),
-                    LedgerEntry.occurred_at >= month_start.astimezone(UTC),
-                    LedgerEntry.occurred_at < month_end.astimezone(UTC),
-                )
-            )
-        ).all()
-        spent_by_category: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
-        for category, amount in expenses:
-            spent_by_category[str(category)] += Decimal(amount)
-        items: list[BudgetItem] = []
-        for budget in budgets:
-            spent = spent_by_category[budget.category]
-            items.append(
-                BudgetItem(
-                    category=budget.category,
-                    amount=budget.amount,
-                    spent=spent,
-                    remaining=budget.amount - spent,
-                    usage_rate=spent / budget.amount * 100,
-                )
-            )
-        total_budget = sum((item.amount for item in items), Decimal("0"))
-        total_spent = sum((item.spent for item in items), Decimal("0"))
-        return BudgetOverview(
-            currency=self._currency,
-            total_budget=total_budget,
-            total_spent=total_spent,
-            total_remaining=total_budget - total_spent,
-            usage_rate=(
-                total_spent / total_budget * 100 if total_budget else Decimal("0")
-            ),
-            items=items,
-        )
+        """Period-scoped budget overview via the shared budget domain."""
+        return await BudgetService(
+            self._session, currency=self._currency, timezone=str(self._timezone)
+        ).overview(user_open_id, period=period, now=now)
 
     def _local(self, value: datetime) -> datetime:
         if value.tzinfo is None:
@@ -219,19 +175,5 @@ class WebAnalyticsQueryService:
             and_(
                 LedgerEntry.ledger_id.is_(None),
                 LedgerEntry.user_open_id == scope.external_subject_id,
-            ),
-        )
-
-    @staticmethod
-    def _budget_scope(scope: RequestContext | str) -> Any:
-        if isinstance(scope, str):
-            return CategoryBudget.user_open_id == scope
-        if scope.external_subject_id is None:
-            return CategoryBudget.ledger_id == scope.ledger_id
-        return or_(
-            CategoryBudget.ledger_id == scope.ledger_id,
-            and_(
-                CategoryBudget.ledger_id.is_(None),
-                CategoryBudget.user_open_id == scope.external_subject_id,
             ),
         )

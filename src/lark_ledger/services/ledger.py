@@ -178,6 +178,8 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin, _AccountQueryMixin)
             result = await self._set_budget(user_open_id, command)
         elif command.action is Action.SET_BUDGETS:
             result = await self._set_budgets(user_open_id, command)
+        elif command.action is Action.SET_TOTAL_BUDGET:
+            result = await self._set_total_budget(user_open_id, command)
         elif command.action is Action.LIST_BUDGETS:
             result = await self._list_budgets(user_open_id, command)
         elif command.action is Action.DELETE_BUDGET:

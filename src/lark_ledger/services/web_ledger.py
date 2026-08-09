@@ -15,13 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     Account,
-    CategoryBudget,
     Direction,
     LedgerEntry,
     LedgerEntryRevision,
     PendingCommand,
     PendingStatus,
 )
+from lark_ledger.services.budget import BudgetService
 from lark_ledger.short_id import normalize_entry_ref
 from lark_ledger.web_schemas import (
     CategoryValue,
@@ -38,9 +38,16 @@ from lark_ledger.web_schemas import (
 
 
 class WebLedgerQueryService:
-    def __init__(self, session: AsyncSession, *, timezone: str = "Asia/Shanghai") -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        timezone: str = "Asia/Shanghai",
+        currency: str = "CNY",
+    ) -> None:
         self._session = session
         self._timezone = ZoneInfo(timezone)
+        self._currency = currency
 
     async def list_entries(
         self,
@@ -288,14 +295,9 @@ class WebLedgerQueryService:
             )
         ).all()
         expense = Decimal(totals[1])
-        total_budget = Decimal(
-            await self._session.scalar(
-                select(func.coalesce(func.sum(CategoryBudget.amount), 0)).where(
-                    self._budget_scope(user_open_id)
-                )
-            )
-            or 0
-        )
+        budget_overview = await BudgetService(
+            self._session, currency=self._currency, timezone=str(self._timezone)
+        ).overview(user_open_id, period=month_start_local.date(), now=now)
         categories = [
             CategoryValue(
                 category=str(row[0]),
@@ -309,7 +311,7 @@ class WebLedgerQueryService:
             month_income=income,
             month_expense=expense,
             month_balance=income-expense,
-            budget_usage_rate=(expense / total_budget * 100 if total_budget else None),
+            budget_usage_rate=budget_overview.usage_rate,
             pending_count=pending_count,
             recent_entries=[
                 self._entry(row, recent_names.get(row.account_id)) for row in recent
@@ -332,18 +334,6 @@ class WebLedgerQueryService:
         return or_(
             LedgerEntry.ledger_id == scope.ledger_id,
             and_(LedgerEntry.ledger_id.is_(None), LedgerEntry.user_open_id == legacy),
-        )
-
-    @classmethod
-    def _budget_scope(cls, scope: RequestContext | str) -> Any:
-        if isinstance(scope, str):
-            return CategoryBudget.user_open_id == scope
-        legacy = cls._legacy_subject(scope)
-        if legacy is None:
-            return CategoryBudget.ledger_id == scope.ledger_id
-        return or_(
-            CategoryBudget.ledger_id == scope.ledger_id,
-            and_(CategoryBudget.ledger_id.is_(None), CategoryBudget.user_open_id == legacy),
         )
 
     @classmethod

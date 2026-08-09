@@ -475,6 +475,56 @@ class CategoryBudget(Base):
     )
 
 
+class Budget(Base):
+    """Ledger-scoped, period-specific monthly budget (P28 Budget 2.0).
+
+    ``period`` is the first day of the month (e.g. ``2026-08-01``) and is an
+    explicit business field, never derived from timestamps. ``category`` is
+    ``NULL`` for the ledger's total budget for that period and a non-empty
+    category name for a category budget.
+
+    Period budgets layer on top of the legacy recurring ``CategoryBudget`` rows
+    that predate period support: a period row wins for its month, otherwise the
+    recurring budget applies to that category. Budget limits stay in this table
+    while actual spending is always computed from the live ``LedgerEntry``
+    facts, so delete / restore / revision never drift a cached counter.
+    """
+
+    __tablename__ = "budgets"
+    __table_args__ = (
+        UniqueConstraint(
+            "ledger_id", "period", "category", name="uq_budgets_ledger_period_category"
+        ),
+        Index(
+            "uq_budgets_ledger_period_total",
+            "ledger_id",
+            "period",
+            unique=True,
+            postgresql_where=text("category IS NULL"),
+            sqlite_where=text("category IS NULL"),
+        ),
+        CheckConstraint(
+            "category IS NULL OR length(category) > 0", name="ck_budgets_category_nonempty"
+        ),
+        Index("ix_budgets_ledger_period", "ledger_id", "period"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=False
+    )
+    period: Mapped[date] = mapped_column(Date, nullable=False)
+    category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class BudgetAlert(Base):
     __tablename__ = "budget_alerts"
     __table_args__ = (

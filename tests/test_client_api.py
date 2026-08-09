@@ -115,6 +115,57 @@ async def test_bearer_digest_scopes_revocation_and_expiry(
         await service.authenticate(expired)
 
 
+async def test_client_api_budget_period_and_total(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, _ = await _credential(client_factory, subject="ou_budget_client")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        headers = {"Authorization": f"Bearer {token}"}
+        write_headers = headers | {"Idempotency-Key": "budget-total"}
+
+        total = await client.put(
+            "/api/client/v1/budgets/total?period=2026-08",
+            headers=write_headers,
+            json={"amount": "12000"},
+        )
+        assert total.status_code == 200
+        assert total.json()["total_limit_set"] is True
+        assert total.json()["total_budget"] == "12000.00"
+        assert total.json()["period"] == "2026-08"
+
+        category = await client.put(
+            "/api/client/v1/budgets/food?period=2026-08",
+            headers=headers | {"Idempotency-Key": "budget-cat"},
+            json={"amount": "3000"},
+        )
+        assert category.status_code == 200
+        items = {item["category"]: item for item in category.json()["items"]}
+        assert items["food"]["amount"] == "3000.00"
+
+        listed = await client.get("/api/client/v1/budgets?period=2026-08", headers=headers)
+        assert listed.status_code == 200
+        assert listed.json()["total_budget"] == "12000.00"
+        assert listed.json()["allocated"] == "3000.00"
+        assert listed.json()["unallocated"] == "9000.00"
+
+        bad = await client.put(
+            "/api/client/v1/budgets/total?period=2026-13",
+            headers=headers | {"Idempotency-Key": "budget-bad"},
+            json={"amount": "1"},
+        )
+        assert bad.status_code == 422
+
+        removed = await client.delete(
+            "/api/client/v1/budgets/total?period=2026-08",
+            headers=headers | {"Idempotency-Key": "budget-total-delete"},
+        )
+        assert removed.status_code == 200
+        assert removed.json()["total_limit_set"] is False
+
+
 async def test_client_api_idempotency_conflict_and_actor_isolation(
     client_factory: async_sessionmaker[AsyncSession],
 ) -> None:

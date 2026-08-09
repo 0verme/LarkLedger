@@ -21,6 +21,16 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
 
+## 从 v0.5.0 升级到 v0.6.0（Unreleased · P28 Budget 2.0）
+
+`20260809_0022` 新增账本范围、按月为周期的 `budgets` 表：`category IS NULL` 表示该月账本总预算，非空分类表示该月分类预算。唯一约束保证同一账本同一月份至多一个总预算、同一分类至多一个预算；`period` 是显式业务字段（每月 1 日的日期），绝不从时间戳推导。
+
+- 既有 `category_budgets`（长期月度品类预算）表与数据**原样保留**，作为「月度默认预算」继续生效；某月存在周期预算时，周期预算在当月覆盖默认预算。迁移不修改或删除 User、Ledger、Account、Transaction、Transfer、Pending 或任何旧预算数据，也无需要回填，因此无损且可降级。
+- 预算只统计 `expense`；`income`、`transfer` 永不进入预算使用量；删除 / 恢复 / 修改金额 / 修改分类均按当前有效账目事实重算。
+- Web 与 Client API：`GET /budgets?period=YYYY-MM`、`PUT` / `DELETE /budgets/{category}?period=`、新增 `PUT` / `DELETE /budgets/total?period=`（缺省为当前月）。飞书新增 `设置本月预算 12000`（`set_total_budget`），`查看预算` 会显示当月总预算行。
+- 升级后核对：`alembic current` 为 `20260809_0022`；每个 Ledger 同一月份至多一个总预算、同一分类至多一个预算；无 orphan Budget 行。
+- 降级到 `20260809_0021` 会删除 `budgets` 表（仅含周期预算），既有 `category_budgets`、账目与转账全部保留。
+
 ## 从 v0.4.0 升级到 v0.5.0
 
 v0.5.0 在 v0.4.0（`dashboard_sessions`，0014）之上依次带来身份与账本地基（0015）、个人多账本（0016）、家庭空间（0017）、统一 Client API（0018）、**账本级账户**（0019）、**转账与余额**（0020）、**Pending 账户冻结**（0021）。升级前必须备份 PostgreSQL。
@@ -262,4 +272,4 @@ Worker task 异常退出、receiver 未启动或应用正在 shutdown 时返回 
 - **存量数据：** 旧行没有原始图片可用于安全回填指纹，因此保持 `NULL`，不自动合并或删除。
 - **回退：** 降级到 `20260806_0012` 会删除指纹索引和字段，不修改待确认状态或账本。
 
-当前 Alembic head：`20260809_0017`。
+当前 Alembic head：`20260809_0022`。

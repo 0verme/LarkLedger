@@ -4,6 +4,15 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (P28 — Budget 2.0)
+
+- **Period-scoped ledger budgets** add a `budgets` table keyed by `(ledger_id, period, category)` where `category IS NULL` is the ledger's total limit for the month and a non-empty category is a category limit. Periods are explicit first-day-of-month dates, never derived from timestamps. The legacy recurring `category_budgets` table is untouched and continues to act as the monthly default; a period row wins for its month. Alembic migration `20260809_0022`.
+- **Plan-vs-actual progress overview** (`BudgetService`) recomputes actual spending from the live ledger entries in one `GROUP BY` query, so transfers can never be counted as budget usage and delete / restore / revision amount / revision category all resolve from the current facts. Budget limits and transaction facts stay separate — no mutable `used` counter to drift.
+- **Budget status derivation** (`normal` / `warning` / `exceeded` / `none`) with a fixed 80% warning threshold, `remaining` / `usage_rate`, and a category with no budget reported by its record's absence (actual spend still shown) rather than a zero limit.
+- **Application API and REST**: `get_budget_overview`, `set_total_budget`, `set_category_budget`, `delete_budget` on the unified `ClientApplicationService`; Web and Client `GET /budgets?period=`, `PUT`/`DELETE /budgets/{category}` and new `PUT`/`DELETE /budgets/total` with optional `period` (defaults to the current month).
+- **Feishu** adds the `set_total_budget` action ("设置本月预算 12000") and `list_budgets` now reports the period total line; existing recurring category budget commands are unchanged.
+- **Web Budgets page**: month navigation, total-budget hero with status, per-category cards with status chips / progress / remaining, rows for categories that spent without a budget, and inline set / edit / delete for total and category limits. The dashboard hero usage rate comes from the unified overview.
+
 ## [0.5.0] - 2026-08-09
 
 ### Added (v0.5.0 — Ledger-scoped Accounts & Transfers; P26/P27)

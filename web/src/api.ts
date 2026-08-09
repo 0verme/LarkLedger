@@ -242,8 +242,9 @@ export type AnalyticsTrendPoint = { period: string; income: string; expense: str
 export type AnalyticsCategory = { category: string; amount: string; ratio: string };
 export type AnalyticsMonthlyPoint = { period: string; income: string; expense: string; balance: string };
 export type AnalyticsOverview = { summary: AnalyticsSummary; trend: AnalyticsTrendPoint[]; categories: AnalyticsCategory[] };
-export type BudgetItem = { category: string; amount: string; spent: string; remaining: string; usage_rate: string };
-export type BudgetOverview = { currency: string; total_budget: string; total_spent: string; total_remaining: string; usage_rate: string; items: BudgetItem[] };
+export type BudgetStatus = "none" | "normal" | "warning" | "exceeded";
+export type BudgetItem = { category: string; amount: string | null; spent: string; remaining: string | null; usage_rate: string | null; status: BudgetStatus };
+export type BudgetOverview = { currency: string; period: string; total_budget: string | null; total_spent: string; total_remaining: string | null; usage_rate: string | null; status: BudgetStatus; total_limit_set: boolean; allocated: string; unallocated: string | null; items: BudgetItem[] };
 export type ReportData = { range_start: string; range_end: string; currency: string; income_total: string; expense_total: string; balance: string; entry_count: number; categories: Array<{ category: string; amount: string }>; trend: Array<{ period: string; amount: string }>; trend_granularity: "day" | "month" };
 
 export const money = (value: string | number) =>
