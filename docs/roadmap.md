@@ -14,6 +14,7 @@
 5. **P26 Account Domain（已完成）**：建立账本范围内的现金、资产和负债账户；历史账目无损绑定默认账户，Web / Client API 提供账户生命周期能力，旧记账入口保持默认账户兼容。
 6. **P27 Transfer & Balance（已完成）**：独立 Transfer 事实与 append-only audit 支持同账本账户转账、撤销和 revision；余额由 opening balance、有效收支与有效转账统一派生，提供账户余额、总资产、总负债和净资产视图。转账不进入收入、支出、预算或分类消费统计。
 7. **P28 Budget 2.0（已完成）**：账本范围的月度总预算与分类预算以显式月份为周期，计划 vs 实际、剩余、使用率与 `normal / warning / exceeded / none` 状态由统一 `BudgetService` 从实时账目事实派生；`category_budgets` 保留为月度默认预算，周期预算在当月覆盖它。预算只统计支出，转账永不进入预算，删除 / 恢复 / 金额与分类修订均按当前有效事实重算。Web 按月查看与设置总 / 分类预算，飞书支持设置本月总预算与查看预算进度。
+8. **P29 Recurring Rules（已完成）**：`recurring_rules` + `recurring_occurrences` 表达已知未来周期性收支，`monthly / yearly / weekly` 调度带锚定日，月末钳制不漂移；到期由 Recurring Worker 幂等生成一个确认 Pending（冻结账本 / 账户 / 金额 / 分类 / 计划日期）与飞书提醒卡片，只有确认后才正式入账。`(rule_id, occurrence_date)` 唯一约束是幂等权威，支持暂停 / 恢复 / 跳过 / 停用，修改只影响未来周期；已确认交易幂等且只计入确认后预算。Web 周期账单页与飞书确定性命令均可管理规则。
 
 ## 分叉路线
 

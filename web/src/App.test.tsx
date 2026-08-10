@@ -242,4 +242,32 @@ describe("dashboard routing and protection", () => {
     fireEvent.click(screen.getByRole("button", { name: /修改/ }));
     expect(await screen.findByLabelText("账户")).toHaveValue("account-1");
   });
+
+  it("lists and creates recurring rules", async () => {
+    const rule = { id: "rule-1", ledger_id: "ledger-1", transaction_type: "expense", amount: "3500.00", currency: "CNY", category: "房租", description: "房租", frequency: "monthly", interval: 1, next_occurrence: "2026-09-08", status: "active", account_id: "account-1", account_name: "默认账户", pending_count: 1, created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z" };
+    const created = { ...rule, id: "rule-2", amount: "100.00", category: "健身房", description: "健身房", next_occurrence: "2026-08-16", frequency: "weekly" };
+    let rules: Array<typeof rule> = [rule];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
+      if (url.includes("/accounts")) return Promise.resolve(Response.json({ items: [{ id: "account-1", name: "默认账户", status: "active", is_default: true }] }));
+      if (url.includes("/recurring-rules")) {
+        if (init?.method === "POST") { rules = [rule, created]; return Promise.resolve(Response.json(created)); }
+        return Promise.resolve(Response.json({ items: rules }));
+      }
+      return Promise.resolve(Response.json({ items: [], page: 1, page_size: 25, total: 0, pages: 0 }));
+    }));
+    renderApp("/recurring");
+    expect(await screen.findByRole("heading", { name: "周期账单，到期先提醒，确认再入账。" })).toBeInTheDocument();
+    expect((await screen.findAllByText("房租")).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("待确认").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "创建周期账单" }));
+    fireEvent.change(screen.getByLabelText("名称"), { target: { value: "健身房" } });
+    fireEvent.change(screen.getByLabelText("金额"), { target: { value: "100" } });
+    fireEvent.change(screen.getByLabelText("分类"), { target: { value: "健身房" } });
+    fireEvent.change(screen.getByLabelText("周期"), { target: { value: "weekly" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByText("周期账单已创建")).toBeInTheDocument();
+    expect((await screen.findAllByText("健身房")).length).toBeGreaterThan(0);
+  });
 });

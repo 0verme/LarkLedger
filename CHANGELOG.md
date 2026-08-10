@@ -4,6 +4,16 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+### Added (P29 — Recurring Rules)
+
+- **Recurring rules** add `recurring_rules` and `recurring_occurrences` tables so a known future income / expense (每月房租、每年保险、每周健身房) schedules deterministically: `monthly` / `yearly` / `weekly` with an `anchor_day` that keeps the day-of-month stable across month boundaries (a 31st rule schedules Feb 28 then back to Mar 31). Alembic migration `20260810_0023`.
+- **Confirmation-first, never auto-posted**: when a rule comes due the Recurring Worker generates exactly one confirmation pending (freezing the rule's ledger, account, amount, currency, category and planned date) plus a proactive Feishu reminder card, then advances `next_occurrence`. Only a confirmed pending becomes a ledger entry. The unique `(rule_id, occurrence_date)` database constraint is the idempotency authority, so concurrent workers / retries / crashes can never produce two pendings for the same period.
+- **Rule lifecycle**: create / list / get / update / pause / resume / disable / skip. Pause stops generation; resume skips straight to the next valid future period without back-filling history; skip records a `skipped` occurrence (cancelling a still-pending confirmation if one exists) and advances the schedule; disable archives the rule while keeping its historical pendings / transactions intact. Updating a rule only affects future occurrences — already-generated pendings keep their frozen content.
+- **Confirmed transactions are exactly-once**: confirming a recurring pending transitions its occurrence to `confirmed` and links the created entry; duplicate confirms are idempotent no-ops. Ledger / account validation re-runs at confirmation time (archived or cross-ledger accounts fail safely) and the frozen account is used even after the user switches default account or ledger.
+- **Budget contract**: rules and their pendings never count toward budget; only a confirmed expense entry contributes actual spending, and income never enters the expense budget.
+- **Feishu deterministic commands**: `每月8号房租3500`, `每年6月15日保险2000`, `每周健身房100`, `我的周期账单`, `暂停房租`, `恢复房租`, `跳过房租` / `跳过本期` — recurring-shaped near-misses get guidance instead of reaching the AI interpreter.
+- **Web Recurring Rules page**: list with name / type / amount / account / frequency / next date / status / waiting-confirmation badge, plus create / edit / pause / resume / skip / disable via the `GET/POST/PATCH /recurring-rules` and `POST /recurring-rules/{id}/pause|resume|skip|disable` endpoints.
+
 ### Changed
 
 - 账本管理命令接受常用同义词（`新建账本` / `创建新账本` / `切换到账本` / `设置默认账本` / `查看账本` / `我的账本`）；输入明显是想管理账本但语法未匹配时，回复账本命令用法提示而不是通用帮助。

@@ -247,6 +247,39 @@ export type BudgetItem = { category: string; amount: string | null; spent: strin
 export type BudgetOverview = { currency: string; period: string; total_budget: string | null; total_spent: string; total_remaining: string | null; usage_rate: string | null; status: BudgetStatus; total_limit_set: boolean; allocated: string; unallocated: string | null; items: BudgetItem[] };
 export type ReportData = { range_start: string; range_end: string; currency: string; income_total: string; expense_total: string; balance: string; entry_count: number; categories: Array<{ category: string; amount: string }>; trend: Array<{ period: string; amount: string }>; trend_granularity: "day" | "month" };
 
+export type RecurringFrequency = "weekly" | "monthly" | "yearly";
+export type RecurringRule = {
+  id: string;
+  ledger_id: string;
+  transaction_type: "expense" | "income";
+  amount: string;
+  currency: string;
+  category: string;
+  description: string;
+  frequency: RecurringFrequency;
+  interval: number;
+  next_occurrence: string;
+  status: "active" | "paused" | "disabled";
+  account_id: string;
+  account_name: string | null;
+  pending_count: number;
+  created_at: string;
+  updated_at: string;
+};
+export type RecurringRuleList = { items: RecurringRule[] };
+export type RecurringRuleCreateInput = {
+  transaction_type: "expense" | "income";
+  amount: string;
+  currency: string | null;
+  category: string;
+  description: string;
+  frequency: RecurringFrequency;
+  interval: number;
+  next_occurrence: string;
+  account_id: string;
+};
+export type RecurringRuleUpdateInput = Partial<Omit<RecurringRuleCreateInput, "transaction_type" | "interval">> & { transaction_type?: "expense" | "income"; interval?: number };
+
 export const money = (value: string | number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
 

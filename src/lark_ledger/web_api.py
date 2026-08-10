@@ -72,6 +72,12 @@ from lark_ledger.services.ledger_management import (
     LedgerNotFoundError,
 )
 from lark_ledger.services.pending import PendingCommandStore
+from lark_ledger.services.recurring import (
+    RecurringRuleConflictError,
+    RecurringRuleError,
+    RecurringRuleNotFoundError,
+    RecurringRuleValidationError,
+)
 from lark_ledger.services.replay import OutboxReplayService
 from lark_ledger.services.transfers import (
     AccountBalance,
@@ -117,6 +123,9 @@ from lark_ledger.web_schemas import (
     PendingDetail,
     PendingGroup,
     PendingPage,
+    RecurringRuleCreateRequest,
+    RecurringRuleList,
+    RecurringRuleUpdateRequest,
     ResultReplayResponse,
     SafeSystemConfig,
     SortOrder,
@@ -125,6 +134,7 @@ from lark_ledger.web_schemas import (
     WebHouseholdInvitation,
     WebHouseholdMember,
     WebLedger,
+    WebRecurringRule,
     WebRevision,
     WebTransferDetail,
 )
@@ -1835,6 +1845,184 @@ async def delete_budget(
         )
         await session.commit()
     return await _budget_overview(request, principal, target)
+
+
+def _recurring_http_error(exc: RecurringRuleError) -> HTTPException:
+    if isinstance(exc, RecurringRuleNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, RecurringRuleConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, RecurringRuleValidationError):
+        return HTTPException(status_code=422, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/recurring-rules", response_model=RecurringRuleList)
+async def list_recurring_rules(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> RecurringRuleList:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        views = await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).recurring_rule_views(principal.request_context)
+    return RecurringRuleList(items=views)
+
+
+@router.post("/recurring-rules", response_model=WebRecurringRule, status_code=201)
+async def create_recurring_rule(
+    body: RecurringRuleCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebRecurringRule:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).create_recurring_rule(
+                principal.request_context,
+                transaction_type=body.transaction_type,
+                amount=body.amount,
+                currency=body.currency,
+                category=body.category,
+                description=body.description,
+                frequency=body.frequency,
+                interval=body.interval,
+                next_occurrence=body.next_occurrence,
+                account_id=body.account_id,
+            )
+            await session.commit()
+        except RecurringRuleError as exc:
+            await session.rollback()
+            raise _recurring_http_error(exc) from exc
+        return await _recurring_rule_view(request, principal, row.id)
+
+
+@router.get("/recurring-rules/{rule_id}", response_model=WebRecurringRule)
+async def get_recurring_rule(
+    rule_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> WebRecurringRule:
+    return await _recurring_rule_view(request, principal, rule_id)
+
+
+@router.patch("/recurring-rules/{rule_id}", response_model=WebRecurringRule)
+async def update_recurring_rule(
+    rule_id: uuid.UUID,
+    body: RecurringRuleUpdateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebRecurringRule:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).update_recurring_rule(
+                principal.request_context,
+                rule_id,
+                transaction_type=body.transaction_type,
+                amount=body.amount,
+                currency=body.currency,
+                category=body.category,
+                description=body.description,
+                frequency=body.frequency,
+                interval=body.interval,
+                next_occurrence=body.next_occurrence,
+                account_id=body.account_id,
+            )
+            await session.commit()
+        except RecurringRuleError as exc:
+            await session.rollback()
+            raise _recurring_http_error(exc) from exc
+        return await _recurring_rule_view(request, principal, rule_id)
+
+
+@router.post("/recurring-rules/{rule_id}/pause", response_model=WebRecurringRule)
+async def pause_recurring_rule(
+    rule_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebRecurringRule:
+    await _recurring_mutate(request, principal, rule_id, "pause")
+    return await _recurring_rule_view(request, principal, rule_id)
+
+
+@router.post("/recurring-rules/{rule_id}/resume", response_model=WebRecurringRule)
+async def resume_recurring_rule(
+    rule_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebRecurringRule:
+    await _recurring_mutate(request, principal, rule_id, "resume")
+    return await _recurring_rule_view(request, principal, rule_id)
+
+
+@router.post("/recurring-rules/{rule_id}/disable", response_model=WebRecurringRule)
+async def disable_recurring_rule(
+    rule_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebRecurringRule:
+    await _recurring_mutate(request, principal, rule_id, "disable")
+    return await _recurring_rule_view(request, principal, rule_id)
+
+
+@router.post("/recurring-rules/{rule_id}/skip", response_model=WebRecurringRule)
+async def skip_recurring_occurrence(
+    rule_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebRecurringRule:
+    await _recurring_mutate(request, principal, rule_id, "skip")
+    return await _recurring_rule_view(request, principal, rule_id)
+
+
+async def _recurring_rule_view(
+    request: Request, principal: DashboardPrincipal, rule_id: uuid.UUID
+) -> WebRecurringRule:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            return await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).recurring_rule_view(principal.request_context, rule_id)
+        except RecurringRuleError as exc:
+            raise _recurring_http_error(exc) from exc
+
+
+async def _recurring_mutate(
+    request: Request,
+    principal: DashboardPrincipal,
+    rule_id: uuid.UUID,
+    action: str,
+) -> None:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        app = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            if action == "pause":
+                await app.pause_recurring_rule(principal.request_context, rule_id)
+            elif action == "resume":
+                await app.resume_recurring_rule(principal.request_context, rule_id)
+            elif action == "disable":
+                await app.disable_recurring_rule(principal.request_context, rule_id)
+            else:
+                await app.skip_recurring_occurrence(principal.request_context, rule_id)
+            await session.commit()
+        except RecurringRuleError as exc:
+            await session.rollback()
+            raise _recurring_http_error(exc) from exc
 
 
 @router.get("/reports", response_model=ReportData)

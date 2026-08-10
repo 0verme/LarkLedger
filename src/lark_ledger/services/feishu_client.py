@@ -181,6 +181,50 @@ class FeishuClient:
         remote_id = (payload.get("data") or {}).get("message_id")
         return str(remote_id) if isinstance(remote_id, str) and remote_id else None
 
+    async def _send_message(
+        self,
+        open_id: str,
+        message_type: str,
+        content: dict[str, Any],
+        *,
+        uuid: str | None = None,
+    ) -> str | None:
+        """Send a proactive message to a user (not a reply), returning its id.
+
+        Used for P29 due-bill reminders when there is no message to reply to.
+        The same ``uuid`` idempotency key semantics apply as ``_reply_message``.
+        """
+        body: dict[str, Any] = {
+            "receive_id_type": "open_id",
+            "receive_id": open_id,
+            "msg_type": message_type,
+            "content": json.dumps(content, ensure_ascii=False),
+        }
+        if uuid:
+            body["uuid"] = uuid
+        token = await self.tenant_token()
+        response = await self._request(
+            "POST",
+            "/open-apis/im/v1/messages",
+            headers={"Authorization": f"Bearer {token}"},
+            json=body,
+        )
+        payload = response.json()
+        if payload.get("code") != 0:
+            raise RuntimeError(f"发送飞书消息失败：{payload.get('msg', 'unknown')}")
+        remote_id = (payload.get("data") or {}).get("message_id")
+        return str(remote_id) if isinstance(remote_id, str) and remote_id else None
+
+    async def send_text(
+        self, open_id: str, text: str, *, uuid: str | None = None
+    ) -> str | None:
+        return await self._send_message(open_id, "text", {"text": text}, uuid=uuid)
+
+    async def send_card(
+        self, open_id: str, card: dict[str, Any], *, uuid: str | None = None
+    ) -> str | None:
+        return await self._send_message(open_id, "interactive", card, uuid=uuid)
+
     async def upload_image(self, png: bytes) -> str:
         if not png:
             raise ValueError("报告图片不能为空")

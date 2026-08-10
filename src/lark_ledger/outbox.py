@@ -29,6 +29,9 @@ class ReplyType(StrEnum):
     TEXT = "text"
     FILE = "file"
     CARD = "card"
+    # Proactive (not a reply) interactive card delivered to a user's open_id.
+    # Used by the Recurring Worker to remind a user about a due period bill.
+    DIRECT_CARD = "direct_card"
 
 
 class ReplyPayloadError(ValueError):
@@ -147,3 +150,18 @@ def build_card_payload(
     else:
         envelope["image"] = None
     return envelope
+
+
+def build_direct_card_payload(*, open_id: str, card: dict[str, Any]) -> dict[str, Any]:
+    """Envelope for a proactive interactive card sent to ``open_id``.
+
+    The Recurring Worker builds a pending-preview card and sends it straight to
+    the user instead of replying to a message, so the row carries the recipient
+    ``open_id`` and the reply-outbox ``message_id`` routing field stays empty.
+    """
+    return {
+        "payload_version": OUTBOX_PAYLOAD_VERSION,
+        "reply_type": ReplyType.DIRECT_CARD.value,
+        "open_id": open_id,
+        "card": card,
+    }

@@ -220,6 +220,8 @@ class ReplyDeliverer:
         return ReplyStatus.SENT.value
 
     async def _send(self, item: ClaimedReply, now: datetime) -> SendResult:
+        if item.reply_type == ReplyType.DIRECT_CARD.value:
+            return await self._send_direct_card(item, now)
         if not item.message_id:
             raise ReplyPayloadError("outbox row is missing message_id (routing field)")
         if item.payload_version != OUTBOX_PAYLOAD_VERSION:
@@ -306,6 +308,27 @@ class ReplyDeliverer:
             )
             return SendResult(message_id=message_id, image_key=image_key)
         raise ReplyPayloadError(f"unsupported reply_type: {item.reply_type}")
+
+    async def _send_direct_card(self, item: ClaimedReply, now: datetime) -> SendResult:
+        """Deliver a proactive card to a user's ``open_id`` (P29 reminders).
+
+        The envelope carries the recipient and the card; the outbox routing
+        field ``message_id`` is empty because there is no message to reply to.
+        Idempotency comes from the same Feishu ``uuid`` key (the outbox row id).
+        """
+        if item.payload_version != OUTBOX_PAYLOAD_VERSION:
+            raise ReplyPayloadError(
+                f"unsupported outbox payload_version: {item.payload_version}"
+            )
+        payload = item.payload_json
+        open_id = payload.get("open_id")
+        if not isinstance(open_id, str) or not open_id:
+            raise ReplyPayloadError("direct_card outbox row is missing recipient open_id")
+        card = payload.get("card")
+        if not isinstance(card, dict):
+            raise ReplyPayloadError("direct_card outbox row is missing card payload")
+        message_id = await self._feishu.send_card(open_id, card, uuid=item.id.hex)
+        return SendResult(message_id=message_id)
 
     async def _record_failure(
         self, item: ClaimedReply, now: datetime, exc: BaseException

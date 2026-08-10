@@ -32,6 +32,7 @@ from lark_ledger.services.exchange import ExchangeRateService
 from lark_ledger.services.feishu import FeishuClient, MessageProcessor
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationError
 from lark_ledger.services.outbox import ReplyOutboxStore
+from lark_ledger.services.recurring_worker import RecurringWorker, RecurringWorkerStore
 from lark_ledger.services.reply_worker import ReplyDeliverer, ReplyWorker
 from lark_ledger.services.websocket import LongConnectionReceiver
 from lark_ledger.services.worker import EventWorker, EventWorkerStore, generate_owner_id
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     worker: EventWorker | None = None
     reply_worker: ReplyWorker | None = None
     cleanup_worker: CleanupWorker | None = None
+    recurring_worker: RecurringWorker | None = None
     receiver: LongConnectionReceiver | None = None
     try:
         if settings.worker_enabled:
@@ -131,6 +133,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             app.state.cleanup_worker = cleanup_worker
             cleanup_worker.start()
+        if settings.recurring_enabled:
+            recurring_worker = RecurringWorker(
+                RecurringWorkerStore(SessionFactory, settings),
+                owner_id=generate_owner_id(),
+                batch_size=settings.recurring_batch_size,
+                poll_interval_seconds=settings.recurring_poll_interval_seconds,
+                deliverer=processor._signal_or_deliver,
+            )
+            app.state.recurring_worker = recurring_worker
+            recurring_worker.start()
         if settings.event_mode is EventMode.WEBSOCKET:
             receiver = LongConnectionReceiver(
                 settings,
@@ -155,6 +167,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await reply_worker.stop()
         if cleanup_worker is not None:
             await cleanup_worker.stop()
+        if recurring_worker is not None:
+            await recurring_worker.stop()
         await engine.dispose()
 
 

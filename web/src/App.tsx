@@ -5,6 +5,7 @@ import {
   ArrowLeftRight,
   BarChart3,
   BookOpen,
+  CalendarClock,
   ChevronRight,
   CircleDollarSign,
   Clock3,
@@ -32,6 +33,7 @@ import { EntriesPage } from "./pages/EntriesPage";
 import { AnalyticsPage, BudgetsPage, ExportsPage, ReportsPage } from "./pages/FinancePages";
 import { PendingPage } from "./pages/PendingPage";
 import { HouseholdsPage } from "./pages/HouseholdsPage";
+import { RecurringRulesPage } from "./pages/RecurringRulesPage";
 import { AboutPage, ConfigPage } from "./pages/SystemPages";
 
 type NavItem = { label: string; path: string; icon: typeof Activity; admin?: boolean };
@@ -46,6 +48,7 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
       { label: "待确认", path: "/pending", icon: Clock3 },
       { label: "家庭", path: "/households", icon: Users },
       { label: "预算", path: "/budgets", icon: PiggyBank },
+      { label: "周期账单", path: "/recurring", icon: CalendarClock },
       { label: "分析", path: "/analytics", icon: CircleDollarSign },
       { label: "报表", path: "/reports", icon: FileText },
       { label: "导出", path: "/exports", icon: Download },
@@ -110,6 +113,7 @@ function pageElement(item: NavItem) {
   if (item.path === "/pending") return <PendingPage />;
   if (item.path === "/households") return <HouseholdsPage />;
   if (item.path === "/budgets") return <BudgetsPage />;
+  if (item.path === "/recurring") return <RecurringRulesPage />;
   if (item.path === "/analytics") return <AnalyticsPage />;
   if (item.path === "/reports") return <ReportsPage />;
   if (item.path === "/exports") return <ExportsPage />;

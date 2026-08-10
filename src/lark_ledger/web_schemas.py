@@ -8,7 +8,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lark_ledger.client_schemas import ClientTransfer
-from lark_ledger.models import Direction
+from lark_ledger.models import Direction, RecurringFrequency
 
 
 class WebEntry(BaseModel):
@@ -388,6 +388,87 @@ class BudgetOverview(BaseModel):
 class BudgetUpdateRequest(BaseModel):
     amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
+
+
+class RecurringRuleCreateRequest(BaseModel):
+    """POST body to create one recurring rule (P29)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_type: Direction
+    amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    category: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=200)
+    frequency: RecurringFrequency = RecurringFrequency.MONTHLY
+    interval: int = Field(default=1, ge=1, le=100)
+    next_occurrence: date
+    account_id: uuid.UUID
+
+
+class RecurringRuleUpdateRequest(BaseModel):
+    """PATCH body for one recurring rule (P29).
+
+    Only the supplied fields change and only future occurrences are affected:
+    already-generated pendings keep their frozen content.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_type: Direction | None = None
+    amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    currency: str | None = Field(default=None, min_length=3, max_length=3)
+    category: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=200)
+    frequency: RecurringFrequency | None = None
+    interval: int | None = Field(default=None, ge=1, le=100)
+    next_occurrence: date | None = None
+    account_id: uuid.UUID | None = None
+
+    @model_validator(mode="after")
+    def has_change(self) -> RecurringRuleUpdateRequest:
+        if all(
+            value is None
+            for value in (
+                self.transaction_type,
+                self.amount,
+                self.currency,
+                self.category,
+                self.description,
+                self.frequency,
+                self.interval,
+                self.next_occurrence,
+                self.account_id,
+            )
+        ):
+            raise ValueError("at least one field must be updated")
+        return self
+
+
+class WebRecurringRule(BaseModel):
+    """One recurring rule as exposed to the Web dashboard."""
+
+    id: str
+    ledger_id: str
+    transaction_type: str
+    amount: Decimal
+    currency: str
+    category: str
+    description: str
+    frequency: str
+    interval: int
+    next_occurrence: date
+    status: str
+    account_id: str
+    account_name: str | None = None
+    # Confirmations awaiting the user for this rule's generated occurrences.
+    pending_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class RecurringRuleList(BaseModel):
+    items: list[WebRecurringRule]
 
 
 class ExportRequestBody(BaseModel):

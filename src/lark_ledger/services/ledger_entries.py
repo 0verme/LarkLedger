@@ -86,6 +86,7 @@ class _EntryMixin:
                 entry, converted, names.get(entry.account_id, "")
             ),
             budget_alert=budget_alert,
+            entry_id=entry.id,
         )
 
     async def _stage_entry(

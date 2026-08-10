@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -451,3 +452,7 @@ class ExecutionResult(BaseModel):
     report: ReportData | None = None
     budget_alert: str | None = None
     export: ExportFileResult | None = None
+    # The ledger entry a write action created / mutated, when known. Set by the
+    # entry-creation path so callers (e.g. the P29 recurring confirmation hook)
+    # can link the transaction without re-querying.
+    entry_id: uuid.UUID | None = None

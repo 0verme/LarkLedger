@@ -5,15 +5,17 @@ import json
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.account_commands import try_parse_account_command
 from lark_ledger.config import Settings
+from lark_ledger.context import RequestContext
 from lark_ledger.entry_commands import (
     PendingDirective,
     bind_entry_refs_from_message,
@@ -30,7 +32,15 @@ from lark_ledger.ledger_commands import (
     LedgerCommandAction,
     try_parse_ledger_command,
 )
-from lark_ledger.models import Household, Ledger, ProcessedEvent, ReplyOutbox, User
+from lark_ledger.models import (
+    Direction,
+    Household,
+    Ledger,
+    ProcessedEvent,
+    RecurringRule,
+    ReplyOutbox,
+    User,
+)
 from lark_ledger.outbox import (
     OUTBOX_PAYLOAD_VERSION,
     ReplyStatus,
@@ -39,6 +49,11 @@ from lark_ledger.outbox import (
     build_file_payload,
     build_text_payload,
 )
+from lark_ledger.recurring_commands import (
+    RecurringCommand,
+    RecurringCommandAction,
+    try_parse_recurring_command,
+)
 from lark_ledger.schemas import (
     MAX_BATCH_BUDGETS,
     MAX_BATCH_ENTRIES,
@@ -46,6 +61,7 @@ from lark_ledger.schemas import (
     ExecutionResult,
     ParsedCommand,
 )
+from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
 from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
@@ -60,6 +76,11 @@ from lark_ledger.services.pending import (
     PendingCommandStore,
     PendingPreview,
     build_pending_preview_card,
+)
+from lark_ledger.services.recurring import (
+    RecurringRuleConflictError,
+    RecurringRuleError,
+    RecurringRuleNotFoundError,
 )
 from lark_ledger.services.reply_worker import ReplyDeliverer
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
@@ -286,6 +307,28 @@ class MessageProcessor:
                     return
                 if deterministic is not None:
                     command = deterministic
+                # Recurring-rule commands (P29): create / list / pause / resume /
+                # skip a 周期账单. Deterministic so recurring intents never reach
+                # the AI interpreter; the short-ID entry commands above still win
+                # for 恢复 #A83F2.
+                recurring_command = (
+                    try_parse_recurring_command(text, now=now) if command is None else None
+                )
+                if isinstance(recurring_command, str):
+                    await self.feishu.reply_text(message_id, recurring_command)
+                    return
+                if recurring_command is not None:
+                    stage = "recurring_management"
+                    outbox_rows = await self._handle_recurring_command(
+                        recurring_command,
+                        message_id=message_id,
+                        user_open_id=user_open_id,
+                        event_id=event_id,
+                        now=now,
+                    )
+                    stage = "reply"
+                    await self._signal_or_deliver(outbox_rows)
+                    return
                 account_command = try_parse_account_command(text) if command is None else None
                 if account_command is not None:
                     command = account_command
@@ -923,6 +966,225 @@ class MessageProcessor:
                     parent.business_committed_at = datetime.now(UTC)
             await session.commit()
             return [row]
+
+    async def _handle_recurring_command(
+        self,
+        command: RecurringCommand,
+        *,
+        message_id: str,
+        user_open_id: str,
+        event_id: str | None,
+        now: datetime,
+    ) -> list[ReplyOutbox]:
+        """Dispatch a deterministic recurring-rule command (P29).
+
+        Commits the rule change and its reply in one transaction so a crash
+        never leaves a rule created without its confirmation reply.
+        """
+        async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
+            application = ClientApplicationService(
+                session, currency=self.settings.currency, timezone=self.settings.timezone
+            )
+            try:
+                if command.action is RecurringCommandAction.CREATE:
+                    assert command.frequency is not None
+                    assert command.next_occurrence is not None
+                    assert command.amount is not None
+                    rule = await application.create_recurring_rule(
+                        context,
+                        transaction_type=(
+                            command.transaction_type
+                            if command.transaction_type is not None
+                            else Direction.EXPENSE
+                        ),
+                        amount=command.amount,
+                        currency=command.currency,
+                        category=command.category or "",
+                        description=command.description or "",
+                        frequency=command.frequency.value,
+                        interval=1,
+                        next_occurrence=command.next_occurrence,
+                        account_id=(await AccountService(session).get_default(context)).id,
+                    )
+                    reply_text = self._recurring_created_message(rule)
+                elif command.action is RecurringCommandAction.LIST:
+                    rules = await application.list_recurring_rules(context)
+                    reply_text = await self._recurring_list_message(session, context, rules)
+                else:
+                    rule = await self._resolve_recurring_rule(
+                        session, context, command.name
+                    )
+                    if command.action is RecurringCommandAction.PAUSE:
+                        rule = await application.pause_recurring_rule(context, rule.id)
+                        reply_text = (
+                            f"已暂停周期账单：{rule.description or rule.category}\n"
+                            "暂停期间不会产生新的提醒。恢复请发送：恢复"
+                            f"{rule.description or rule.category}"
+                        )
+                    elif command.action is RecurringCommandAction.RESUME:
+                        rule = await application.resume_recurring_rule(context, rule.id)
+                        reply_text = (
+                            f"已恢复周期账单：{rule.description or rule.category}\n"
+                            f"下次发生：{rule.next_occurrence.isoformat()}\n"
+                            "不会补生成暂停期间的提醒。"
+                        )
+                    else:
+                        rule = await application.skip_recurring_occurrence(context, rule.id)
+                        reply_text = (
+                            f"已跳过本期：{rule.description or rule.category}\n"
+                            f"下次发生：{rule.next_occurrence.isoformat()}\n"
+                            "本期不会生成账目，后续周期继续有效。"
+                        )
+            except RecurringRuleError as exc:
+                reply_text = str(exc)
+
+            row = self._make_outbox_row(
+                event_id=event_id,
+                message_id=message_id,
+                reply_type=ReplyType.TEXT,
+                sequence=0,
+                payload=build_text_payload(reply_text),
+                blob=None,
+            )
+            session.add(row)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    parent.business_committed_at = datetime.now(UTC)
+            await session.commit()
+            return [row]
+
+    def _recurring_created_message(self, rule: RecurringRule) -> str:
+        sign = "收入" if rule.transaction_type is Direction.INCOME else "支出"
+        frequency = {
+            "weekly": "每周",
+            "monthly": "每月",
+            "yearly": "每年",
+        }.get(rule.frequency, rule.frequency)
+        return (
+            f"已创建周期账单：\n"
+            f"{rule.description or rule.category} · {sign} {self._format_money(rule.amount)}"
+            f" · {rule.category}\n"
+            f"周期：{frequency} · 下次发生：{rule.next_occurrence.isoformat()}\n"
+            "到期后我会先提醒你确认，确认后才正式入账。"
+        )
+
+    async def _recurring_list_message(
+        self,
+        session: AsyncSession,
+        context: RequestContext,
+        rules: list[RecurringRule],
+    ) -> str:
+        if not rules:
+            return "当前还没有周期账单。可以这样创建：每月8号房租3500"
+        names = await self._recurring_account_names(session, context, rules)
+        lines = [f"周期账单（{len(rules)}）："]
+        for rule in rules:
+            lines.append(self._recurring_rule_line(rule, names.get(rule.account_id, "")))
+        lines.append("")
+        lines.append("暂停/恢复/跳过：暂停房租 / 恢复房租 / 跳过房租")
+        return "\n".join(lines)
+
+    def _recurring_rule_line(self, rule: RecurringRule, account_name: str) -> str:
+        sign = "收入" if rule.transaction_type is Direction.INCOME else "支出"
+        frequency = {
+            "weekly": "每周",
+            "monthly": "每月",
+            "yearly": "每年",
+        }.get(rule.frequency, rule.frequency)
+        status = {
+            "active": "启用",
+            "paused": "已暂停",
+            "disabled": "已停用",
+        }.get(rule.status, rule.status)
+        account_part = f" · {account_name}" if account_name else ""
+        return (
+            f"• {rule.description or rule.category} · {sign} "
+            f"{self._format_money(rule.amount)}{account_part}\n"
+            f"  {frequency} · 下次 {rule.next_occurrence.isoformat()} · {status}"
+        )
+
+    async def _recurring_account_names(
+        self,
+        session: AsyncSession,
+        context: RequestContext,
+        rules: list[RecurringRule],
+    ) -> dict[uuid.UUID, str]:
+        from lark_ledger.models import Account
+
+        account_ids = {rule.account_id for rule in rules if rule.account_id is not None}
+        names: dict[uuid.UUID, str] = {}
+        if not account_ids:
+            return names
+        rows = (
+            await session.execute(
+                select(Account.id, Account.name).where(
+                    Account.ledger_id == context.ledger_id,
+                    Account.id.in_(account_ids),
+                )
+            )
+        ).all()
+        for account_id, name in rows:
+            names[account_id] = name
+        return names
+
+    async def _resolve_recurring_rule(
+        self,
+        session: AsyncSession,
+        context: RequestContext,
+        name: str | None,
+    ) -> RecurringRule:
+        """Resolve a lifecycle command's target rule by name.
+
+        ``name`` is ``None`` for "跳过本期": the most-due active rule is used.
+        """
+        from lark_ledger.models import RecurringRuleStatus
+
+        if name is None:
+            rule = await session.scalar(
+                select(RecurringRule)
+                .where(
+                    RecurringRule.ledger_id == context.ledger_id,
+                    RecurringRule.status == RecurringRuleStatus.ACTIVE.value,
+                )
+                .order_by(RecurringRule.next_occurrence, RecurringRule.created_at)
+                .limit(1)
+            )
+            if rule is None:
+                raise RecurringRuleNotFoundError("当前没有启用中的周期账单")
+            return rule
+        rows = (
+            (
+                await session.scalars(
+                    select(RecurringRule).where(
+                        RecurringRule.ledger_id == context.ledger_id,
+                        or_(
+                            RecurringRule.description.contains(name),
+                            RecurringRule.category.contains(name),
+                        ),
+                    )
+                    .order_by(RecurringRule.created_at.desc(), RecurringRule.id.desc())
+                )
+            )
+            .all()
+        )
+        if not rows:
+            raise RecurringRuleNotFoundError(f"没有找到名称包含“{name}”的周期账单")
+        if len(rows) > 1:
+            raise RecurringRuleConflictError(
+                f"有多个周期账单名称包含“{name}”，请使用更具体的名称"
+            )
+        return rows[0]
+
+    def _format_money(self, amount: Decimal) -> str:
+        if self.settings.currency == "CNY":
+            return f"¥{amount:.2f}"
+        return f"{amount:.2f} {self.settings.currency}"
 
     async def _business_result_committed(self, event_id: str) -> bool:
         async with self.session_factory() as session:

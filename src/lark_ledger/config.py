@@ -70,6 +70,13 @@ class Settings(BaseSettings):
     pending_duplicate_window_minutes: int = Field(default=60, ge=1, le=1440)
     pending_max_list: int = Field(default=10, ge=1, le=50)
 
+    # Recurring rules (P29): a background worker turns due active rules into
+    # deterministic confirmation pendings + Feishu reminders. Rules never write
+    # ledger transactions directly; only a confirmed pending becomes an entry.
+    recurring_enabled: bool = True
+    recurring_poll_interval_seconds: float = Field(default=300.0, ge=5, le=86400)
+    recurring_batch_size: int = Field(default=10, ge=1, le=100)
+
     # Optional Web Dashboard. Authentication state remains in PostgreSQL; the
     # browser only receives opaque, short-lived cookies. Disabled deployments
     # retain the bot-only application surface.

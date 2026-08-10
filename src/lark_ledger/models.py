@@ -47,6 +47,43 @@ class AccountStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class RecurringFrequency(StrEnum):
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+    YEARLY = "yearly"
+
+
+class RecurringRuleStatus(StrEnum):
+    """Lifecycle of a recurring rule (P29).
+
+    ``active`` rules generate occurrences; ``paused`` rules stop generating
+    until resumed (resume skips straight to the next future period, never
+    back-filling history); ``disabled`` archives the rule for good while keeping
+    its historical pendings / transactions intact.
+    """
+
+    ACTIVE = "active"
+    PAUSED = "paused"
+    DISABLED = "disabled"
+
+
+class RecurringOccurrenceStatus(StrEnum):
+    """Lifecycle of one scheduled occurrence of a recurring rule.
+
+    ``pending`` — the worker generated a confirmation pending and advanced the
+    rule. ``skipped`` — the user skipped this period. ``confirmed`` — the
+    pending was confirmed and a ledger transaction exists. ``cancelled`` — the
+    pending was cancelled by the user. ``failed`` — the pending confirmation
+    failed permanently.
+    """
+
+    PENDING = "pending"
+    SKIPPED = "skipped"
+    CONFIRMED = "confirmed"
+    CANCELLED = "cancelled"
+    FAILED = "failed"
+
+
 class UserStatus(StrEnum):
     ACTIVE = "active"
     DISABLED = "disabled"
@@ -546,6 +583,134 @@ class BudgetAlert(Base):
     )
 
 
+class RecurringRule(Base):
+    """A known future recurring income / expense for a ledger (P29).
+
+    Rules never write ledger transactions directly: when ``next_occurrence``
+    comes due the Recurring Worker generates a deterministic confirmation
+    pending (with frozen account, amount, category and planned date) plus a
+    proactive Feishu reminder, then advances the schedule. Only a confirmed
+    pending becomes a real ``LedgerEntry``. ``anchor_day`` keeps the day-of-month
+    stable across month boundaries (a 31st rule schedules Feb 28 then back to
+    Mar 31) so scheduling is predictable and testable. ``next_occurrence`` is a
+    business date in the configured application timezone — never a UTC wall time.
+    """
+
+    __tablename__ = "recurring_rules"
+    __table_args__ = (
+        UniqueConstraint("ledger_id", "id", name="uq_recurring_rules_ledger_id"),
+        ForeignKeyConstraint(
+            ["ledger_id", "account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_recurring_rules_ledger_account",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("amount > 0", name="ck_recurring_rules_positive_amount"),
+        CheckConstraint(
+            "frequency IN ('weekly', 'monthly', 'yearly')",
+            name="ck_recurring_rules_frequency",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'disabled')", name="ck_recurring_rules_status"
+        ),
+        CheckConstraint(
+            "transaction_type IN ('EXPENSE', 'INCOME')",
+            name="ck_recurring_rules_transaction_type",
+        ),
+        CheckConstraint("interval >= 1", name="ck_recurring_rules_interval"),
+        CheckConstraint(
+            "anchor_day BETWEEN 1 AND 31", name="ck_recurring_rules_anchor_day"
+        ),
+        # Worker scan: due active rules (business-date comparison done in code).
+        Index("ix_recurring_rules_due", "status", "next_occurrence"),
+        Index("ix_recurring_rules_ledger_created", "ledger_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=False
+    )
+    creator_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    transaction_type: Mapped[Direction] = mapped_column(
+        Enum(Direction, name="entry_direction"), nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    frequency: Mapped[str] = mapped_column(String(16), nullable=False)
+    interval: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    next_occurrence: Mapped[date] = mapped_column(Date, nullable=False)
+    anchor_day: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=RecurringRuleStatus.ACTIVE.value
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class RecurringOccurrence(Base):
+    """Deterministic identity of one scheduled period (P29).
+
+    ``(rule_id, occurrence_date)`` is unique, so the worker, retries, and
+    concurrent workers can never generate two pendings for the same period. The
+    unique constraint — not an application ``if not exists`` — is the
+    idempotency authority. ``pending_id`` / ``entry_id`` link the occurrence to
+    its generated confirmation and its confirmed ledger transaction so the
+    occurrence lifecycle (pending → confirmed / skipped / cancelled / failed)
+    stays auditable.
+    """
+
+    __tablename__ = "recurring_occurrences"
+    __table_args__ = (
+        UniqueConstraint(
+            "rule_id", "occurrence_date", name="uq_recurring_occurrences_rule_date"
+        ),
+        ForeignKeyConstraint(
+            ["ledger_id", "rule_id"],
+            ["recurring_rules.ledger_id", "recurring_rules.id"],
+            name="fk_recurring_occurrences_ledger_rule",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'skipped', 'confirmed', 'cancelled', 'failed')",
+            name="ck_recurring_occurrences_status",
+        ),
+        Index("ix_recurring_occurrences_rule_date", "rule_id", "occurrence_date"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    rule_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    occurrence_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=RecurringOccurrenceStatus.PENDING.value
+    )
+    pending_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("pending_commands.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ledger_entries.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class ProcessedEvent(Base):
     """Claimed Feishu events.
 
@@ -829,6 +994,14 @@ class PendingCommand(Base):
     # Frozen single-account target for non-transfer write pendings (create /
     # update / batch). NULL for legacy rows and for transfer / budget pendings.
     account_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # P29 recurring linkage: when this pending was generated by the Recurring
+    # Worker, ``recurring_rule_id`` + ``occurrence_date`` name the exact
+    # occurrence so confirming can mark the occurrence confirmed and link the
+    # created transaction. NULL for ordinary pendings.
+    recurring_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("recurring_rules.id", ondelete="RESTRICT"), nullable=True
+    )
+    occurrence_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     source_event_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)

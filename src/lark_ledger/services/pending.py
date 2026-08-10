@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -37,6 +37,9 @@ from lark_ledger.models import (
     PendingCommand,
     PendingStatus,
     ProcessedEvent,
+    RecurringOccurrence,
+    RecurringOccurrenceStatus,
+    RecurringRule,
     ReplyOutbox,
 )
 from lark_ledger.outbox import (
@@ -50,7 +53,7 @@ from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
-from lark_ledger.services.risk import RiskAssessment, RiskReason
+from lark_ledger.services.risk import RiskAssessment, RiskDecision, RiskReason
 from lark_ledger.services.transfers import TransferService
 from lark_ledger.services.worker import is_permanent_error
 from lark_ledger.short_id import MAX_SHORT_ID_ALLOCATION_ATTEMPTS, normalize_entry_ref
@@ -70,7 +73,11 @@ _REASON_TEXT = {
     RiskReason.CREATE_ENTRIES: "批量记账",
     RiskReason.BUDGETS: "批量预算",
     RiskReason.DUPLICATE: "疑似重复",
+    RiskReason.RECURRING: "周期账单",
 }
+
+#: Deterministic source key for recurring-generated pendings.
+RECURRING_SOURCE_PREFIX = "recurring:"
 
 
 @dataclass(frozen=True)
@@ -514,6 +521,77 @@ class PendingCommandStore:
         session.add(pending)
         return pending
 
+    async def create_recurring_pending(
+        self,
+        *,
+        session: AsyncSession,
+        context: RequestContext,
+        user_open_id: str,
+        rule: RecurringRule,
+        occurrence_date: date,
+        now: datetime,
+    ) -> PendingCommand:
+        """Add a pending row for one recurring occurrence to ``session``.
+
+        The pending freezes the rule's ledger, account, amount, currency,
+        category, planned business date and the occurrence identity
+        (``source_event_id = recurring:{rule_id}:{occurrence_date}``), so the
+        user can switch ledger / default account / rule later and confirming
+        still writes to the frozen target. The caller commits the pending
+        together with the occurrence row and the reminder outbox.
+        """
+        scheduled_at = datetime.combine(
+            occurrence_date, time.min, tzinfo=ZoneInfo(self._settings.timezone)
+        ).astimezone(UTC)
+        command = ParsedCommand(
+            action=Action.CREATE,
+            amount=rule.amount,
+            currency=rule.currency if rule.currency != self._settings.currency else None,
+            direction=rule.transaction_type,
+            category=rule.category,
+            note=rule.description or None,
+            occurred_at=scheduled_at,
+        )
+        occurrence_key = f"{RECURRING_SOURCE_PREFIX}{rule.id}:{occurrence_date.isoformat()}"
+        code = await self._allocate_code(session, user_open_id)
+        risk = RiskAssessment(
+            decision=RiskDecision.PENDING,
+            reason=RiskReason.RECURRING,
+        )
+        preview = build_pending_preview(
+            command,
+            "recurring",
+            risk,
+            now=now,
+            expires_seconds=self._settings.pending_expires_seconds,
+            currency=self._settings.currency,
+        )
+        preview = replace(preview, code=code, display_code=format_confirmation_ref(code))
+        pending = PendingCommand(
+            confirmation_code=code,
+            user_open_id=user_open_id,
+            actor_user_id=context.actor_user_id,
+            ledger_id=context.ledger_id,
+            account_id=rule.account_id,
+            recurring_rule_id=rule.id,
+            occurrence_date=occurrence_date,
+            source_event_id=occurrence_key,
+            source_message_id=occurrence_key,
+            source_fingerprint=None,
+            transport="recurring",
+            source_type="recurring",
+            command_type=Action.CREATE.value,
+            payload_version=1,
+            payload_json=command.model_dump(mode="json"),
+            preview_json=preview.as_json(),
+            risk_reason=RiskReason.RECURRING.value,
+            status=PendingStatus.PENDING.value,
+            expires_at=now + timedelta(seconds=self._settings.pending_expires_seconds),
+        )
+        session.add(pending)
+        await session.flush()
+        return pending
+
     async def has_active_fingerprint(self, ledger_id: uuid.UUID, source_fingerprint: str) -> bool:
         """Return whether this ledger's exact media already awaits a decision."""
         async with self._factory() as session:
@@ -777,6 +855,7 @@ class PendingCommandStore:
                     )
                     .values(status=PendingStatus.FAILED.value, updated_at=now)
                 )
+                await self._mark_occurrence_failed(session, row, now)
                 message = "该确认单处理失败，请重新发送原记账内容。"
                 reply = self._make_text_row(
                     message_id=reply_to_message_id, event_id=confirm_event_id, text=message
@@ -793,6 +872,7 @@ class PendingCommandStore:
             row.status = PendingStatus.EXECUTED.value
             row.confirmed_at = now
             row.executed_at = now
+            await self._mark_occurrence_confirmed(session, row, result.entry_id)
             reply = self._make_text_row(
                 message_id=reply_to_message_id,
                 event_id=confirm_event_id,
@@ -810,6 +890,48 @@ class PendingCommandStore:
                 confirm_event_id,
             )
             return result.message, [reply]
+
+    @staticmethod
+    async def _mark_occurrence_confirmed(
+        session: AsyncSession,
+        pending: PendingCommand,
+        entry_id: uuid.UUID | None,
+    ) -> None:
+        """Link a confirmed recurring pending to its occurrence (P29).
+
+        Only touches the occurrence that this pending names; a non-recurring
+        pending is a no-op. The row lock on the pending already serializes
+        duplicate confirms, so exactly one occurrence transitions to confirmed.
+        """
+        if pending.recurring_rule_id is None or pending.occurrence_date is None:
+            return
+        occurrence = await session.scalar(
+            select(RecurringOccurrence).where(
+                RecurringOccurrence.rule_id == pending.recurring_rule_id,
+                RecurringOccurrence.occurrence_date == pending.occurrence_date,
+            )
+        )
+        if occurrence is not None and occurrence.status == RecurringOccurrenceStatus.PENDING.value:
+            occurrence.status = RecurringOccurrenceStatus.CONFIRMED.value
+            occurrence.entry_id = entry_id
+
+    @staticmethod
+    async def _mark_occurrence_failed(
+        session: AsyncSession,
+        pending: PendingCommand,
+        now: datetime,
+    ) -> None:
+        """Terminate the occurrence of a permanently-failed recurring confirm."""
+        if pending.recurring_rule_id is None or pending.occurrence_date is None:
+            return
+        occurrence = await session.scalar(
+            select(RecurringOccurrence).where(
+                RecurringOccurrence.rule_id == pending.recurring_rule_id,
+                RecurringOccurrence.occurrence_date == pending.occurrence_date,
+            )
+        )
+        if occurrence is not None and occurrence.status == RecurringOccurrenceStatus.PENDING.value:
+            occurrence.status = RecurringOccurrenceStatus.FAILED.value
 
     async def cancel(
         self,
@@ -858,6 +980,7 @@ class PendingCommandStore:
 
             row.status = PendingStatus.CANCELLED.value
             row.cancelled_at = now
+            await self._mark_occurrence_cancelled(session, row)
             message = f"已取消 {format_confirmation_ref(confirmation_code)}，未写入账本。"
             reply = self._make_text_row(
                 message_id=reply_to_message_id, event_id=cancel_event_id, text=message
@@ -869,6 +992,22 @@ class PendingCommandStore:
                     parent.business_committed_at = now
             await session.commit()
             return message, [reply]
+
+    @staticmethod
+    async def _mark_occurrence_cancelled(
+        session: AsyncSession, pending: PendingCommand
+    ) -> None:
+        """Terminate the occurrence of a cancelled recurring pending (P29)."""
+        if pending.recurring_rule_id is None or pending.occurrence_date is None:
+            return
+        occurrence = await session.scalar(
+            select(RecurringOccurrence).where(
+                RecurringOccurrence.rule_id == pending.recurring_rule_id,
+                RecurringOccurrence.occurrence_date == pending.occurrence_date,
+            )
+        )
+        if occurrence is not None and occurrence.status == RecurringOccurrenceStatus.PENDING.value:
+            occurrence.status = RecurringOccurrenceStatus.CANCELLED.value
 
     async def list_pending(
         self,

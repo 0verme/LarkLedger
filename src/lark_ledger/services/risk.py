@@ -42,6 +42,7 @@ class RiskReason(StrEnum):
     BUDGETS = "budgets"
     DUPLICATE = "duplicate"
     TRANSFER = "transfer"
+    RECURRING = "recurring"
 
 
 class MediaKind(StrEnum):

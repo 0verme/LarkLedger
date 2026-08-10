@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
@@ -14,6 +15,9 @@ from lark_ledger.models import (
     Direction,
     HouseholdInvitation,
     Ledger,
+    PendingCommand,
+    PendingStatus,
+    RecurringRule,
     Transfer,
     TransferRevision,
 )
@@ -30,6 +34,7 @@ from lark_ledger.services.household_management import (
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import LedgerManagementService
+from lark_ledger.services.recurring import RecurringService
 from lark_ledger.services.transfers import AccountBalance, AssetSummary, TransferService
 from lark_ledger.services.web_analytics import WebAnalyticsQueryService
 from lark_ledger.services.web_ledger import WebLedgerQueryService
@@ -49,6 +54,7 @@ from lark_ledger.web_schemas import (
     PendingGroup,
     PendingPage,
     SortOrder,
+    WebRecurringRule,
 )
 
 
@@ -354,6 +360,199 @@ class ClientApplicationService:
         return await BudgetService(
             self._session, currency=self._currency, timezone=self._timezone
         ).delete_budget(context, period=period, category=category)
+
+    # -- recurring rules (P29) --------------------------------------------
+
+    def _recurring(self) -> RecurringService:
+        return RecurringService(
+            self._session, currency=self._currency, timezone=self._timezone
+        )
+
+    async def create_recurring_rule(
+        self,
+        context: RequestContext,
+        *,
+        transaction_type: Direction,
+        amount: Decimal,
+        currency: str | None,
+        category: str,
+        description: str,
+        frequency: str,
+        interval: int,
+        next_occurrence: date,
+        account_id: uuid.UUID,
+    ) -> RecurringRule:
+        from lark_ledger.models import RecurringFrequency
+
+        return await self._recurring().create(
+            context,
+            transaction_type=transaction_type,
+            amount=amount,
+            currency=currency,
+            category=category,
+            description=description,
+            frequency=RecurringFrequency(frequency),
+            interval=interval,
+            next_occurrence=next_occurrence,
+            account_id=account_id,
+        )
+
+    async def get_recurring_rule(
+        self, context: RequestContext, rule_id: uuid.UUID
+    ) -> RecurringRule:
+        return await self._recurring().get(context, rule_id)
+
+    async def list_recurring_rules(self, context: RequestContext) -> list[RecurringRule]:
+        return await self._recurring().list(context)
+
+    async def update_recurring_rule(
+        self,
+        context: RequestContext,
+        rule_id: uuid.UUID,
+        *,
+        transaction_type: Direction | None,
+        amount: Decimal | None,
+        currency: str | None,
+        category: str | None,
+        description: str | None,
+        frequency: str | None,
+        interval: int | None,
+        next_occurrence: date | None,
+        account_id: uuid.UUID | None,
+    ) -> RecurringRule:
+        from lark_ledger.models import RecurringFrequency
+
+        service = self._recurring()
+        return await service.update(
+            context,
+            rule_id,
+            transaction_type=transaction_type,
+            amount=amount,
+            currency=currency,
+            category=category,
+            description=description,
+            frequency=RecurringFrequency(frequency) if frequency is not None else None,
+            interval=interval,
+            next_occurrence=next_occurrence,
+            account_id=account_id,
+        )
+
+    async def pause_recurring_rule(
+        self, context: RequestContext, rule_id: uuid.UUID
+    ) -> RecurringRule:
+        return await self._recurring().pause(context, rule_id)
+
+    async def resume_recurring_rule(
+        self, context: RequestContext, rule_id: uuid.UUID
+    ) -> RecurringRule:
+        return await self._recurring().resume(context, rule_id)
+
+    async def disable_recurring_rule(
+        self, context: RequestContext, rule_id: uuid.UUID
+    ) -> RecurringRule:
+        return await self._recurring().disable(context, rule_id)
+
+    async def skip_recurring_occurrence(
+        self, context: RequestContext, rule_id: uuid.UUID
+    ) -> RecurringRule:
+        return await self._recurring().skip_occurrence(context, rule_id)
+
+    async def recurring_rule_views(self, context: RequestContext) -> list[WebRecurringRule]:
+        """Return the enriched recurring-rule list for the Web dashboard.
+
+        Account names and waiting-confirmation counts are denormalized at read
+        time and never leak other ledgers' accounts.
+        """
+        rules = await self.list_recurring_rules(context)
+        account_names = await self._recurring_account_names(context, rules)
+        pending_counts = await self._recurring_pending_counts(context, rules)
+        return [
+            self._web_recurring_rule(
+                rule,
+                account_names.get(rule.account_id),
+                pending_counts.get(rule.id, 0),
+            )
+            for rule in rules
+        ]
+
+    async def recurring_rule_view(
+        self, context: RequestContext, rule_id: uuid.UUID
+    ) -> WebRecurringRule:
+        rule = await self.get_recurring_rule(context, rule_id)
+        names = await self._recurring_account_names(context, [rule])
+        counts = await self._recurring_pending_counts(context, [rule])
+        return self._web_recurring_rule(
+            rule, names.get(rule.account_id), counts.get(rule.id, 0)
+        )
+
+    @staticmethod
+    def _web_recurring_rule(
+        rule: RecurringRule, account_name: str | None, pending_count: int
+    ) -> WebRecurringRule:
+        return WebRecurringRule(
+            id=str(rule.id),
+            ledger_id=str(rule.ledger_id),
+            transaction_type=rule.transaction_type.value,
+            amount=rule.amount,
+            currency=rule.currency,
+            category=rule.category,
+            description=rule.description,
+            frequency=rule.frequency,
+            interval=rule.interval,
+            next_occurrence=rule.next_occurrence,
+            status=rule.status,
+            account_id=str(rule.account_id),
+            account_name=account_name,
+            pending_count=pending_count,
+            created_at=rule.created_at,
+            updated_at=rule.updated_at,
+        )
+
+    async def _recurring_account_names(
+        self, context: RequestContext, rules: list[RecurringRule]
+    ) -> dict[uuid.UUID, str]:
+        account_ids = {rule.account_id for rule in rules if rule.account_id is not None}
+        names: dict[uuid.UUID, str] = {}
+        if not account_ids:
+            return names
+        rows = (
+            await self._session.execute(
+                select(Account.id, Account.name).where(
+                    Account.ledger_id == context.ledger_id,
+                    Account.id.in_(account_ids),
+                )
+            )
+        ).all()
+        for account_id, name in rows:
+            names[account_id] = name
+        return names
+
+    async def _recurring_pending_counts(
+        self, context: RequestContext, rules: list[RecurringRule]
+    ) -> dict[uuid.UUID, int]:
+        if not rules:
+            return {}
+        rule_ids = [rule.id for rule in rules]
+        rows = (
+            await self._session.execute(
+                select(
+                    PendingCommand.recurring_rule_id,
+                    func.count(PendingCommand.id),
+                )
+                .where(
+                    PendingCommand.recurring_rule_id.in_(rule_ids),
+                    PendingCommand.ledger_id == context.ledger_id,
+                    PendingCommand.status.in_(
+                        [
+                            PendingStatus.PENDING.value,
+                            PendingStatus.EXECUTING.value,
+                        ]
+                    ),
+                )
+                .group_by(PendingCommand.recurring_rule_id)
+            )
+        ).all()
+        return {rule_id: int(count) for rule_id, count in rows if rule_id is not None}
 
     async def analytics(
         self, context: RequestContext, *, start_date: date, end_date: date

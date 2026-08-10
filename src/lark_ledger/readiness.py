@@ -73,6 +73,11 @@ class ReadinessService:
             enabled=self._settings.reply_worker_enabled,
         )
         cleanup_worker = self._cleanup_worker_check(state)
+        recurring_worker = self._worker_check(
+            state,
+            attribute="recurring_worker",
+            enabled=self._settings.recurring_enabled,
+        )
         receiver = self._receiver_check(state)
         checks = {
             "application": application,
@@ -81,6 +86,7 @@ class ReadinessService:
             "event_worker": event_worker,
             "reply_worker": reply_worker,
             "cleanup_worker": cleanup_worker,
+            "recurring_worker": recurring_worker,
             "receiver": receiver,
         }
         ready = all(

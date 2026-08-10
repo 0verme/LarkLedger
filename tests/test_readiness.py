@@ -82,6 +82,8 @@ def build_app(
         app.state.reply_worker = HealthyTask()
     if settings.cleanup_enabled:
         app.state.cleanup_worker = HealthyTask()
+    if settings.recurring_enabled:
+        app.state.recurring_worker = HealthyTask()
     if settings.event_mode.value == "websocket":
         app.state.long_connection = HealthyReceiver()
     return app
@@ -358,7 +360,7 @@ def test_code_revision_is_resolved_from_alembic_configuration() -> None:
     revision, error = resolve_code_revision()
 
     assert error is None
-    assert revision == "20260809_0022"
+    assert revision == "20260810_0023"
 
 
 async def test_cleanup_worker_failure_is_degraded_but_not_a_readiness_failure() -> None:
