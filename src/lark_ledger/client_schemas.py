@@ -150,6 +150,8 @@ class ClientEntryCreateRequest(BaseModel):
     occurred_at: datetime
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     account_id: str | None = None
+    # P30: who paid (exact ledger member id); NULL = the acting user pays.
+    paid_by_user_id: str | None = None
 
 
 class ClientCommandResult(BaseModel):

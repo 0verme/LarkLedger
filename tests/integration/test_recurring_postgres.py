@@ -88,11 +88,12 @@ async def test_recurring_migration_constraints_and_downgrade(
             rule_id = uuid.uuid4()
             await connection.execute(
                 text(
-                    "INSERT INTO recurring_rules (id, ledger_id, creator_user_id, account_id, "
-                    "transaction_type, amount, currency, category, description, frequency, "
-                    "interval, next_occurrence, anchor_day, status) VALUES "
-                    "(:id, :ledger, :user, :account, 'EXPENSE', 3500, 'CNY', '房租', '房租', "
-                    "'monthly', 1, '2026-09-08', 8, 'active')"
+                    "INSERT INTO recurring_rules (id, ledger_id, creator_user_id, "
+                    "paid_by_user_id, account_id, transaction_type, amount, currency, "
+                    "category, description, frequency, interval, next_occurrence, "
+                    "anchor_day, status) VALUES "
+                    "(:id, :ledger, :user, :user, :account, 'EXPENSE', 3500, 'CNY', '房租', "
+                    "'房租', 'monthly', 1, '2026-09-08', 8, 'active')"
                 ),
                 {"id": rule_id, "ledger": ledger_id, "user": user_id, "account": account_id},
             )
@@ -122,11 +123,12 @@ async def test_recurring_migration_constraints_and_downgrade(
             async with scratch_engine.begin() as connection:
                 await connection.execute(
                     text(
-                        "INSERT INTO recurring_rules (id, ledger_id, creator_user_id, account_id, "
-                        "transaction_type, amount, currency, category, description, frequency, "
-                        "interval, next_occurrence, anchor_day, status) VALUES "
-                        "(:id, :missing, :user, :account, 'EXPENSE', 100, 'CNY', 'x', 'x', "
-                        "'monthly', 1, '2026-09-08', 8, 'active')"
+                        "INSERT INTO recurring_rules (id, ledger_id, creator_user_id, "
+                        "paid_by_user_id, account_id, transaction_type, amount, currency, "
+                        "category, description, frequency, interval, next_occurrence, "
+                        "anchor_day, status) VALUES "
+                        "(:id, :missing, :user, :user, :account, 'EXPENSE', 100, 'CNY', 'x', "
+                        "'x', 'monthly', 1, '2026-09-08', 8, 'active')"
                     ),
                     {
                         "id": uuid.uuid4(),

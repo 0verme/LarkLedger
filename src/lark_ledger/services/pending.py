@@ -22,7 +22,7 @@ from decimal import Decimal
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
@@ -573,6 +573,7 @@ class PendingCommandStore:
             actor_user_id=context.actor_user_id,
             ledger_id=context.ledger_id,
             account_id=rule.account_id,
+            paid_by_user_id=rule.paid_by_user_id,
             recurring_rule_id=rule.id,
             occurrence_date=occurrence_date,
             source_event_id=occurrence_key,
@@ -639,7 +640,7 @@ class PendingCommandStore:
 
     async def get_by_code(self, user_open_id: str, confirmation_code: str) -> PendingCommand | None:
         async with self._factory() as session:
-            return cast(
+            row = cast(
                 PendingCommand | None,
                 await session.scalar(
                     select(PendingCommand).where(
@@ -648,6 +649,57 @@ class PendingCommandStore:
                     )
                 ),
             )
+            if row is not None:
+                return row
+            # P30: a recurring pending generated for a household ledger may be
+            # confirmed by any active member, not only its creator.
+            return await self._find_recurring_for_confirmer(
+                session, user_open_id, confirmation_code
+            )
+
+    async def _find_recurring_for_confirmer(
+        self,
+        session: AsyncSession,
+        user_open_id: str,
+        confirmation_code: str,
+    ) -> PendingCommand | None:
+        """Return a shared recurring pending the actor may confirm.
+
+        Scoped to the actor's accessible ledgers so two identical confirmation
+        codes in unrelated ledgers can never be conflated; more than one match
+        is treated as ambiguous (the caller reports "not found").
+        """
+        context = await IdentityService(
+            session,
+            currency=self._settings.currency,
+            timezone=self._settings.timezone,
+        ).resolve_or_bootstrap(
+            channel="feishu",
+            external_subject_id=user_open_id,
+        )
+        accessible = await LedgerAuthorizationService(session).list_accessible(
+            context.actor_user_id
+        )
+        if not accessible:
+            return None
+        rows = list(
+            (
+                await session.scalars(
+                    select(PendingCommand)
+                    .where(
+                        PendingCommand.confirmation_code == confirmation_code,
+                        PendingCommand.recurring_rule_id.is_not(None),
+                        PendingCommand.ledger_id.in_([ledger.id for ledger in accessible]),
+                        PendingCommand.status.in_(
+                            [PendingStatus.PENDING.value, PendingStatus.EXECUTING.value]
+                        ),
+                    )
+                )
+            ).all()
+        )
+        if len(rows) != 1:
+            return None
+        return rows[0]
 
     async def list_for_user(
         self, user_open_id: str, *, limit: int | None = None
@@ -732,6 +784,18 @@ class PendingCommandStore:
                 .with_for_update()
             )
             if row is None:
+                # P30: a recurring pending for a household ledger may be confirmed
+                # by any active member, not only its creator.
+                row = await self._find_recurring_for_confirmer(
+                    session, user_open_id, confirmation_code
+                )
+                if row is not None:
+                    row = await session.scalar(
+                        select(PendingCommand)
+                        .where(PendingCommand.id == row.id)
+                        .with_for_update()
+                    )
+            if row is None:
                 message = "未找到该确认单，或它不属于当前用户。"
                 reply = self._make_text_row(
                     message_id=reply_to_message_id, event_id=confirm_event_id, text=message
@@ -748,8 +812,16 @@ class PendingCommandStore:
                 external_subject_id=user_open_id,
             )
             legacy_unscoped = row.actor_user_id is None and row.ledger_id is None
+            is_creator = row.actor_user_id == actor_context.actor_user_id
+            is_shared_recurring = (
+                row.recurring_rule_id is not None
+                and row.ledger_id is not None
+                and await LedgerAuthorizationService(session).can_access(
+                    actor_context.actor_user_id, row.ledger_id
+                )
+            )
             if not legacy_unscoped and (
-                row.actor_user_id != actor_context.actor_user_id or row.ledger_id is None
+                row.ledger_id is None or (not is_creator and not is_shared_recurring)
             ):
                 message = "该确认单所属账本已不可访问，未执行任何写入。"
                 reply = self._make_text_row(
@@ -828,6 +900,7 @@ class PendingCommandStore:
                         exchange_rates=exchange_rates,
                         commit_changes=False,
                         account_id=row.account_id,
+                        paid_by_user_id=row.paid_by_user_id,
                     ).execute(
                         frozen_context,
                         command,
@@ -1019,6 +1092,49 @@ class PendingCommandStore:
     ) -> tuple[str, list[ReplyOutbox]]:
         """Render the user's recent pending confirmations as a text reply."""
         count = limit or self._settings.pending_max_list
+        _, rows = await self._list_pending_rows(
+            user_open_id=user_open_id,
+            limit=count,
+        )
+        if not rows:
+            message = "当前没有待确认的记账。"
+            async with self._factory() as session:
+                reply = self._make_text_row(
+                    message_id=reply_to_message_id, event_id=event_id, text=message
+                )
+                session.add(reply)
+                await session.commit()
+            return message, [reply]
+        lines: list[str] = []
+        for pending in rows:
+            preview = PendingPreview.from_json(pending.preview_json)
+            expires = (
+                _format_local_datetime(
+                    pending.expires_at,
+                    self._settings.timezone,
+                    "%m-%d %H:%M",
+                )
+                if pending.expires_at
+                else "未知"
+            )
+            lines.append(
+                f"{format_confirmation_ref(pending.confirmation_code)} · "
+                f"{preview.risk_reason} · 共 {preview.entries_total} 笔"
+                f"（过期 {expires}）"
+            )
+        message = "待确认列表：\n" + "\n".join(lines)
+        async with self._factory() as session:
+            reply = self._make_text_row(
+                message_id=reply_to_message_id, event_id=event_id, text=message
+            )
+            session.add(reply)
+            await session.commit()
+        return message, [reply]
+
+    async def _list_pending_rows(
+        self, *, user_open_id: str, limit: int
+    ) -> tuple[RequestContext, list[PendingCommand]]:
+        """Pending rows the actor may act on: their own plus shared recurring."""
         async with self._factory() as session:
             context = await IdentityService(
                 session,
@@ -1028,53 +1144,36 @@ class PendingCommandStore:
                 channel="feishu",
                 external_subject_id=user_open_id,
             )
+            accessible_ids = [
+                ledger.id
+                for ledger in await LedgerAuthorizationService(session).list_accessible(
+                    context.actor_user_id
+                )
+            ]
             rows = (
                 (
                     await session.execute(
                         select(PendingCommand)
                         .where(
-                            PendingCommand.user_open_id == user_open_id,
                             or_(
-                                PendingCommand.ledger_id == context.ledger_id,
-                                PendingCommand.ledger_id.is_(None),
-                            ),
+                                and_(
+                                    PendingCommand.user_open_id == user_open_id,
+                                    or_(
+                                        PendingCommand.ledger_id == context.ledger_id,
+                                        PendingCommand.ledger_id.is_(None),
+                                    ),
+                                ),
+                                and_(
+                                    PendingCommand.recurring_rule_id.is_not(None),
+                                    PendingCommand.ledger_id.in_(accessible_ids),
+                                ),
+                            )
                         )
                         .order_by(PendingCommand.created_at.desc())
-                        .limit(count)
+                        .limit(limit)
                     )
                 )
                 .scalars()
                 .all()
             )
-            if not rows:
-                message = "当前没有待确认的记账。"
-                reply = self._make_text_row(
-                    message_id=reply_to_message_id, event_id=event_id, text=message
-                )
-                session.add(reply)
-                await session.commit()
-                return message, [reply]
-            lines: list[str] = []
-            for pending in rows:
-                preview = PendingPreview.from_json(pending.preview_json)
-                expires = (
-                    _format_local_datetime(
-                        pending.expires_at,
-                        self._settings.timezone,
-                        "%m-%d %H:%M",
-                    )
-                    if pending.expires_at
-                    else "未知"
-                )
-                lines.append(
-                    f"{format_confirmation_ref(pending.confirmation_code)} · "
-                    f"{preview.risk_reason} · 共 {preview.entries_total} 笔"
-                    f"（过期 {expires}）"
-                )
-            message = "待确认列表：\n" + "\n".join(lines)
-            reply = self._make_text_row(
-                message_id=reply_to_message_id, event_id=event_id, text=message
-            )
-            session.add(reply)
-            await session.commit()
-            return message, [reply]
+            return context, list(rows)

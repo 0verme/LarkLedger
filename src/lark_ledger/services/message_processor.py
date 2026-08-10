@@ -71,6 +71,7 @@ from lark_ledger.services.household_management import (
 )
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger_management import LedgerManagementError
+from lark_ledger.services.member_resolution import PayerResolutionError
 from lark_ledger.services.outbox import ReplyOutboxStore
 from lark_ledger.services.pending import (
     PendingCommandStore,
@@ -426,6 +427,10 @@ class MessageProcessor:
                 "账户名称不明确、已归档或不属于当前账本，本次未执行任何写入。"
                 "请使用准确的账户名称后重试，例如：查看支付宝余额、用招商银行记支出。",
             )
+        except PayerResolutionError as exc:
+            # Controlled rejection: a payer reference did not resolve to exactly
+            # one ledger member. The error message lists the available payers.
+            await self.feishu.reply_text(message_id, str(exc))
         except Exception:
             error_id = self._log_processing_error(stage, message_id, message_type)
             if stage != "reply":

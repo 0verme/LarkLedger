@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -33,6 +33,10 @@ from lark_ledger.schemas import (
 )
 from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.exchange import ExchangeRateUnavailableError
+from lark_ledger.services.member_resolution import (
+    MemberResolutionService,
+    PayerResolutionError,
+)
 from lark_ledger.services.transfers import TransferService
 from lark_ledger.short_id import (
     MAX_SHORT_ID_ALLOCATION_ATTEMPTS,
@@ -81,9 +85,10 @@ class _EntryMixin:
             source_item_index=source_item_index,
         )
         names = await self._account_names([entry])
+        payer_name = await self._payer_display_name(entry)
         return ExecutionResult(
             message=self._created_message(
-                entry, converted, names.get(entry.account_id, "")
+                entry, converted, names.get(entry.account_id, ""), payer_name
             ),
             budget_alert=budget_alert,
             entry_id=entry.id,
@@ -102,11 +107,15 @@ class _EntryMixin:
         assert command.direction is not None
         assert command.category is not None
         assert command.occurred_at is not None
+        context = self._request_context()
         converted = await self._convert_command_amount(command)
         account = await self._resolve_entry_account(command)
+        paid_by = await self._resolve_paid_by(command)
         entry = LedgerEntry(
             user_open_id=user_open_id,
-            ledger_id=self._request_context().ledger_id,
+            created_by_user_id=context.actor_user_id,
+            paid_by_user_id=paid_by,
+            ledger_id=context.ledger_id,
             account_id=account.id,
             short_id=await self._allocate_short_id(user_open_id),
             amount=converted.amount,
@@ -123,6 +132,39 @@ class _EntryMixin:
         budget_alert = await self._check_budget(entry)
         await self.session.flush()
         return entry, converted, budget_alert
+
+    async def _resolve_paid_by(self, command: ParsedCommand) -> uuid.UUID:
+        """Resolve the payer for a create/update command (P30).
+
+        Order: an explicit transport-supplied ``paid_by_user_id`` (web / client
+        / recurring-confirm, already a user id) wins, then the command's
+        ``payer_reference`` (the AI-echoed string, resolved deterministically to
+        exactly one ledger member), then the acting user. ``None`` (personal
+        ledgers / no reference) falls through to the actor, keeping legacy
+        behavior identical.
+        """
+        resolver = MemberResolutionService(self.session)
+        explicit = getattr(self, "paid_by_user_id", None)
+        if explicit is not None:
+            if not await resolver.is_member(self._request_context(), explicit):
+                raise PayerResolutionError("付款人不存在或不属于当前账本")
+            return cast(uuid.UUID, explicit)
+        return await resolver.resolve_payer(
+            self._request_context(), command.payer_reference
+        )
+
+    async def _payer_display_name(self, entry: LedgerEntry) -> str | None:
+        """Best-effort display name for an entry's payer (alias > display_name)."""
+        if entry.paid_by_user_id is None:
+            return None
+        context = self._request_context()
+        resolver = MemberResolutionService(self.session)
+        members = await resolver.ledger_members(context)
+        target = next((user for user in members if user.id == entry.paid_by_user_id), None)
+        if target is None:
+            return None
+        alias = await resolver.member_alias(context, target.id)
+        return alias or target.display_name or str(target.id)[:8]
 
     async def _resolve_entry_account(self, command: ParsedCommand) -> Account:
         """Resolve the ledger-scoped account a command targets.
@@ -211,16 +253,25 @@ class _EntryMixin:
         return existing is not None
 
     def _created_message(
-        self, entry: LedgerEntry, converted: _ConvertedAmount, account_name: str
+        self,
+        entry: LedgerEntry,
+        converted: _ConvertedAmount,
+        account_name: str,
+        payer_name: str | None = None,
     ) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         note = f"（{entry.note}）" if entry.note else ""
         conversion = self._conversion_note(converted)
         account_part = f" · 账户：{account_name}" if account_name else ""
+        payer_part = (
+            f" · 付款：{payer_name}"
+            if payer_name and entry.paid_by_user_id != entry.created_by_user_id
+            else ""
+        )
         return (
             f"已记录 {format_entry_ref(entry.short_id)} {sign} "
             f"{self._format_money(entry.amount)}{conversion} · {entry.category}{note}"
-            f"{account_part}"
+            f"{account_part}{payer_part}"
         )
 
     async def _create_entries(
@@ -453,6 +504,7 @@ class _EntryMixin:
                 category=category,
                 note=(candidate.note or "").strip() or None,
                 occurred_at=candidate.occurred_at,
+                payer_reference=(candidate.payer_reference or "").strip() or None,
             )
         except ValidationError:
             return None, "字段格式无效或超出支持范围"
@@ -592,6 +644,14 @@ class _EntryMixin:
         if target_account is not None and entry.account_id != target_account.id:
             entry.account_id = target_account.id
             changed = True
+        # P30: reassign the payer only when the transport or command names one;
+        # an update without a payer reference keeps the existing payer.
+        explicit_payer = getattr(self, "paid_by_user_id", None)
+        if explicit_payer is not None or command.payer_reference is not None:
+            payer = await self._resolve_paid_by(command)
+            if entry.paid_by_user_id != payer:
+                entry.paid_by_user_id = payer
+                changed = True
         if converted is not None and entry.amount != converted.amount:
             entry.amount = converted.amount
             changed = True
@@ -806,8 +866,11 @@ class _EntryMixin:
         if entry is None:
             return ExecutionResult(message="未找到该账目，或该账目不属于当前用户。")
         names = await self._account_names([entry])
+        payer_name = await self._payer_display_name(entry)
         return ExecutionResult(
-            message=self._entry_detail_message(entry, names.get(entry.account_id, ""))
+            message=self._entry_detail_message(
+                entry, names.get(entry.account_id, ""), payer_name
+            )
         )
 
     async def _entry_by_short_id(
@@ -839,7 +902,9 @@ class _EntryMixin:
             f"{note_part}{account_part}"
         )
 
-    def _entry_detail_message(self, entry: LedgerEntry, account_name: str) -> str:
+    def _entry_detail_message(
+        self, entry: LedgerEntry, account_name: str, payer_name: str | None = None
+    ) -> str:
         sign = "支出" if entry.direction is Direction.EXPENSE else "收入"
         when = self._local_datetime(entry.occurred_at).strftime("%Y-%m-%d %H:%M")
         created = self._local_datetime(entry.created_at).strftime("%Y-%m-%d %H:%M")
@@ -850,6 +915,7 @@ class _EntryMixin:
             status_lines = ["状态：已删除", f"删除时间：{deleted}"]
         else:
             status_lines = ["状态：有效"]
+        payer = payer_name or "（未指定）"
         return "\n".join(
             [
                 f"短 ID：{format_entry_ref(entry.short_id)}",
@@ -859,6 +925,7 @@ class _EntryMixin:
                 f"金额：{self._format_money(entry.amount)}",
                 f"币种：{entry.currency}",
                 f"账户：{account_name or '（默认账户）'}",
+                f"付款人：{payer}",
                 f"分类：{entry.category}",
                 f"备注：{note}",
                 f"来源类型：{entry.source_type}",

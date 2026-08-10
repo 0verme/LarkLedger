@@ -33,6 +33,7 @@ from lark_ledger.models import (
 )
 from lark_ledger.services.accounts import AccountError, AccountService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
+from lark_ledger.services.member_resolution import MemberResolutionService
 
 MAX_MONEY = Decimal("999999999999.99")
 MAX_CATEGORY_LENGTH = 64
@@ -162,6 +163,7 @@ class RecurringService:
         interval: int,
         next_occurrence: date,
         account_id: uuid.UUID,
+        paid_by_user_id: uuid.UUID | None = None,
         now: datetime | None = None,
     ) -> RecurringRule:
         ledger = await self._authorization.get_accessible(
@@ -174,12 +176,14 @@ class RecurringService:
         interval = self._validate_interval(interval)
         currency_code = self._resolve_currency(currency or ledger.currency)
         await self._validate_account(context, account_id)
+        payer = await self._validate_payer(context, paid_by_user_id)
         today = local_business_date(str(self._timezone), now)
         if next_occurrence < today:
             raise RecurringRuleValidationError("下次发生日期不能早于今天")
         rule = RecurringRule(
             ledger_id=context.ledger_id,
             creator_user_id=context.actor_user_id,
+            paid_by_user_id=payer,
             account_id=account_id,
             transaction_type=transaction_type,
             amount=amount,
@@ -234,12 +238,15 @@ class RecurringService:
         interval: int | None = None,
         next_occurrence: date | None = None,
         account_id: uuid.UUID | None = None,
+        paid_by_user_id: uuid.UUID | None = None,
         now: datetime | None = None,
     ) -> RecurringRule:
         rule = await self._locked(context, rule_id)
         if account_id is not None and account_id != rule.account_id:
             await self._validate_account(context, account_id)
             rule.account_id = account_id
+        if paid_by_user_id is not None and paid_by_user_id != rule.paid_by_user_id:
+            rule.paid_by_user_id = await self._validate_payer(context, paid_by_user_id)
         if amount is not None:
             rule.amount = self._validate_amount(amount)
         if currency is not None:
@@ -389,6 +396,15 @@ class RecurringService:
             raise RecurringRuleValidationError(
                 "账户不存在、已归档或不属于当前账本"
             ) from exc
+
+    async def _validate_payer(
+        self, context: RequestContext, paid_by_user_id: uuid.UUID | None
+    ) -> uuid.UUID:
+        """Validate a payer is a ledger member; defaults to the acting user."""
+        payer = paid_by_user_id or context.actor_user_id
+        if not await MemberResolutionService(self._session).is_member(context, payer):
+            raise RecurringRuleValidationError("付款人不存在或不属于当前账本")
+        return payer
 
     @staticmethod
     def _validate_amount(amount: Decimal) -> Decimal:

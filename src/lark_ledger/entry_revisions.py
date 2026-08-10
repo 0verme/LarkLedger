@@ -25,6 +25,13 @@ def snapshot_ledger_entry(entry: LedgerEntry) -> dict[str, Any]:
         "entry_id": str(entry.id),
         "short_id": entry.short_id,
         "account_id": str(entry.account_id) if entry.account_id is not None else None,
+        # P30: who issued the action vs who paid (auditable payer history).
+        "created_by_user_id": (
+            str(entry.created_by_user_id) if entry.created_by_user_id is not None else None
+        ),
+        "paid_by_user_id": (
+            str(entry.paid_by_user_id) if entry.paid_by_user_id is not None else None
+        ),
         "amount": _decimal_str(entry.amount),
         "currency": entry.currency,
         "direction": (

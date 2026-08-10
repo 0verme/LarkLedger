@@ -68,6 +68,10 @@ class EntryCandidate(BaseModel):
     category: str | None = None
     note: str | None = None
     occurred_at: datetime | str | None = None
+    # P30: who paid this item. AI echoes the user's reference (e.g. "老婆");
+    # the ledger resolves it deterministically to a household member. NULL =
+    # the acting user pays.
+    payer_reference: str | None = Field(default=None, min_length=1, max_length=32)
 
 
 class ParsedCommand(BaseModel):
@@ -110,6 +114,11 @@ class ParsedCommand(BaseModel):
     # optional single-account filter of list_accounts. Resolved server-side to an
     # Account id; the AI never returns or invents account_id.
     account_hint: str | None = Field(default=None, min_length=1, max_length=64)
+    # P30: who paid (AI echoes the user's reference, e.g. "老婆"; the ledger
+    # resolves it deterministically to a household member). Only create /
+    # update_last / update_entry accept it; batch items carry their own
+    # reference in each EntryCandidate. NULL = the acting user pays.
+    payer_reference: str | None = Field(default=None, min_length=1, max_length=32)
 
     @field_validator("currency")
     @classmethod
@@ -150,6 +159,12 @@ class ParsedCommand(BaseModel):
             Action.LIST_ACCOUNTS,
         }:
             raise ValueError(f"account_hint is not supported for {self.action}")
+        if self.payer_reference is not None and self.action not in {
+            Action.CREATE,
+            Action.UPDATE_LAST,
+            Action.UPDATE_ENTRY,
+        }:
+            raise ValueError(f"payer_reference is not supported for {self.action}")
         if self.action is Action.CREATE_ENTRIES:
             if not self.entries:
                 raise ValueError("create_entries requires at least one entry candidate")
@@ -342,6 +357,7 @@ class ParsedCommand(BaseModel):
                     self.note,
                     self.occurred_at,
                     self.account_hint,
+                    self.payer_reference,
                 )
             )
             and not self.clear_note

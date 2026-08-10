@@ -14,6 +14,7 @@ from lark_ledger.models import (
     AccountType,
     Direction,
     HouseholdInvitation,
+    HouseholdMember,
     Ledger,
     PendingCommand,
     PendingStatus,
@@ -50,6 +51,7 @@ from lark_ledger.web_schemas import (
     EntryDetail,
     EntryPage,
     EntrySort,
+    MemberStats,
     PendingDetail,
     PendingGroup,
     PendingPage,
@@ -238,6 +240,7 @@ class ClientApplicationService:
         expected_updated_at: datetime | None = None,
         commit_changes: bool = True,
         account_id: uuid.UUID | None = None,
+        paid_by_user_id: uuid.UUID | None = None,
         transfer_id: uuid.UUID | None = None,
         from_account_id: uuid.UUID | None = None,
         to_account_id: uuid.UUID | None = None,
@@ -277,6 +280,7 @@ class ClientApplicationService:
             exchange_rates=self._exchange_rates,
             commit_changes=commit_changes,
             account_id=account_id,
+            paid_by_user_id=paid_by_user_id,
         ).execute(
             context,
             command,
@@ -381,6 +385,7 @@ class ClientApplicationService:
         interval: int,
         next_occurrence: date,
         account_id: uuid.UUID,
+        paid_by_user_id: uuid.UUID | None = None,
     ) -> RecurringRule:
         from lark_ledger.models import RecurringFrequency
 
@@ -395,6 +400,7 @@ class ClientApplicationService:
             interval=interval,
             next_occurrence=next_occurrence,
             account_id=account_id,
+            paid_by_user_id=paid_by_user_id,
         )
 
     async def get_recurring_rule(
@@ -419,6 +425,7 @@ class ClientApplicationService:
         interval: int | None,
         next_occurrence: date | None,
         account_id: uuid.UUID | None,
+        paid_by_user_id: uuid.UUID | None = None,
     ) -> RecurringRule:
         from lark_ledger.models import RecurringFrequency
 
@@ -435,6 +442,7 @@ class ClientApplicationService:
             interval=interval,
             next_occurrence=next_occurrence,
             account_id=account_id,
+            paid_by_user_id=paid_by_user_id,
         )
 
     async def pause_recurring_rule(
@@ -503,6 +511,9 @@ class ClientApplicationService:
             status=rule.status,
             account_id=str(rule.account_id),
             account_name=account_name,
+            paid_by_user_id=(
+                str(rule.paid_by_user_id) if rule.paid_by_user_id is not None else None
+            ),
             pending_count=pending_count,
             created_at=rule.created_at,
             updated_at=rule.updated_at,
@@ -666,6 +677,38 @@ class ClientApplicationService:
     ) -> None:
         await self.authorize(context)
         await self._household_manager().remove_member(context.actor_user_id, household_id, user_id)
+
+    async def set_household_member_alias(
+        self,
+        context: RequestContext,
+        household_id: uuid.UUID,
+        user_id: uuid.UUID,
+        alias: str,
+    ) -> HouseholdMember:
+        await self.authorize(context)
+        return await self._household_manager().set_member_alias(
+            context.actor_user_id, household_id, user_id, alias
+        )
+
+    async def member_stats(
+        self, context: RequestContext, ledger_id: uuid.UUID
+    ) -> list[MemberStats]:
+        """Member contribution stats for ``ledger_id`` (P30), privacy-filtered.
+
+        The named ledger must be accessible to the actor; the aggregation runs
+        against that ledger even when it is not the actor's current one.
+        """
+        await self._authorization.get_accessible(context.actor_user_id, ledger_id)
+        from lark_ledger.services.member_stats import MemberStatsService
+
+        target = RequestContext(
+            actor_user_id=context.actor_user_id,
+            ledger_id=ledger_id,
+            source_channel=context.source_channel,
+            channel_identity_id=context.channel_identity_id,
+            external_subject_id=context.external_subject_id,
+        )
+        return await MemberStatsService(self._session).stats(target)
 
     def _ledger_manager(self) -> LedgerManagementService:
         return LedgerManagementService(

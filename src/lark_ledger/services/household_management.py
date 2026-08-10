@@ -25,6 +25,7 @@ from lark_ledger.models import (
 )
 from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.ledger_management import normalize_ledger_name
+from lark_ledger.services.member_resolution import normalize_alias
 
 
 class HouseholdManagementError(ValueError):
@@ -394,6 +395,51 @@ class HouseholdManagementService:
         member.status = HouseholdMemberStatus.REMOVED.value
         await self._reset_selections(user_id, view.ledger.id)
         await self._session.flush()
+
+    async def set_member_alias(
+        self, actor_user_id: uuid.UUID, household_id: uuid.UUID, user_id: uuid.UUID, alias: str
+    ) -> HouseholdMember:
+        """Set (or clear, when ``alias`` is empty) a member's payer alias (P30).
+
+        Owner-only. Aliases are unique per household and drive deterministic
+        payer resolution ("老婆买菜120" → payer_reference "老婆" → this member).
+        """
+        await self._require_owner(actor_user_id, household_id)
+        member = await self._session.scalar(
+            select(HouseholdMember).where(
+                HouseholdMember.household_id == household_id,
+                HouseholdMember.user_id == user_id,
+                HouseholdMember.status == HouseholdMemberStatus.ACTIVE.value,
+            )
+        )
+        if member is None:
+            raise HouseholdNotFoundError("家庭成员不存在")
+        if member.role == HouseholdRole.OWNER.value:
+            raise HouseholdPermissionError("家庭所有者已有明确名称，无需设置付款人称呼")
+        value = (alias or "").strip()
+        if not value:
+            member.alias = None
+            await self._session.flush()
+            await self._session.refresh(member)
+            return member
+        try:
+            display = normalize_alias(value)
+        except ValueError as exc:
+            raise HouseholdConflictError(str(exc)) from exc
+        conflict = await self._session.scalar(
+            select(HouseholdMember.id).where(
+                HouseholdMember.household_id == household_id,
+                HouseholdMember.user_id != user_id,
+                HouseholdMember.alias == display,
+                HouseholdMember.status == HouseholdMemberStatus.ACTIVE.value,
+            )
+        )
+        if conflict is not None:
+            raise HouseholdConflictError("已有其他成员使用该付款人称呼")
+        member.alias = display
+        await self._session.flush()
+        await self._session.refresh(member)
+        return member
 
     async def _require_owner(
         self, actor_user_id: uuid.UUID, household_id: uuid.UUID

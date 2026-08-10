@@ -100,16 +100,29 @@ class WebPendingQueryService:
     def _scope(scope: RequestContext | str) -> Any:
         if isinstance(scope, str):
             return PendingCommand.user_open_id == scope
+        # P30: recurring pendings in the ledger are household business — any
+        # member may see and confirm them, so they are included alongside the
+        # actor's own pendings. Personal ledgers have a single owner, so the
+        # recurring clause adds nothing there. P32 narrows this to accounts the
+        # actor can see.
+        recurring_in_ledger = and_(
+            PendingCommand.recurring_rule_id.is_not(None),
+            PendingCommand.ledger_id == scope.ledger_id,
+        )
         if scope.external_subject_id is None:
-            return and_(
-                PendingCommand.actor_user_id == scope.actor_user_id,
-                PendingCommand.ledger_id == scope.ledger_id,
+            return or_(
+                and_(
+                    PendingCommand.actor_user_id == scope.actor_user_id,
+                    PendingCommand.ledger_id == scope.ledger_id,
+                ),
+                recurring_in_ledger,
             )
         return or_(
             and_(
                 PendingCommand.actor_user_id == scope.actor_user_id,
                 PendingCommand.ledger_id == scope.ledger_id,
             ),
+            recurring_in_ledger,
             and_(
                 PendingCommand.actor_user_id.is_(None),
                 PendingCommand.ledger_id.is_(None),

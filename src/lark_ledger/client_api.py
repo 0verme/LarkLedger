@@ -1166,12 +1166,15 @@ async def create_entry(
                 principal.context,
                 ParsedCommand(
                     action=Action.CREATE,
-                    **payload.model_dump(exclude={"account_id"}),
+                    **payload.model_dump(exclude={"account_id", "paid_by_user_id"}),
                 ),
                 source_type="client_api",
                 source_message_id=source_id,
                 commit_changes=False,
                 account_id=uuid.UUID(payload.account_id) if payload.account_id else None,
+                paid_by_user_id=(
+                    uuid.UUID(payload.paid_by_user_id) if payload.paid_by_user_id else None
+                ),
             )
             entry = await session.scalar(
                 select(LedgerEntry).where(

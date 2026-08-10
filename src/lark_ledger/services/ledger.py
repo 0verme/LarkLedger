@@ -82,6 +82,7 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin, _AccountQueryMixin)
         short_id_factory: Callable[[], str] | None = None,
         commit_changes: bool = True,
         account_id: uuid.UUID | None = None,
+        paid_by_user_id: uuid.UUID | None = None,
     ) -> None:
         """Ledger operations on ``session``.
 
@@ -100,6 +101,11 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin, _AccountQueryMixin)
         self._short_id_factory = short_id_factory or generate_short_id
         self.commit_changes = commit_changes
         self.account_id = account_id
+        # P30: explicit payer passed by a transport adapter (web / client /
+        # recurring-confirm). ``None`` means resolve from the command's
+        # payer_reference, then the acting user. Read via getattr so the
+        # mixins stay duck-typed.
+        self.paid_by_user_id = paid_by_user_id
         self._active_context: RequestContext | None = None
 
     async def execute(

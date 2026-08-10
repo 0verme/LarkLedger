@@ -28,6 +28,11 @@ class WebEntry(BaseModel):
     # account row at read time and never leaks other ledgers' accounts.
     account_id: str
     account_name: str | None = None
+    # P30: who paid. payer_user_id is the internal user id (empty string when
+    # legacy data has no resolvable payer); payer_name is denormalized at read
+    # time and only ever shows a ledger member.
+    payer_user_id: str = ""
+    payer_name: str | None = None
 
 
 class EntryPage(BaseModel):
@@ -115,11 +120,37 @@ class HouseholdInviteRequest(BaseModel):
     target: str = Field(min_length=1, max_length=128)
 
 
+class MemberAliasRequest(BaseModel):
+    """PATCH body to set/clear a household member's payer alias (P30)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    alias: str = Field(default="", max_length=32)
+
+
 class WebHouseholdMember(BaseModel):
     user_id: str
     display_name: str
     role: str
     joined_at: datetime | None
+    # P30: owner-assigned payer alias ("老婆"); None when unset.
+    alias: str | None = None
+
+
+class MemberStats(BaseModel):
+    """One member's contribution, aggregated by who actually paid (P30).
+
+    Transfers never appear: they live in a separate table and can never be
+    counted as income, expense, or budget usage.
+    """
+
+    user_id: str
+    display_name: str
+    alias: str | None = None
+    role: str
+    expense_total: Decimal
+    income_total: Decimal
+    transaction_count: int
 
 
 class WebHousehold(BaseModel):
@@ -167,6 +198,8 @@ class EntryUpdateRequest(BaseModel):
     note: str | None = Field(default=None, max_length=500)
     occurred_at: datetime | None = None
     account_id: uuid.UUID | None = None
+    # P30: reassign the payer (exact ledger member id).
+    paid_by_user_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def has_change(self) -> EntryUpdateRequest:
@@ -179,6 +212,7 @@ class EntryUpdateRequest(BaseModel):
                 self.note,
                 self.occurred_at,
                 self.account_id,
+                self.paid_by_user_id,
             )
         ):
             raise ValueError("at least one field must be updated")
@@ -197,6 +231,8 @@ class EntryCreateRequest(BaseModel):
     occurred_at: datetime
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     account_id: uuid.UUID | None = None
+    # P30: who paid (exact ledger member id); NULL = the acting user pays.
+    paid_by_user_id: uuid.UUID | None = None
 
 
 class EntryVersionRequest(BaseModel):
@@ -404,6 +440,8 @@ class RecurringRuleCreateRequest(BaseModel):
     interval: int = Field(default=1, ge=1, le=100)
     next_occurrence: date
     account_id: uuid.UUID
+    # P30: who pays each occurrence; NULL = the creating user pays.
+    paid_by_user_id: uuid.UUID | None = None
 
 
 class RecurringRuleUpdateRequest(BaseModel):
@@ -424,6 +462,8 @@ class RecurringRuleUpdateRequest(BaseModel):
     interval: int | None = Field(default=None, ge=1, le=100)
     next_occurrence: date | None = None
     account_id: uuid.UUID | None = None
+    # P30: reassign who pays future occurrences.
+    paid_by_user_id: uuid.UUID | None = None
 
     @model_validator(mode="after")
     def has_change(self) -> RecurringRuleUpdateRequest:
@@ -439,6 +479,7 @@ class RecurringRuleUpdateRequest(BaseModel):
                 self.interval,
                 self.next_occurrence,
                 self.account_id,
+                self.paid_by_user_id,
             )
         ):
             raise ValueError("at least one field must be updated")
@@ -461,6 +502,8 @@ class WebRecurringRule(BaseModel):
     status: str
     account_id: str
     account_name: str | None = None
+    # P30: who pays each occurrence (internal user id).
+    paid_by_user_id: str | None = None
     # Confirmations awaiting the user for this rule's generated occurrences.
     pending_count: int = 0
     created_at: datetime

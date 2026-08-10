@@ -35,10 +35,12 @@ from lark_ledger.models import (
     Direction,
     Household,
     HouseholdInvitation,
+    HouseholdMember,
     Ledger,
     LedgerEntry,
     Transfer,
     TransferRevision,
+    User,
 )
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
@@ -65,6 +67,7 @@ from lark_ledger.services.household_management import (
     HouseholdView,
 )
 from lark_ledger.services.ledger import EntryConflictError
+from lark_ledger.services.ledger_authorization import LedgerAuthorizationError
 from lark_ledger.services.ledger_management import (
     LedgerManagementError,
     LedgerManagementService,
@@ -119,6 +122,8 @@ from lark_ledger.web_schemas import (
     HouseholdList,
     LedgerList,
     LedgerNameRequest,
+    MemberAliasRequest,
+    MemberStats,
     PendingActionResponse,
     PendingDetail,
     PendingGroup,
@@ -846,6 +851,7 @@ async def _web_household(
                 display_name=item.user.display_name,
                 role=item.membership.role,
                 joined_at=item.membership.joined_at,
+                alias=item.membership.alias,
             )
             for item in rows
         ]
@@ -969,9 +975,60 @@ async def household_members(
                 display_name=item.user.display_name,
                 role=item.membership.role,
                 joined_at=item.membership.joined_at,
+                alias=item.membership.alias,
             )
             for item in rows
         ]
+
+
+@router.patch("/households/{household_id}/members/{user_id}", response_model=WebHouseholdMember)
+async def update_household_member_alias(
+    household_id: uuid.UUID,
+    user_id: uuid.UUID,
+    body: MemberAliasRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> WebHouseholdMember:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        manager = HouseholdManagementService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            membership = await manager.set_member_alias(
+                principal.user_id, household_id, user_id, body.alias
+            )
+            await session.commit()
+        except HouseholdManagementError as exc:
+            await session.rollback()
+            raise _household_http_error(exc) from exc
+        row = await session.get(HouseholdMember, membership.id)
+        member_user = await session.get(User, user_id)
+    return WebHouseholdMember(
+        user_id=str(user_id),
+        display_name=member_user.display_name if member_user else "",
+        role=row.role if row else "",
+        joined_at=row.joined_at if row else None,
+        alias=row.alias if row else None,
+    )
+
+
+@router.get("/ledgers/{ledger_id}/members/stats", response_model=list[MemberStats])
+async def member_stats(
+    ledger_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> list[MemberStats]:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            return await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).member_stats(principal.request_context, ledger_id)
+        except LedgerAuthorizationError as exc:
+            raise HTTPException(status_code=404, detail="账本不存在或当前用户无权访问") from exc
 
 
 async def _web_invitation(
@@ -1235,6 +1292,7 @@ async def create_web_entry(
                 source_type="web",
                 source_message_id=source_id,
                 account_id=body.account_id,
+                paid_by_user_id=body.paid_by_user_id,
             )
         except AccountError as exc:
             await session.rollback()
@@ -1286,6 +1344,7 @@ async def _mutate_entry(
     command: ParsedCommand,
     expected_updated_at: datetime,
     account_id: uuid.UUID | None = None,
+    paid_by_user_id: uuid.UUID | None = None,
 ) -> EntryDetail:
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     settings = cast(Settings, request.app.state.settings)
@@ -1308,6 +1367,7 @@ async def _mutate_entry(
                 source_type="web",
                 expected_updated_at=expected_updated_at,
                 account_id=account_id,
+                paid_by_user_id=paid_by_user_id,
             )
         except EntryConflictError as exc:
             await session.rollback()
@@ -1333,6 +1393,7 @@ async def update_entry(
         short_id=short_id,
         expected_updated_at=payload.expected_updated_at,
         account_id=payload.account_id,
+        paid_by_user_id=payload.paid_by_user_id,
         command=ParsedCommand(
             action=Action.UPDATE_ENTRY,
             entry_ref=short_id,
@@ -1894,6 +1955,7 @@ async def create_recurring_rule(
                 interval=body.interval,
                 next_occurrence=body.next_occurrence,
                 account_id=body.account_id,
+                paid_by_user_id=body.paid_by_user_id,
             )
             await session.commit()
         except RecurringRuleError as exc:
@@ -1936,6 +1998,7 @@ async def update_recurring_rule(
                 interval=body.interval,
                 next_occurrence=body.next_occurrence,
                 account_id=body.account_id,
+                paid_by_user_id=body.paid_by_user_id,
             )
             await session.commit()
         except RecurringRuleError as exc:

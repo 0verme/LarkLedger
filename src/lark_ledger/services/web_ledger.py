@@ -20,8 +20,10 @@ from lark_ledger.models import (
     LedgerEntryRevision,
     PendingCommand,
     PendingStatus,
+    User,
 )
 from lark_ledger.services.budget import BudgetService
+from lark_ledger.services.member_resolution import MemberResolutionService
 from lark_ledger.short_id import normalize_entry_ref
 from lark_ledger.web_schemas import (
     CategoryValue,
@@ -121,8 +123,18 @@ class WebLedgerQueryService:
             .all()
         )
         names = await self._account_names({row.account_id for row in rows})
+        payer_names = await self._payer_names(
+            user_open_id, {row.paid_by_user_id for row in rows}
+        )
         return EntryPage(
-            items=[self._entry(row, names.get(row.account_id)) for row in rows],
+            items=[
+                self._entry(
+                    row,
+                    names.get(row.account_id),
+                    payer_names.get(row.paid_by_user_id),
+                )
+                for row in rows
+            ],
             page=page,
             page_size=page_size,
             total=total,
@@ -156,8 +168,15 @@ class WebLedgerQueryService:
             .all()
         )
         names = await self._account_names({entry.account_id})
+        payer_names = await self._payer_names(
+            user_open_id, {entry.paid_by_user_id}
+        )
         return EntryDetail(
-            entry=self._entry(entry, names.get(entry.account_id)),
+            entry=self._entry(
+                entry,
+                names.get(entry.account_id),
+                payer_names.get(entry.paid_by_user_id),
+            ),
             revisions=[
                 WebRevision(
                     id=str(row.id),
@@ -223,6 +242,9 @@ class WebLedgerQueryService:
             .all()
         )
         recent_names = await self._account_names({row.account_id for row in recent})
+        recent_payer_names = await self._payer_names(
+            user_open_id, {row.paid_by_user_id for row in recent}
+        )
         pending_count = int(
             await self._session.scalar(
                 select(func.count()).select_from(PendingCommand).where(
@@ -314,7 +336,12 @@ class WebLedgerQueryService:
             budget_usage_rate=budget_overview.usage_rate,
             pending_count=pending_count,
             recent_entries=[
-                self._entry(row, recent_names.get(row.account_id)) for row in recent
+                self._entry(
+                    row,
+                    recent_names.get(row.account_id),
+                    recent_payer_names.get(row.paid_by_user_id),
+                )
+                for row in recent
             ],
             trend=trend,
             categories=categories,
@@ -355,17 +382,26 @@ class WebLedgerQueryService:
     def _pending_scope(cls, scope: RequestContext | str) -> Any:
         if isinstance(scope, str):
             return PendingCommand.user_open_id == scope
+        # P30: recurring pendings in the ledger are household business.
+        recurring_in_ledger = and_(
+            PendingCommand.recurring_rule_id.is_not(None),
+            PendingCommand.ledger_id == scope.ledger_id,
+        )
         legacy = cls._legacy_subject(scope)
         if legacy is None:
-            return and_(
-                PendingCommand.actor_user_id == scope.actor_user_id,
-                PendingCommand.ledger_id == scope.ledger_id,
+            return or_(
+                and_(
+                    PendingCommand.actor_user_id == scope.actor_user_id,
+                    PendingCommand.ledger_id == scope.ledger_id,
+                ),
+                recurring_in_ledger,
             )
         return or_(
             and_(
                 PendingCommand.actor_user_id == scope.actor_user_id,
                 PendingCommand.ledger_id == scope.ledger_id,
             ),
+            recurring_in_ledger,
             and_(
                 PendingCommand.actor_user_id.is_(None),
                 PendingCommand.ledger_id.is_(None),
@@ -374,7 +410,11 @@ class WebLedgerQueryService:
         )
 
     @staticmethod
-    def _entry(row: LedgerEntry, account_name: str | None) -> WebEntry:
+    def _entry(
+        row: LedgerEntry,
+        account_name: str | None,
+        payer_name: str | None = None,
+    ) -> WebEntry:
         return WebEntry(
             id=str(row.id),
             short_id=row.short_id,
@@ -390,7 +430,29 @@ class WebLedgerQueryService:
             deleted_at=row.deleted_at,
             account_id=str(row.account_id) if row.account_id is not None else "",
             account_name=account_name,
+            payer_user_id=(
+                str(row.paid_by_user_id) if row.paid_by_user_id is not None else ""
+            ),
+            payer_name=payer_name,
         )
+
+    async def _payer_names(
+        self,
+        scope: RequestContext | str,
+        payer_ids: set[Any],
+    ) -> dict[Any, str | None]:
+        """Resolve payer display names (alias > display_name) in one pass."""
+        ids = {payer_id for payer_id in payer_ids if payer_id is not None}
+        if not ids:
+            return {}
+        if not isinstance(scope, RequestContext):
+            rows = (
+                await self._session.execute(
+                    select(User.id, User.display_name).where(User.id.in_(ids))
+                )
+            ).all()
+            return {user_id: (name or None) for user_id, name in rows}
+        return await MemberResolutionService(self._session).member_display_names(scope, ids)
 
     async def _account_names(self, account_ids: set[Any]) -> dict[Any, str]:
         """Resolve account display names scoped to the requested ids only."""
