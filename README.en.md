@@ -10,8 +10,10 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works in v0.5.0
+## What works in v0.6.0
 
+- **Recurring rules**: turn known future income / expense into deterministic rules (`每月8号房租3500` / `每年6月15日保险2000` / `每周健身房100`). When a rule comes due the Recurring Worker generates a frozen confirmation pending and proactively sends a Feishu reminder card; **a rule only posts after confirmation**. Rules and pendings never consume budget — only confirmed expenses do. Pause / resume / skip / disable are supported, edits affect only future periods, and the same rule + period can never produce two pendings or two transactions under concurrency / retry
+- **Budget 2.0**: monthly total and per-category budgets keyed by explicit month, with plan-vs-actual, remaining, usage rate and over-limit status derived live; transfers never count, and delete / restore / revision all recompute from current facts
 - **Ledger-scoped accounts and transfers**: entries bind to a ledger account (cash / asset / liability) with opening balances, rename / default / archive lifecycle; transfers stay outside income / expense stats; per-account balance and total assets / liabilities / net worth are available from both Feishu and Web
 - **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies; simple single text entries still write straight through
 - **Recent list / single-entry detail** (`最近10笔`, `查看 #XXXXX`)
@@ -21,14 +23,14 @@ Detailed user, deployment, and architecture docs are **Chinese-first**. This REA
 - **High-risk confirmation**: image / voice / batch / likely-duplicate writes first create a pending confirmation (`#C-XXXXX`) — confirm or cancel by text or card button; confirmation always uses the frozen parse result, never re-calls AI
 - User isolation by Feishu `open_id` and claim-first `event_id` idempotency
 - **Reliable delivery**: background Event / Reply Workers, transactional reply outbox, PostgreSQL lease and exponential-backoff retry, readiness probes, terminal retention cleanup, and guarded manual event replay
-- **Web Dashboard**: Feishu OAuth, financial overview, ledger and revisions, pending confirmations, analytics, budgets, reports, CSV downloads, and an administrator reliability console
+- **Web Dashboard**: Feishu OAuth, financial overview, ledger and revisions, pending confirmations, analytics, budgets, recurring rules, reports, CSV downloads, and an administrator reliability console
 - Self-hosted stack: FastAPI, React / TypeScript / Vite, PostgreSQL, Docker Compose
 
 Simple single text remains a direct write: `午饭32元` immediately creates the ledger entry. Image, voice, batch, and likely-duplicate writes follow `media → preview card → user confirmation → ledger`. Text fallbacks are `确认 #C-A83F2`, `取消 #C-A83F2`, and `查看待确认` (or `确认列表`).
 
 ## Web Dashboard
 
-v0.5.0 keeps the optional Chinese-first Dashboard and adds account and transfer management pages for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
+v0.6.0 keeps the optional Chinese-first Dashboard and adds account, transfer, and recurring-rule management pages for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
 
 The production image embeds the Vite build and serves it from FastAPI; Node.js is not needed at runtime. Enable it only behind HTTPS:
 
@@ -158,12 +160,12 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - The Dashboard has only `USER` and `ADMIN`; there is no enterprise multi-tenancy, organization tree, complex RBAC, or shared ledger
 - **JSON export is not a formal capability** (CSV only)
 
-Future roadmap themes are outside this release commitment; v0.5.0 does not expand into a multi-tenant finance ERP.
+Future roadmap themes are outside this release commitment; v0.6.0 does not expand into a multi-tenant finance ERP.
 
-Current release: **v0.5.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.5.0` (also `0.5` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.6.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.6.0` (also `0.6` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.5.0
+export LARK_LEDGER_IMAGE_TAG=0.6.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d

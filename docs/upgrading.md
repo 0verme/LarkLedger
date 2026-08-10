@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.5.0** |
-| 包版本 / `__version__` | `0.5.0` |
-| Git tag | `v0.5.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.5.0`（亦有 `0.5` / `latest` 由发布流水线写入） |
-| Alembic head | `20260809_0021` |
+| 最新正式版本 | **v0.6.0** |
+| 包版本 / `__version__` | `0.6.0` |
+| Git tag | `v0.6.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.6.0`（亦有 `0.6` / `latest` 由发布流水线写入） |
+| Alembic head | `20260810_0023` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -21,15 +21,22 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
 
-## 从 v0.5.0 升级到 v0.6.0（Unreleased · P28 Budget 2.0）
+## 从 v0.5.0 升级到 v0.6.0（Budget 2.0 与 Recurring Rules）
+
+v0.6.0 依次带来 **P28 预算 2.0**（`20260809_0022`）与 **P29 周期账单**（`20260810_0023`）。
 
 `20260809_0022` 新增账本范围、按月为周期的 `budgets` 表：`category IS NULL` 表示该月账本总预算，非空分类表示该月分类预算。唯一约束保证同一账本同一月份至多一个总预算、同一分类至多一个预算；`period` 是显式业务字段（每月 1 日的日期），绝不从时间戳推导。
 
 - 既有 `category_budgets`（长期月度品类预算）表与数据**原样保留**，作为「月度默认预算」继续生效；某月存在周期预算时，周期预算在当月覆盖默认预算。迁移不修改或删除 User、Ledger、Account、Transaction、Transfer、Pending 或任何旧预算数据，也无需要回填，因此无损且可降级。
 - 预算只统计 `expense`；`income`、`transfer` 永不进入预算使用量；删除 / 恢复 / 修改金额 / 修改分类均按当前有效账目事实重算。
 - Web 与 Client API：`GET /budgets?period=YYYY-MM`、`PUT` / `DELETE /budgets/{category}?period=`、新增 `PUT` / `DELETE /budgets/total?period=`（缺省为当前月）。飞书新增 `设置本月预算 12000`（`set_total_budget`），`查看预算` 会显示当月总预算行。
-- 升级后核对：`alembic current` 为 `20260809_0022`；每个 Ledger 同一月份至多一个总预算、同一分类至多一个预算；无 orphan Budget 行。
-- 降级到 `20260809_0021` 会删除 `budgets` 表（仅含周期预算），既有 `category_budgets`、账目与转账全部保留。
+
+`20260810_0023` 新增 `recurring_rules` 与 `recurring_occurrences` 表，并给 `pending_commands` 增加可空的 `recurring_rule_id` / `occurrence_date`：
+
+- 周期规则**不自动正式入账**：到期由后台 Recurring Worker 生成一个确认 Pending 并主动提醒，确认后才写入 `ledger_entries`；`(rule_id, occurrence_date)` 唯一约束保证同一期至多一个 Pending。
+- 规则、Occurrence 与 Pending 全部按账本隔离；确认时重新校验账户，冻结账户在切换默认账户 / 账本后仍生效。
+- 升级只新增表和可空列，不动既有账目 / 转账 / 预算 / Pending，无损且可降级（降级删除 `recurring_rules` / `recurring_occurrences` 与两个可空列，既有 Pending 变回普通 Pending）。
+- 升级后核对：`alembic current` 为 `20260810_0023`；无 orphan `recurring_occurrences`；同一 `(rule_id, occurrence_date)` 唯一。
 
 ## 从 v0.4.0 升级到 v0.5.0
 

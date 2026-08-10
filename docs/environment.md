@@ -379,8 +379,8 @@ curl http://127.0.0.1:8000/healthz
 `compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}`。当前正式版本为 **0.4.0**：
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.5.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.5.0"
+export LARK_LEDGER_IMAGE_TAG=0.6.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.6.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -515,6 +515,7 @@ v0.2.1：可靠投递（事件 Worker / 租约 / 重试 / dead 已完成；Trans
 v0.3.0：高风险确认
 v0.4.0：Web Dashboard（账目、确认、分析与可靠性运维）
 v0.5.0：账本级账户与转账（P26/P27）
+v0.6.0：预算 2.0 与周期账单（P28/P29）
 ```
 
 ---
