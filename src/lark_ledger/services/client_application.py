@@ -15,6 +15,7 @@ from lark_ledger.models import (
     AccountType,
     AccountVisibility,
     Direction,
+    FinancialGoal,
     HouseholdInvitation,
     HouseholdMember,
     Ledger,
@@ -28,12 +29,14 @@ from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.budget import BudgetService
 from lark_ledger.services.exchange import ExchangeRateService
+from lark_ledger.services.goals import GoalProgressService, GoalService
 from lark_ledger.services.household_management import (
     HouseholdManagementError,
     HouseholdManagementService,
     HouseholdMemberView,
     HouseholdView,
 )
+from lark_ledger.services.insights import InsightService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import LedgerManagementService
@@ -53,7 +56,10 @@ from lark_ledger.web_schemas import (
     EntryDetail,
     EntryPage,
     EntrySort,
+    GoalAccountBindingItem,
+    GoalProgress,
     HouseholdOverview,
+    Insight,
     MemberStats,
     PendingDetail,
     PendingGroup,
@@ -244,6 +250,111 @@ class ClientApplicationService:
 
     async def asset_summary(self, context: RequestContext) -> AssetSummary:
         return await TransferService(self._session).asset_summary(context)
+
+    # -- P33 financial goals & insights -------------------------------------
+
+    async def goal_list_with_progress(
+        self,
+        context: RequestContext,
+        *,
+        now: datetime | None = None,
+    ) -> list[tuple[FinancialGoal, GoalProgress]]:
+        """Visible goals with deterministic progress attached (P33).
+
+        Progress is recomputed from live balances on every read — the goal
+        never stores ``current_amount``, so ledger changes naturally move it.
+        """
+        service = GoalService(self._session, timezone=self._timezone, currency=self._currency)
+        goals = await service.list_goals(context)
+        progress_service = GoalProgressService(
+            self._session, timezone=self._timezone, currency=self._currency
+        )
+        return [(goal, await progress_service.progress(context, goal, now=now)) for goal in goals]
+
+    async def create_goal(
+        self,
+        context: RequestContext,
+        *,
+        name: str,
+        target_amount: Decimal,
+        currency: str | None = None,
+        description: str = "",
+        target_date: date | None = None,
+        account_ids: list[uuid.UUID] | None = None,
+    ) -> FinancialGoal:
+        return await GoalService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).create(
+            context,
+            name=name,
+            target_amount=target_amount,
+            currency=currency,
+            description=description,
+            target_date=target_date,
+            account_ids=account_ids,
+        )
+
+    async def update_goal(
+        self,
+        context: RequestContext,
+        goal_id: uuid.UUID,
+        **changes: Any,
+    ) -> FinancialGoal:
+        return await GoalService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).update(context, goal_id, **changes)
+
+    async def complete_goal(
+        self, context: RequestContext, goal_id: uuid.UUID
+    ) -> FinancialGoal:
+        return await GoalService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).complete(context, goal_id)
+
+    async def archive_goal(
+        self, context: RequestContext, goal_id: uuid.UUID
+    ) -> FinancialGoal:
+        return await GoalService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).archive(context, goal_id)
+
+    async def delete_goal(self, context: RequestContext, goal_id: uuid.UUID) -> None:
+        await GoalService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).delete(context, goal_id)
+
+    async def goal_binding_items(
+        self, context: RequestContext, goal_id: uuid.UUID
+    ) -> list[GoalAccountBindingItem]:
+        return await GoalService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).binding_items(context, goal_id)
+
+    async def goal_progress(
+        self,
+        context: RequestContext,
+        goal_id: uuid.UUID,
+        *,
+        now: datetime | None = None,
+    ) -> GoalProgress:
+        goal = await GoalService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).get(context, goal_id)
+        return await GoalProgressService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).progress(context, goal, now=now)
+
+    async def insights(
+        self,
+        context: RequestContext,
+        *,
+        period: date | None = None,
+        limit: int | None = None,
+        now: datetime | None = None,
+    ) -> list[Insight]:
+        return await InsightService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).insights(context, period=period, limit=limit, now=now)
 
     async def execute_financial(
         self,

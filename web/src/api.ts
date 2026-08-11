@@ -322,6 +322,70 @@ export type RecurringRuleCreateInput = {
 };
 export type RecurringRuleUpdateInput = Partial<Omit<RecurringRuleCreateInput, "transaction_type" | "interval">> & { transaction_type?: "expense" | "income"; interval?: number };
 
+export type GoalAccountBindingItem = { account_id: string; account_name: string | null; currency: string };
+export type Goal = {
+  id: string;
+  ledger_id: string;
+  name: string;
+  description: string;
+  goal_type: "savings";
+  target_amount: string;
+  currency: string;
+  target_date: string | null;
+  status: "active" | "completed" | "archived";
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+  account_bindings: GoalAccountBindingItem[];
+  current_amount: string;
+  remaining_amount: string | null;
+  progress_percent: string | null;
+  is_target_reached: boolean;
+};
+export type GoalList = { items: Goal[] };
+export type GoalCreateInput = {
+  name: string;
+  description?: string;
+  target_amount: string;
+  currency?: string | null;
+  target_date?: string | null;
+  account_ids: string[];
+};
+export type GoalUpdateInput = Partial<GoalCreateInput> & { status?: "active" | "completed" | "archived" };
+export type GoalProgress = {
+  goal_id: string;
+  name: string;
+  target_amount: string;
+  current_amount: string;
+  remaining_amount: string;
+  progress_ratio: string;
+  progress_percent: string;
+  currency: string;
+  target_date: string | null;
+  days_remaining: number | null;
+  is_target_reached: boolean;
+  monthly_saving_rate: string | null;
+  estimated_months_to_goal: string | null;
+  projected_shortfall_at_target_date: string | null;
+};
+export type InsightSeverity = "info" | "attention" | "warning";
+export type Insight = {
+  key: string;
+  type: string;
+  severity: InsightSeverity;
+  title: string;
+  summary: string;
+  metric: Record<string, string>;
+  period: string;
+  related_category: string | null;
+  related_goal: string | null;
+  related_goal_name: string | null;
+  related_account: string | null;
+  generated_at: string;
+  explanation: string | null;
+};
+export type InsightList = { insights: Insight[] };
+
 export const money = (value: string | number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
 

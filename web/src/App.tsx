@@ -21,6 +21,7 @@ import {
   RotateCcw,
   Settings,
   ShieldCheck,
+  Target,
   Users,
   X,
 } from "lucide-react";
@@ -32,6 +33,7 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { TransfersPage } from "./pages/TransfersPage";
 import { EntriesPage } from "./pages/EntriesPage";
 import { AnalyticsPage, BudgetsPage, ExportsPage, ReportsPage } from "./pages/FinancePages";
+import { GoalsPage } from "./pages/GoalsPage";
 import { PendingPage } from "./pages/PendingPage";
 import { HouseholdsPage } from "./pages/HouseholdsPage";
 import { OverviewPage } from "./pages/OverviewPage";
@@ -51,6 +53,7 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
       { label: "待确认", path: "/pending", icon: Clock3 },
       { label: "家庭", path: "/households", icon: Users },
       { label: "预算", path: "/budgets", icon: PiggyBank },
+      { label: "目标", path: "/goals", icon: Target },
       { label: "周期账单", path: "/recurring", icon: CalendarClock },
       { label: "分析", path: "/analytics", icon: CircleDollarSign },
       { label: "报表", path: "/reports", icon: FileText },
@@ -117,6 +120,7 @@ function pageElement(item: NavItem) {
   if (item.path === "/pending") return <PendingPage />;
   if (item.path === "/households") return <HouseholdsPage />;
   if (item.path === "/budgets") return <BudgetsPage />;
+  if (item.path === "/goals") return <GoalsPage />;
   if (item.path === "/recurring") return <RecurringRulesPage />;
   if (item.path === "/analytics") return <AnalyticsPage />;
   if (item.path === "/reports") return <ReportsPage />;

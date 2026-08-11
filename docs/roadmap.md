@@ -18,10 +18,11 @@
 9. **P30 Household Contribution（已完成）**：账目区分「谁记账」与「谁付钱」（`created_by_user_id` / `paid_by_user_id`，后向兼容 `user_open_id`）；付款人按别名 > 显示名 > open_id > UUID 确定性解析；周期规则冻结付款人、家庭成员可跨确认；成员支出按付款人聚合且排除转账；Web 提供成员别名管理与成员统计。
 10. **P31 Household Overview（已完成）**：一个确定性的「家庭首页」视图（`HouseholdOverviewService.overview`）：本月收支 / 预算进度 / 成员支出 / 主要分类 / 未来周期支出 / 最近交易 / 账户余额，全部由后端一次性确定性计算，前端不拼接多端点；`GET /api/web/v1/overview` 与飞书 `概览 / 家庭概览 / 家庭开销` 同源；为 P32 预留 `privacy_filter` 钩子。
 11. **P32 Account Privacy（已完成）**：账户级 `visibility`（`shared` / `private`）+ `owner_user_id`；`PrivacyService` 在账户、账目、预算、转账、周期、待确认、总览与成员统计全线落实统一可见性谓词（个人账本为零操作）；Web 账户页显示「共享 / 私人」徽标并可切换；迁移 0025 带 CHECK 约束，降级拒绝存在 private 账户。
+12. **P33 Goals & Insights（已完成）**：`financial_goals` + `goal_account_bindings`（迁移 0026）表达储蓄目标；进度由 `GoalProgressService` 在查询时从绑定账户实时余额确定性派生，目标不保存 `current_amount`、不维护第二套余额，记账 / 删账 / 恢复 / 转账自动重算；目标可见性继承绑定账户（引用 private 账户的目标对他人不可见）；确定性 `InsightService` 只输出四类洞察（支出变化 / 预算风险 / 未来周期支出 / 目标进度），全部规则集中在 `InsightPolicy` 阈值，数据不足返回 `[]` 不制造噪音；AI 仅可选改写结构化洞察文案并自动回退确定性摘要；Web `/goals` 与 `/insights`、飞书 `我的目标 / 目标 / 查看目标` 与 `洞察 / 财务洞察 / 本月洞察` 同源，私人数据不通过任何洞察侧信道泄漏。
 
 ## 分叉路线
 
-- **个人与家庭主线**：预算、周期账单、账户与资产、家庭目标；账户级隐私已完成（更细粒度如字段级 ACL 不在承诺内）。
+- **个人与家庭主线**：预算、周期账单、账户与资产、家庭目标、**财务目标与确定性洞察（已完成）**；账户级隐私已完成（更细粒度如字段级 ACL 不在承诺内）。
 - **一人公司领域**：独立的科目、期间、凭证和复式分录模型；只复用身份、权限、
   Worker、Outbox、幂等和审计基础设施，不把会计字段加入个人收支表。
 - **客户端支线**：统一 API 后依次验证 ESP32、Telegram 等入口，微信放在多客户端

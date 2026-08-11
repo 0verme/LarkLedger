@@ -572,6 +572,122 @@ class RecurringRuleList(BaseModel):
     items: list[WebRecurringRule]
 
 
+# ---------------------------------------------------------------------------
+# P33 — Financial goals & deterministic insights
+# ---------------------------------------------------------------------------
+
+
+class GoalAccountBindingItem(BaseModel):
+    """One real account bound to a savings goal (P33)."""
+
+    account_id: str
+    account_name: str | None = None
+    currency: str
+
+
+class FinancialGoal(BaseModel):
+    """A savings goal defined on top of real ledger facts (P33).
+
+    ``current_amount`` / ``progress_percent`` are computed deterministically at
+    read time from the live balances of the bound accounts — never stored, and
+    never maintained by hand.
+    """
+
+    id: str
+    ledger_id: str
+    name: str
+    description: str
+    goal_type: str
+    target_amount: Decimal
+    currency: str
+    target_date: date | None = None
+    status: str
+    created_by_user_id: str
+    created_at: datetime
+    updated_at: datetime
+    account_bindings: list[GoalAccountBindingItem] = []
+    # Derived progress (computed at read time; not a stored fact).
+    current_amount: Decimal = Decimal("0")
+    remaining_amount: Decimal | None = None
+    progress_percent: Decimal | None = None
+    is_target_reached: bool = False
+
+
+class GoalList(BaseModel):
+    items: list[FinancialGoal]
+
+
+class GoalProgress(BaseModel):
+    """Deterministic progress snapshot for one goal (P33)."""
+
+    goal_id: str
+    name: str
+    target_amount: Decimal
+    current_amount: Decimal
+    remaining_amount: Decimal
+    progress_ratio: Decimal
+    progress_percent: Decimal
+    currency: str
+    target_date: date | None = None
+    days_remaining: int | None = None
+    is_target_reached: bool
+    # Deterministic forecast from the trailing net-saving rate; ``None`` when
+    # there is not enough history or the rate is not positive.
+    monthly_saving_rate: Decimal | None = None
+    estimated_months_to_goal: Decimal | None = None
+    projected_shortfall_at_target_date: Decimal | None = None
+
+
+class GoalCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=200)
+    target_amount: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
+    currency: str | None = Field(default=None, max_length=3)
+    target_date: date | None = None
+    account_ids: list[uuid.UUID] = Field(default_factory=list, max_length=20)
+
+
+class GoalUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    description: str | None = Field(default=None, max_length=200)
+    target_amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
+    currency: str | None = Field(default=None, max_length=3)
+    target_date: date | None = None
+    account_ids: list[uuid.UUID] | None = Field(default=None, max_length=20)
+    status: str | None = None
+
+
+class Insight(BaseModel):
+    """One deterministic, structured insight (P33-B).
+
+    The ``metric`` dict holds the exact numbers the rule computed (strings so
+    decimals serialize losslessly); the optional AI explanation layer consumes
+    only this structure and can never re-derive facts or touch the database.
+    """
+
+    key: str
+    type: str
+    severity: str
+    title: str
+    summary: str
+    metric: dict[str, str]
+    period: str
+    related_category: str | None = None
+    related_goal: str | None = None
+    related_goal_name: str | None = None
+    related_account: str | None = None
+    generated_at: datetime
+    explanation: str | None = None
+
+
+class InsightList(BaseModel):
+    insights: list[Insight]
+
+
 class ExportRequestBody(BaseModel):
     preset: Literal["last_90_days", "this_month", "all", "custom"]
     start_date: date | None = None

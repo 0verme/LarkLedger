@@ -22,10 +22,18 @@ from lark_ledger.entry_commands import (
     try_parse_deterministic_entry_command,
     try_parse_pending_directive,
 )
+from lark_ledger.goal_commands import (
+    GoalCommand,
+    try_parse_goal_command,
+)
 from lark_ledger.household_commands import (
     HouseholdCommand,
     HouseholdCommandAction,
     try_parse_household_command,
+)
+from lark_ledger.insight_commands import (
+    InsightCommand,
+    try_parse_insight_command,
 )
 from lark_ledger.ledger_commands import (
     LedgerCommand,
@@ -34,6 +42,7 @@ from lark_ledger.ledger_commands import (
 )
 from lark_ledger.models import (
     Direction,
+    FinancialGoal,
     Household,
     Ledger,
     ProcessedEvent,
@@ -91,7 +100,7 @@ from lark_ledger.services.risk import MediaKind, RiskAssessment, RiskDecision, R
 from lark_ledger.services.transfers import AccountHintAmbiguousError
 from lark_ledger.services.worker import generate_owner_id
 from lark_ledger.transfer_commands import try_parse_transfer_command
-from lark_ledger.web_schemas import HouseholdOverview
+from lark_ledger.web_schemas import GoalProgress, HouseholdOverview, Insight
 
 MAX_POST_IMAGES = 5
 
@@ -336,6 +345,35 @@ class MessageProcessor:
                 account_command = try_parse_account_command(text) if command is None else None
                 if account_command is not None:
                     command = account_command
+                # Financial goals (P33): deterministic 我的目标 / 目标 / 查看目标.
+                if command is None:
+                    goal_command = try_parse_goal_command(text)
+                    if goal_command is not None:
+                        stage = "goal_list"
+                        outbox_rows = await self._handle_goal_command(
+                            goal_command,
+                            message_id=message_id,
+                            user_open_id=user_open_id,
+                            event_id=event_id,
+                        )
+                        stage = "reply"
+                        await self._signal_or_deliver(outbox_rows)
+                        return
+                # Deterministic insights (P33): 洞察 / 财务洞察 / 本月洞察.
+                if command is None:
+                    insight_command = try_parse_insight_command(text)
+                    if insight_command is not None:
+                        stage = "insight_list"
+                        outbox_rows = await self._handle_insight_command(
+                            insight_command,
+                            message_id=message_id,
+                            user_open_id=user_open_id,
+                            event_id=event_id,
+                            now=now,
+                        )
+                        stage = "reply"
+                        await self._signal_or_deliver(outbox_rows)
+                        return
                 # Household overview (P31): deterministic 概览 / 家庭概览.
                 if command is None:
                     overview_command = try_parse_overview_command(text)
@@ -1063,6 +1101,129 @@ class MessageProcessor:
                     f"· {label}：{self._format_money(upcoming.amount)}"
                     f"（{upcoming.next_occurrence}）"
                 )
+        return "\n".join(lines)
+
+    async def _handle_goal_command(
+        self,
+        command: GoalCommand,
+        *,
+        message_id: str,
+        user_open_id: str,
+        event_id: str | None,
+    ) -> list[ReplyOutbox]:
+        """Render a compact deterministic goal list for the current ledger (P33)."""
+        async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
+            application = ClientApplicationService(
+                session, currency=self.settings.currency, timezone=self.settings.timezone
+            )
+            try:
+                pairs = await application.goal_list_with_progress(context)
+                reply_text = self._goals_message(pairs)
+            except LedgerAuthorizationError:
+                reply_text = "当前账本不可访问，请先切换到可用的账本。"
+            except Exception:
+                logger.exception("goal list generation failed")
+                reply_text = "无法生成目标列表，请稍后重试。"
+            row = self._make_outbox_row(
+                event_id=event_id,
+                message_id=message_id,
+                reply_type=ReplyType.TEXT,
+                sequence=0,
+                payload=build_text_payload(reply_text),
+                blob=None,
+            )
+            session.add(row)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    parent.business_committed_at = datetime.now(UTC)
+            await session.commit()
+            return [row]
+
+    def _goals_message(
+        self, pairs: list[tuple[FinancialGoal, GoalProgress]]
+    ) -> str:
+        if not pairs:
+            return "🎯 还没有财务目标\n\n在 Web 端「目标」页面创建一个，例如“应急储备 60000”。"
+        lines = ["🎯 财务目标"]
+        for goal, progress in pairs:
+            percent = f"{progress.progress_percent:.1f}%".replace(".0%", "%")
+            reached = "✅ 已达成" if progress.is_target_reached else f"进度 {percent}"
+            lines.append(
+                f"· {goal.name}：{self._format_money(progress.current_amount)} / "
+                f"{self._format_money(goal.target_amount)} · {reached}"
+            )
+            if progress.days_remaining is not None and not progress.is_target_reached:
+                lines.append(f"  目标日期 {goal.target_date} · 剩余 {progress.days_remaining} 天")
+            if (
+                progress.projected_shortfall_at_target_date is not None
+                and progress.projected_shortfall_at_target_date > 0
+            ):
+                lines.append(
+                    f"  按当前速度预计差 "
+                    f"{self._format_money(progress.projected_shortfall_at_target_date)}"
+                )
+        return "\n".join(lines)
+
+    async def _handle_insight_command(
+        self,
+        command: InsightCommand,
+        *,
+        message_id: str,
+        user_open_id: str,
+        event_id: str | None,
+        now: datetime,
+    ) -> list[ReplyOutbox]:
+        """Render deterministic insights for the current ledger (P33).
+
+        Deterministic path only: MessageProcessor → InsightService. AI is never
+        consulted for the numbers, and the summary is complete output even
+        when no AI explanation layer is configured.
+        """
+        async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
+            application = ClientApplicationService(
+                session, currency=self.settings.currency, timezone=self.settings.timezone
+            )
+            try:
+                insights = await application.insights(context, now=now)
+                reply_text = self._insights_message(insights)
+            except LedgerAuthorizationError:
+                reply_text = "当前账本不可访问，请先切换到可用的账本。"
+            except Exception:
+                logger.exception("insight generation failed")
+                reply_text = "无法生成洞察，请稍后重试。"
+            row = self._make_outbox_row(
+                event_id=event_id,
+                message_id=message_id,
+                reply_type=ReplyType.TEXT,
+                sequence=0,
+                payload=build_text_payload(reply_text),
+                blob=None,
+            )
+            session.add(row)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    parent.business_committed_at = datetime.now(UTC)
+            await session.commit()
+            return [row]
+
+    def _insights_message(self, insights: list[Insight]) -> str:
+        if not insights:
+            return "📌 本月没有需要特别关注的变化"
+        lines = ["📌 本月值得关注"]
+        for item in insights:
+            lines.append(f"· {item.summary}")
         return "\n".join(lines)
 
     async def _handle_recurring_command(

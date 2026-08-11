@@ -98,3 +98,28 @@ button { color: inherit; }
 .drawer-loading { padding: 60px 0; text-align: center; color: #78838f; }
 .accounts-page .table-panel td { vertical-align: middle; }
 .transfers-page .table-panel td { vertical-align: middle; }
+
+/* P33 — goals & insights */
+.goal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+.goal-card { padding: 20px; background: #fff; border: 1px solid #e7e9ed; border-radius: 16px; display: flex; flex-direction: column; gap: 10px; }
+.goal-card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.goal-card-head h3 { font-size: 17px; margin-bottom: 4px; }
+.goal-card-head .row-actions { gap: 4px; }
+.goal-desc { color: #77818d; font-size: 13px; margin: 0; }
+.goal-amount { display: flex; align-items: baseline; gap: 6px; }
+.goal-amount strong { font-size: 24px; letter-spacing: -.02em; }
+.goal-amount span { color: #8a93a0; }
+.goal-meta { display: flex; justify-content: space-between; gap: 8px; margin: 0; font-size: 12px; color: #707b87; }
+.budget-track i.reached { background: #57a773; }
+.budget-track i.warning { background: #e0a33d; }
+.budget-track i.over { background: #d45a5a; }
+.goal-account-picker { display: grid; gap: 6px; max-height: 160px; overflow-y: auto; padding: 8px; border: 1px solid #e7e9ed; border-radius: 10px; }
+.insight-panel { margin-top: 18px; }
+.insight-list { display: grid; gap: 8px; }
+.insight-row { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: 10px; background: #f7f9fb; font-size: 13px; }
+.insight-row p { margin: 0; line-height: 1.5; flex: 1; }
+.insight-row.warning { background: #fff6ec; color: #8a5a1b; }
+.insight-row.warning svg { color: #d98b2b; flex-shrink: 0; margin-top: 2px; }
+.insight-row.attention { background: #f0f6ff; }
+.insight-row.info { background: #f3faf6; }
+.quiet-link { color: #1769e0; text-decoration: none; white-space: nowrap; }

@@ -10,7 +10,10 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works in v0.7.0
+## What works (v0.8.0 in development, mainline v0.7.0)
+
+- **Financial Goals (v0.8.0)**: turn “how much I want to save” into trackable goals (e.g. `应急储备 60000`). Progress comes from the **real ledger**: a goal binds cash / asset accounts and `current_amount` is always the live sum of their balances — the goal never stores or hand-maintains a balance, so booking / deleting / restoring entries and transfers automatically recalculate progress. Supports target date and a deterministic forecast; goal visibility inherits its bound accounts (any goal referencing a private account is invisible to everyone else, so a goal display can never leak a private balance); goals are not virtual accounts or money pools — creating / editing / deleting a goal never touches accounts, entries or transfers. Feishu `我的目标 / 目标 / 查看目标` and Web `/goals` share the same backend
+- **Deterministic Insights (v0.8.0)**: automatically surface worth-noticing facts from the real ledger — spending change (this month vs the trailing 3-month average), budget risk (usage ahead of elapsed time), upcoming recurring expenses within 30 days (grouped by currency), and goal progress / projected shortfall. Every number is computed by deterministic rules; AI never computes facts, never touches the database, and may only optionally rewrite explanation text with automatic fallback to the deterministic summary when AI is unavailable. Private data can never leak through any insight side channel. Feishu `洞察 / 财务洞察 / 本月洞察` and Web `/insights` share the same backend. **Insights explain and remind; they are not financial advice** — no investment / stock / wealth / loan / tax recommendations and no automatic money movement
 
 - **Shared household ledger (v0.7.0)**: one family = one internal-user group + one dedicated shared ledger, bookkept together by real members:
   - **Payer attribution**: `created_by ≠ paid_by` with deterministic payer resolution by member alias / display name / open_id / UUID (`B 买菜120` → B pays); aliases are maintained by the household owner and spending aggregates by payer
@@ -27,7 +30,7 @@ Detailed user, deployment, and architecture docs are **Chinese-first**. This REA
 - **High-risk confirmation**: image / voice / batch / likely-duplicate writes first create a pending confirmation (`#C-XXXXX`) — confirm or cancel by text or card button; confirmation always uses the frozen parse result, never re-calls AI
 - User isolation by Feishu `open_id` and claim-first `event_id` idempotency
 - **Reliable delivery**: background Event / Reply Workers, transactional reply outbox, PostgreSQL lease and exponential-backoff retry, readiness probes, terminal retention cleanup, and guarded manual event replay
-- **Web Dashboard**: Feishu OAuth, financial overview, ledger and revisions, pending confirmations, analytics, budgets, recurring rules, reports, CSV downloads, and an administrator reliability console
+- **Web Dashboard**: Feishu OAuth, financial overview, ledger and revisions, pending confirmations, analytics, budgets, **financial goals (`/goals` — create / edit / progress / archive / delete)**, **insight cards (Overview “值得关注”)**, recurring rules, reports, CSV downloads, and an administrator reliability console
 - Self-hosted stack: FastAPI, React / TypeScript / Vite, PostgreSQL, Docker Compose
 
 Simple single text remains a direct write: `午饭32元` immediately creates the ledger entry. Image, voice, batch, and likely-duplicate writes follow `media → preview card → user confirmation → ledger`. Text fallbacks are `确认 #C-A83F2`, `取消 #C-A83F2`, and `查看待确认` (or `确认列表`).

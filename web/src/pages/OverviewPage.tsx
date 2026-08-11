@@ -1,15 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ArrowDownRight, ArrowUpRight, CalendarClock, Users, WalletCards } from "lucide-react";
-import { api, localTime, money, type HouseholdOverview } from "../api";
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, BellRing, CalendarClock, Users, WalletCards } from "lucide-react";
+import { api, localTime, money, type HouseholdOverview, type Insight, type InsightList } from "../api";
 
 export function OverviewPage() {
   const query = useQuery({ queryKey: ["overview"], queryFn: () => api<HouseholdOverview>("/overview") });
+  const insights = useQuery({
+    queryKey: ["insights"],
+    queryFn: () => api<InsightList>("/insights?limit=5"),
+    enabled: query.isSuccess,
+  });
   if (query.isLoading) return <div className="page-skeleton"><div /><div /><div /></div>;
   if (query.isError) return <section className="state-panel"><h2>概览暂时不可用</h2><button onClick={() => query.refetch()}>重新加载</button></section>;
   const data = query.data!;
   const isHousehold = data.ledger_kind === "household_shared";
   const budgetPct = data.budget.usage_rate === null ? null : Number(data.budget.usage_rate);
+  const insightItems: Insight[] = insights.data?.insights ?? [];
 
   return (
     <div className="dashboard-page">
@@ -21,6 +27,23 @@ export function OverviewPage() {
           {isHousehold && <Link className="quiet-button" to="/households">家庭成员</Link>}
         </div>
       </div>
+
+      <section className="panel insight-panel">
+        <div className="panel-title"><h3>值得关注</h3><BellRing size={16} /></div>
+        {insightItems.length ? (
+          <div className="insight-list">
+            {insightItems.map((item) => (
+              <div key={item.key} className={`insight-row ${item.severity}`}>
+                {item.severity === "warning" && <AlertTriangle size={15} />}
+                <p>{item.summary}</p>
+                {item.related_goal_name && <Link className="quiet-link" to="/goals">查看目标</Link>}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted-empty">目前没有需要特别关注的变化</p>
+        )}
+      </section>
 
       <section className="metric-grid">
         <article><span><ArrowDownRight size={17} /> 本月支出</span><strong>{money(data.expense_total)}</strong></article>

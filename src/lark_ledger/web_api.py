@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
-from typing import Annotated, cast
+from typing import Annotated, Any, cast
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, status
@@ -35,6 +35,7 @@ from lark_ledger.models import (
     Account,
     AccountVisibility,
     Direction,
+    FinancialGoal,
     Household,
     HouseholdInvitation,
     HouseholdMember,
@@ -60,6 +61,13 @@ from lark_ledger.services.dashboard_auth import (
     DashboardPrincipal,
 )
 from lark_ledger.services.event_replay import EventReplayService
+from lark_ledger.services.goals import (
+    GoalConflictError,
+    GoalError,
+    GoalNotFoundError,
+    GoalProgressService,
+    GoalService,
+)
 from lark_ledger.services.household_management import (
     HouseholdConflictError,
     HouseholdManagementError,
@@ -68,6 +76,7 @@ from lark_ledger.services.household_management import (
     HouseholdPermissionError,
     HouseholdView,
 )
+from lark_ledger.services.insight_explanation import InsightExplanationService
 from lark_ledger.services.ledger import EntryConflictError
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationError
 from lark_ledger.services.ledger_management import (
@@ -119,10 +128,16 @@ from lark_ledger.web_schemas import (
     EntryVersionRequest,
     EventReplayRequest,
     ExportRequestBody,
+    GoalAccountBindingItem,
+    GoalCreateRequest,
+    GoalList,
+    GoalProgress,
+    GoalUpdateRequest,
     HouseholdCreateRequest,
     HouseholdInviteRequest,
     HouseholdList,
     HouseholdOverview,
+    InsightList,
     LedgerList,
     LedgerNameRequest,
     MemberAliasRequest,
@@ -145,6 +160,9 @@ from lark_ledger.web_schemas import (
     WebRecurringRule,
     WebRevision,
     WebTransferDetail,
+)
+from lark_ledger.web_schemas import (
+    FinancialGoal as FinancialGoalView,
 )
 
 router = APIRouter(prefix="/api/web/v1", tags=["web-dashboard"])
@@ -2211,3 +2229,271 @@ async def export_entries(
             "X-LarkLedger-Row-Count": str(result.export.row_count),
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# P33 — Financial goals & deterministic insights
+# ---------------------------------------------------------------------------
+
+
+def _goal_http_error(exc: GoalError) -> HTTPException:
+    if isinstance(exc, GoalNotFoundError):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, GoalConflictError):
+        return HTTPException(status_code=409, detail=str(exc))
+    return HTTPException(status_code=422, detail=str(exc))
+
+
+def _web_goal(
+    goal: FinancialGoal,
+    bindings: list[GoalAccountBindingItem],
+    progress: GoalProgress | None,
+) -> FinancialGoalView:
+    return FinancialGoalView(
+        id=str(goal.id),
+        ledger_id=str(goal.ledger_id),
+        name=goal.name,
+        description=goal.description,
+        goal_type=goal.goal_type,
+        target_amount=goal.target_amount,
+        currency=goal.currency,
+        target_date=goal.target_date,
+        status=goal.status,
+        created_by_user_id=str(goal.created_by_user_id),
+        created_at=goal.created_at,
+        updated_at=goal.updated_at,
+        account_bindings=bindings,
+        current_amount=progress.current_amount if progress else Decimal("0"),
+        remaining_amount=progress.remaining_amount if progress else None,
+        progress_percent=progress.progress_percent if progress else None,
+        is_target_reached=progress.is_target_reached if progress else False,
+    )
+
+
+@router.get("/goals", response_model=GoalList)
+async def list_goals(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> GoalList:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        pairs = await application.goal_list_with_progress(principal.request_context)
+        service = GoalService(session, timezone=settings.timezone, currency=settings.currency)
+        items = [
+            _web_goal(
+                goal,
+                await service.binding_items(principal.request_context, goal.id),
+                progress,
+            )
+            for goal, progress in pairs
+        ]
+        return GoalList(items=items)
+
+
+@router.post("/goals", response_model=FinancialGoalView, status_code=201)
+async def create_goal(
+    payload: GoalCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> FinancialGoalView:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            goal = await application.create_goal(
+                principal.request_context,
+                name=payload.name,
+                target_amount=payload.target_amount,
+                currency=payload.currency,
+                description=payload.description,
+                target_date=payload.target_date,
+                account_ids=payload.account_ids,
+            )
+            await session.commit()
+            await session.refresh(goal)
+        except GoalError as exc:
+            await session.rollback()
+            raise _goal_http_error(exc) from exc
+        service = GoalService(session, timezone=settings.timezone, currency=settings.currency)
+        bindings = await service.binding_items(principal.request_context, goal.id)
+        progress = await GoalProgressService(
+            session, timezone=settings.timezone, currency=settings.currency
+        ).progress(principal.request_context, goal)
+        return _web_goal(goal, bindings, progress)
+
+
+@router.get("/goals/{goal_id}", response_model=FinancialGoalView)
+async def get_goal(
+    goal_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> FinancialGoalView:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        service = GoalService(session, timezone=settings.timezone, currency=settings.currency)
+        try:
+            goal = await service.get(principal.request_context, goal_id)
+            bindings = await service.binding_items(principal.request_context, goal.id)
+            progress = await GoalProgressService(
+                session, timezone=settings.timezone, currency=settings.currency
+            ).progress(principal.request_context, goal)
+        except GoalError as exc:
+            raise _goal_http_error(exc) from exc
+        return _web_goal(goal, bindings, progress)
+
+
+@router.patch("/goals/{goal_id}", response_model=FinancialGoalView)
+async def update_goal(
+    goal_id: uuid.UUID,
+    payload: GoalUpdateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> FinancialGoalView:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    updates: dict[str, Any] = payload.model_dump(exclude_unset=True)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            goal = await application.update_goal(
+                principal.request_context, goal_id, **updates
+            )
+            await session.commit()
+            await session.refresh(goal)
+        except GoalError as exc:
+            await session.rollback()
+            raise _goal_http_error(exc) from exc
+        service = GoalService(session, timezone=settings.timezone, currency=settings.currency)
+        bindings = await service.binding_items(principal.request_context, goal.id)
+        progress = await GoalProgressService(
+            session, timezone=settings.timezone, currency=settings.currency
+        ).progress(principal.request_context, goal)
+        return _web_goal(goal, bindings, progress)
+
+
+@router.delete("/goals/{goal_id}", status_code=204)
+async def delete_goal(
+    goal_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            await application.delete_goal(principal.request_context, goal_id)
+            await session.commit()
+        except GoalError as exc:
+            await session.rollback()
+            raise _goal_http_error(exc) from exc
+    return Response(status_code=204)
+
+
+@router.post("/goals/{goal_id}/complete", response_model=FinancialGoalView)
+async def complete_goal(
+    goal_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> FinancialGoalView:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            goal = await application.complete_goal(principal.request_context, goal_id)
+            await session.commit()
+            await session.refresh(goal)
+        except GoalError as exc:
+            await session.rollback()
+            raise _goal_http_error(exc) from exc
+        service = GoalService(session, timezone=settings.timezone, currency=settings.currency)
+        bindings = await service.binding_items(principal.request_context, goal.id)
+        progress = await GoalProgressService(
+            session, timezone=settings.timezone, currency=settings.currency
+        ).progress(principal.request_context, goal)
+        return _web_goal(goal, bindings, progress)
+
+
+@router.post("/goals/{goal_id}/archive", response_model=FinancialGoalView)
+async def archive_goal(
+    goal_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> FinancialGoalView:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            goal = await application.archive_goal(principal.request_context, goal_id)
+            await session.commit()
+            await session.refresh(goal)
+        except GoalError as exc:
+            await session.rollback()
+            raise _goal_http_error(exc) from exc
+        service = GoalService(session, timezone=settings.timezone, currency=settings.currency)
+        bindings = await service.binding_items(principal.request_context, goal.id)
+        progress = await GoalProgressService(
+            session, timezone=settings.timezone, currency=settings.currency
+        ).progress(principal.request_context, goal)
+        return _web_goal(goal, bindings, progress)
+
+
+@router.get("/goals/{goal_id}/progress", response_model=GoalProgress)
+async def goal_progress(
+    goal_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> GoalProgress:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        try:
+            return await application.goal_progress(principal.request_context, goal_id)
+        except GoalError as exc:
+            raise _goal_http_error(exc) from exc
+
+
+@router.get("/insights", response_model=InsightList)
+async def insights(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: str | None = None,
+    limit: Annotated[int | None, Query(ge=1, le=20)] = None,
+    explain: bool = False,
+) -> InsightList:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    target = _budget_period(period)
+    async with factory() as session:
+        application = ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        )
+        items = await application.insights(
+            principal.request_context, period=target, limit=limit
+        )
+        if explain:
+            explainer = InsightExplanationService(settings)
+            for item in items:
+                item.explanation = await explainer.explain(item)
+        return InsightList(insights=items)

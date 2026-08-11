@@ -248,10 +248,18 @@ Schema 不包含 SQL、表名、任意过滤表达式或数据库标识。`Ledge
 
 报告建议使用文字 AI 配置，只发送币种、分类合计、趋势、收入、支出、结余和记录数等聚合数据，不发送逐笔备注或用户标识。文字、图片（包括富文本正文与最多 5 张图片）和音频分别发送给部署者配置的文字、视觉和转写服务；图片或语音服务未配置时不会回退到文字模型。
 
+### P33 目标与洞察的 AI 边界
+
+- 财务目标与洞察的**所有数字**由确定性代码计算：`GoalProgressService` 从绑定账户实时余额派生进度，`InsightService` 的四类规则（支出变化 / 预算风险 / 未来周期支出 / 目标进度）只做确定性比较与聚合，AI 从不计算百分比、从不生成 SQL、从不访问数据库。
+- `InsightExplanationService` 是唯一允许 AI 参与的新位置：输入只有结构化 `Insight`（type / severity / summary / metric），输出是中文改写；未配置、超时、无效输出或配额耗尽时自动回退确定性 `summary`，洞察功能不依赖 AI 可用性，readiness 也不检查 AI 健康。
+- 洞察是财务数据解释与提醒，不是金融顾问：不提供投资 / 股票 / 理财 / 贷款 / 税务建议，不做自动资金调拨或自动转账。
+
 ## 数据模型
 
 - `ledger_entries`：账目、用户、**用户内唯一五位 `short_id`（聊天引用层）**、金额、币种、分类、备注、发生时间、来源消息、来源项序号和软删除时间；UUID 仍为内部主键；`(user_open_id, short_id)` 与来源消息项唯一。
 - `ledger_entry_revisions`：账目修改/删除/恢复的 append-only 快照（`before_json` / `after_json`，含 `snapshot_version`）；与账目变更同事务写入。
+- `financial_goals`（P33）：账本范围内的储蓄目标定义——名称、描述、`goal_type`（v0.8.0 仅 `savings`）、`target_amount`、币种、可选 `target_date`、用户管理的 `status`（`active` / `completed` / `archived`）与创建者。**不包含** `current_amount` / `progress_percent` 列：进度由 `GoalProgressService` 在读取时从绑定账户实时余额确定性派生，缓存只允许作为性能提示、永远不是事实源。目标不是虚拟账户 / 资金池，删除目标级联删除绑定、绝不触碰账户 / 账目 / 转账。
+- `goal_account_bindings`（P33）：目标 ↔ 账户绑定；复合外键 `(ledger_id, goal_id) -> financial_goals` 与 `(ledger_id, account_id) -> accounts` 在数据库层保证绑定永远不跨账本；`(goal_id, account_id)` 唯一。绑定账户必须与目标同币种且为现金 / 资产账户（负债不是储蓄）。
 - `category_budgets`：每个用户和分类唯一的长期月预算。
 - `budget_alerts`：记录预算在每个自然月已发送的 80% / 100% 阈值提醒。
 - `processed_events`：已领取的飞书事件。新事件含版本化 `payload_json`、`payload_version`、`transport`、`status`、`received_at`、`processed_at` 与可选 `last_error_code`。可靠投递状态（P05a）另含 `attempt_count`、`next_attempt_at`、`lease_owner`、`lease_expires_at`、`result_summary`、`updated_at`，以及为人工定位去规范化的 `source_message_id` / `user_open_id`；P06e 增加 `manual_replay_count` 与仅对新事件写入的 `replay_safety_version`。历史无载荷行保持 `legacy_succeeded` 且不可重放。
