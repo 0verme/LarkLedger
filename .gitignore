@@ -23,6 +23,7 @@ logs/
 *.pfx
 .idea/
 .vscode/
+.claude/
 .DS_Store
 Thumbs.db
 docs-product-review/
