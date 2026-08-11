@@ -68,7 +68,7 @@ describe("dashboard routing and protection", () => {
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_admin", name: "管理员", avatar_url: "", role: "ADMIN", expires_at: "2026-08-08T12:00:00+00:00" }));
-      return Promise.resolve(Response.json({ version: "0.7.0", event_mode: "websocket", timezone: "Asia/Shanghai", currency: "CNY", worker_enabled: true, reply_worker_enabled: true, cleanup_worker_enabled: true, pending_enabled: true, ai_provider: "DeepSeek-compatible", ai_model: "deepseek-chat", ai_api_key_configured: true, lark_app_secret_configured: true, dashboard_base_url: "https://ledger.example.com", session_ttl_seconds: 28800, secure_cookie: true }));
+      return Promise.resolve(Response.json({ version: "0.8.0", event_mode: "websocket", timezone: "Asia/Shanghai", currency: "CNY", worker_enabled: true, reply_worker_enabled: true, cleanup_worker_enabled: true, pending_enabled: true, ai_provider: "DeepSeek-compatible", ai_model: "deepseek-chat", ai_api_key_configured: true, lark_app_secret_configured: true, dashboard_base_url: "https://ledger.example.com", session_ttl_seconds: 28800, secure_cookie: true }));
     }));
     renderApp("/admin/config");
     expect(await screen.findByRole("heading", { name: "系统配置" })).toBeInTheDocument();

@@ -10,7 +10,7 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works (v0.8.0 in development, mainline v0.7.0)
+## What works (v0.8.0 mainline)
 
 - **Financial Goals (v0.8.0)**: turn “how much I want to save” into trackable goals (e.g. `应急储备 60000`). Progress comes from the **real ledger**: a goal binds cash / asset accounts and `current_amount` is always the live sum of their balances — the goal never stores or hand-maintains a balance, so booking / deleting / restoring entries and transfers automatically recalculate progress. Supports target date and a deterministic forecast; goal visibility inherits its bound accounts (any goal referencing a private account is invisible to everyone else, so a goal display can never leak a private balance); goals are not virtual accounts or money pools — creating / editing / deleting a goal never touches accounts, entries or transfers. Feishu `我的目标 / 目标 / 查看目标` and Web `/goals` share the same backend
 - **Deterministic Insights (v0.8.0)**: automatically surface worth-noticing facts from the real ledger — spending change (this month vs the trailing 3-month average), budget risk (usage ahead of elapsed time), upcoming recurring expenses within 30 days (grouped by currency), and goal progress / projected shortfall. Every number is computed by deterministic rules; AI never computes facts, never touches the database, and may only optionally rewrite explanation text with automatic fallback to the deterministic summary when AI is unavailable. Private data can never leak through any insight side channel. Feishu `洞察 / 财务洞察 / 本月洞察` and Web `/insights` share the same backend. **Insights explain and remind; they are not financial advice** — no investment / stock / wealth / loan / tax recommendations and no automatic money movement
@@ -169,12 +169,12 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - **Not AA / Splitwise**: no splitting, settlement, debt relations or per-person breakdown; **not double-entry**: the sole-proprietor chart-of-accounts / vouchers / debit-credit domain stays a future track and accounting fields never leak into personal income/expense; **not business finance**: no audit trails, approval flows, multi-currency settlement or financial-reporting duties
 - **JSON export is not a formal capability** (CSV only)
 
-Future roadmap themes are outside this release commitment; v0.7.0 does not expand into a multi-tenant finance ERP.
+Future roadmap themes are outside this release commitment; v0.8.0 does not expand into a multi-tenant finance ERP.
 
-Current release: **v0.7.0** (household shared ledger & account privacy). Prebuilt image: `ghcr.io/0verme/larkledger:0.7.0` (also `0.7` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.8.0** (financial goals & deterministic insights). Prebuilt image: `ghcr.io/0verme/larkledger:0.8.0` (also `0.8` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.7.0
+export LARK_LEDGER_IMAGE_TAG=0.8.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d

@@ -2,6 +2,28 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [0.8.0] - 2026-08-13
+
+### Added (P33 — Financial Goals; P33 — Deterministic Insights)
+
+- **财务目标（P33 Goals）**：`financial_goals` + `goal_account_bindings` 两张新表（Alembic migration `20260813_0026`）。`FinancialGoal` 只保存用户定义的计划（名称 / 描述 / `savings` 类型 / 目标金额 / 币种 / 可选目标日期 / 用户管理的 `active|completed|archived` 状态），**没有** `current_amount` / `progress_percent` 列——`GoalProgressService` 从绑定账户的实时余额确定性重算进度（`current` / `remaining` / `progress_percent`），记账、删账、恢复、转账自动触发重算，目标永远不会保存第二套余额真相。DB 约束：`target_amount > 0`、`goal_type IN ('savings')`、`status` 枚举、`(ledger_id, id)` 唯一；绑定用 `(ledger_id, goal_id)` 与 `(ledger_id, account_id)` 复合外键保证同 Ledger 内绑定（跨账本绑定由结构排除），`(goal_id, account_id)` 唯一禁止重复绑定，删除目标级联其绑定但从不触碰账户 / 账目 / 转账。
+- **目标合法性校验**：Savings Goal 只允许绑定现金 / 资产账户（拒绝 liability），目标币种必须与账户币种一致（不做自动换算），多账户绑定余额求和，全部确定性拒绝而非 AI 判断。
+- **目标隐私（P33 核心修复）**：`GoalProgressService` 在计算进度前先做授权与可见性检查——引用任何 private 账户的目标对其他成员完全不可见（list 排除 / get / progress / update 一律 404），且错误类型与「目标不存在」不可区分，**杜绝存在性侧信道**。
+- **确定性 Forecast**：过去 90 天净储蓄率 → `monthly_saving_rate` → `estimated_months_to_goal` / `projected_shortfall`，覆盖正 / 零 / 负 / 历史不足四种情况，AI 不参与计算。
+- **飞书确定性命令**：`我的目标` / `目标` / `查看目标` / `财务目标` / `目标进度` 走 `MessageProcessor → ClientApplicationService → GoalService`，不经过 AI intent interpreter；Web `/goals` 页面（创建 / 编辑 / 进度 / 归档 / 完成 / 删除）同源。
+- **确定性洞察（P33 Insights）**：`InsightService` + `InsightPolicy` 单点阈值。I01 支出变化（本月 vs 近 3 月平均，阈值 30% + 最低绝对额 + 最少历史天数）；I02 预算风险（usage > elapsed + 15% margin，统一 `InsightPolicy`）；I03 未来 30 天周期支出（只统计 active / visible，按币种分组，不跨币种求和，排除 paused / disabled / private 不可见）；I04 目标进度 / 预计缺口（deadline soon / shortfall / reached）。全部由确定性规则计算，数据不足时返回 `[]` 不制造伪洞察。
+- **AI 边界**：AI 只可选改写洞察解释文案（`InsightExplanationService` 输入仅含结构化 type / summary / metric），不访问数据库、不计算任何财务事实；AI 失败自动回退确定性摘要，且 AI Provider **不是** readiness 必需依赖。
+- **隐私侧信道防护（P33 核心）**：Insights / Overview / Budget / Member Stats 全部复用 `PrivacyService` 与 v0.7.0 相同口径——private 账户的余额、支出、分类、金额、目标、进度不会通过任何 totals / 类别聚合 / 成员统计 / revision 变化泄漏给其他成员；private Entry 的 create / delete / restore 对 B 的 Insights 无可观察差异。
+
+### Changed
+
+- Web Dashboard 现为 v0.8.0 版：`/goals` 目标卡片（创建 / 编辑 / 进度 / 归档 / 完成 / 删除）、Overview「值得关注」洞察卡片、`/insights` 空状态。
+- 包版本 / `__version__` / 前端 package 版本 / `.env.example` 镜像标签全部升至 `0.8.0`。
+
+### Removed / Clarified
+
+- 明确边界：**洞察不是金融顾问**——不提供投资、股票、理财、贷款、税务建议，不做任何自动资金操作；目标不是虚拟账户 / 资金池（创建 / 修改 / 删除从不触碰账户、账目或转账）。
+
 ## [0.7.0] - 2026-08-12
 
 ### Added (P30 — Household Contribution; P31 — Household Overview; P32 — Account Privacy)
@@ -326,6 +348,5 @@ Theme: **auditable ledger** — see entries, edit by short ID, soft-delete/resto
 - This is an Alpha release. Security and compatibility fixes are provided only for the latest release and `main`.
 - Review the [upgrade guide](docs/upgrading.md) before changing deployed versions.
 
-[Unreleased]: https://github.com/0verme/LarkLedger/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/0verme/LarkLedger/releases/tag/v0.2.0
 [0.1.0]: https://github.com/0verme/LarkLedger/releases/tag/v0.1.0

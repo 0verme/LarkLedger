@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.7.0** |
-| 包版本 / `__version__` | `0.7.0` |
-| Git tag | `v0.7.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.7.0`（亦有 `0.7` / `latest` 由发布流水线写入） |
-| Alembic head | `20260812_0025` |
+| 最新正式版本 | **v0.8.0** |
+| 包版本 / `__version__` | `0.8.0` |
+| Git tag | `v0.8.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.8.0`（亦有 `0.8` / `latest` 由发布流水线写入） |
+| Alembic head | `20260813_0026` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -20,6 +20,16 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
+
+## 从 v0.7.0 升级到 v0.8.0（财务目标与洞察）
+
+v0.8.0 带来 **P33 财务目标与确定性洞察**，新增单个 Alembic migration `20260813_0026`（`financial_goals` + `goal_account_bindings`）。
+
+`financial_goals` 只保存用户定义的计划（名称 / 目标金额 / 币种 / 可选目标日期 / 用户管理的状态），**不保存** `current_amount` / `progress_percent`——进度由 `GoalProgressService` 从绑定账户的实时余额确定性重算，目标永远不会与真实账本脱轨。约束：`target_amount > 0`、`goal_type IN ('savings')`、`status IN ('active','completed','archived')`、`(ledger_id, id)` 唯一。`goal_account_bindings` 用 `(ledger_id, goal_id)` 与 `(ledger_id, account_id)` 复合外键保证绑定永远在同一个 Ledger 内（跨账本绑定由数据库结构直接排除），`(goal_id, account_id)` 唯一约束禁止重复绑定；删除目标级联删除其绑定，但**从不触碰账户 / 账目 / 转账**。
+
+- 升级只新增两张表，不动既有账目 / 转账 / 预算 / Pending / 账户 / 家庭数据，无损且可降级。
+- **降级警告**：`downgrade 20260812_0025` 会 DROP `financial_goals` 与 `goal_account_bindings` 两张表。若已创建 v0.8.0 目标数据，盲目 downgrade 会丢失全部 Goal 与绑定。**灾难回滚策略**：恢复 pre-v0.8.0 数据库备份 + 使用 v0.7.0 镜像，而不是在已有 Goal 数据上 downgrade。
+- 升级后核对：`alembic current` 为 `20260813_0026`；`financial_goals` / `goal_account_bindings` 存在；无跨账本绑定、无币种不匹配、无重复 `(goal_id, account_id)`、无 orphan binding、无 `target_amount <= 0`。
 
 ## 从 v0.6.0 升级到 v0.7.0（家庭共享账本与账户隐私）
 

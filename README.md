@@ -8,7 +8,7 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-## 当前能力（v0.8.0 开发中，主线 v0.7.0）
+## 当前能力（v0.8.0 主线）
 
 - **财务目标（Goals，v0.8.0）**：把“想存到多少钱”变成可跟踪的目标（`应急储备 60000`）；进度来自**真实账本**——目标绑定现金 / 资产账户，`current_amount` 始终等于绑定账户实时余额之和，目标不保存、不手工维护余额，记账 / 删账 / 恢复 / 转账变化会自动重算。支持目标日期与确定性 forecast；可见性继承绑定账户（引用任何私人账户的目标对他人完全不可见，防止通过目标显示泄漏私人余额）；目标不是虚拟账户 / 资金池，创建 / 修改 / 删除从不触碰账户、账目或转账。飞书 `我的目标 / 目标 / 查看目标` 与 Web `/goals` 同源
 - **确定性洞察（Insights，v0.8.0）**：从真实账本自动发现值得注意的事实——支出变化（本月 vs 近 3 个月平均）、预算风险（使用率快于时间进度）、未来 30 天周期支出（按币种分组）、目标进度 / 预计缺口。全部由确定性规则计算，AI 不参与计算、不访问数据库，只可选改写解释文案；AI 不可用时自动回退确定性摘要。私人数据不会通过任何洞察侧信道泄漏。飞书 `洞察 / 财务洞察 / 本月洞察` 与 Web `/insights` 同源。**洞察是财务数据解释与提醒，不是金融顾问**——不提供投资、股票、理财、贷款、税务建议，不做任何自动资金操作
@@ -224,9 +224,9 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 - **不是 AA / Splitwise**：没有分摊、结算、债务关系或人均拆账；**不是复式记账**：一人公司科目 / 凭证 / 借贷仍属远期领域，不把会计字段加入个人收支表；**不是企业财务**：无审计链路、审批流、多币种汇率结算或财务报告义务
 - JSON 导出**不是**正式能力（当前仅 CSV）
 
-后续路线不在本次发布承诺内；v0.7.0 不扩展为多租户财务 ERP。
+后续路线不在本次发布承诺内；v0.8.0 不扩展为多租户财务 ERP。
 
-镜像与版本：当前正式版本为 **v0.7.0**（家庭共享账本与账户隐私）。预构建镜像：`ghcr.io/0verme/larkledger:0.7.0`（亦有 `0.7` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.8.0**（财务目标与洞察）。预构建镜像：`ghcr.io/0verme/larkledger:0.8.0`（亦有 `0.8` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -276,8 +276,8 @@ pytest --cov
 ## 使用预构建镜像（可选）
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.7.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.7.0"
+export LARK_LEDGER_IMAGE_TAG=0.8.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.8.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -293,7 +293,7 @@ curl http://127.0.0.1:8000/healthz
 - [架构说明](docs/architecture.md)
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
+- [变更日志](CHANGELOG.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 
