@@ -50,12 +50,12 @@ from lark_ledger.outbox import (
 )
 from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.accounts import AccountService
+from lark_ledger.services.errors import is_permanent_error
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.risk import RiskAssessment, RiskDecision, RiskReason
 from lark_ledger.services.transfers import TransferService
-from lark_ledger.services.worker import is_permanent_error
 from lark_ledger.short_id import MAX_SHORT_ID_ALLOCATION_ATTEMPTS, normalize_entry_ref
 
 logger = logging.getLogger(__name__)

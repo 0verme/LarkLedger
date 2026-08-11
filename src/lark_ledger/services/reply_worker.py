@@ -53,10 +53,10 @@ from lark_ledger.outbox import (
     ReplyType,
     verify_blob_checksum,
 )
+from lark_ledger.services.errors import is_permanent_error
 from lark_ledger.services.outbox import ClaimedReply, ReplyOutboxStore
 from lark_ledger.services.worker import (
     failure_status,
-    is_permanent_error,
     safe_owner_id,
     schedule_next_attempt,
 )

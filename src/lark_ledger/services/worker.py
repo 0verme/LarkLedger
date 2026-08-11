@@ -44,8 +44,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-import httpx
-import sqlalchemy.exc
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -59,6 +57,7 @@ from lark_ledger.event_payload import (
     safe_error_summary,
 )
 from lark_ledger.models import ProcessedEvent
+from lark_ledger.services.errors import is_permanent_error
 from lark_ledger.services.events import EventProcessor
 
 logger = logging.getLogger(__name__)
@@ -124,37 +123,6 @@ def failure_status(attempt_count: int, *, max_attempts: int, permanent: bool) ->
 
 #: HTTP codes that usually mean "try again later"; other 4xx are permanent.
 _TRANSIENT_HTTP_CODES: frozenset[int] = frozenset({408, 429})
-
-
-def is_permanent_error(exc: BaseException) -> bool:
-    """Conservative, explainable error classification.
-
-    Permanent classes are small and explicit; anything not matched here
-    defaults to **retryable** so transient network / AI / Feishu / database
-    failures are retried rather than dropped:
-
-    * ``EventPayloadError`` — payload cannot be parsed or is not replayable.
-    * ``ValueError`` / ``TypeError`` — a business contract or field error that
-      the same input would reproduce forever.
-    * ``IntegrityError`` — a duplicate / constraint violation will not resolve
-      on retry (and is the ledger's own double-entry guard).
-    * Non-408/429 4xx HTTP — explicit client / auth errors (e.g. invalid AI key,
-      missing permission) are permanent.
-
-    Unknown errors are retried conservatively up to ``event_max_attempts`` and
-    then moved to ``dead``, so a misclassified transient failure is bounded
-    rather than retried forever.
-    """
-    if isinstance(exc, EventPayloadError):
-        return True
-    if isinstance(exc, (ValueError, TypeError)):
-        return True
-    if isinstance(exc, sqlalchemy.exc.IntegrityError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError):
-        code = exc.response.status_code
-        return 400 <= code < 500 and code not in _TRANSIENT_HTTP_CODES
-    return False
 
 
 def _default_jitter(delay: float) -> float:
