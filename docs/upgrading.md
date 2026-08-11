@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.6.0** |
-| 包版本 / `__version__` | `0.6.0` |
-| Git tag | `v0.6.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.6.0`（亦有 `0.6` / `latest` 由发布流水线写入） |
-| Alembic head | `20260810_0023` |
+| 最新正式版本 | **v0.7.0** |
+| 包版本 / `__version__` | `0.7.0` |
+| Git tag | `v0.7.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.7.0`（亦有 `0.7` / `latest` 由发布流水线写入） |
+| Alembic head | `20260812_0025` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -20,6 +20,17 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
+
+## 从 v0.6.0 升级到 v0.7.0（家庭共享账本与账户隐私）
+
+v0.7.0 依次带来 **P30 家庭贡献**（`20260811_0024`）、**P31 家庭概览**（无迁移）与 **P32 账户隐私**（`20260812_0025`）。
+
+`20260811_0024` 分离「谁记账」与「谁付钱」：`ledger_entries` 增加 `created_by_user_id` / `paid_by_user_id`（从 `channel_identities` 无损回填），`recurring_rules` / `pending_commands` 增加 `paid_by_user_id`，`household_members` 增加 `alias`。周期规则会把付款人冻结进生成的 Pending，确认时不改变真正付款人；成员贡献统计按 `paid_by_user_id` 聚合（转账排除）。迁移只新增可空列并回填，不动既有账目 / 转账 / 预算 / Pending，无损且可降级。
+
+`20260812_0025` 新增 `accounts.visibility`（`shared` / `private`，默认 `shared`）与 `owner_user_id`（含 CHECK 约束），共享账本中私人账户的余额、交易、预算影响、周期规则与 Pending 对其他成员完全不可见（列表 / 详情 / 概览 / 成员统计 / 飞书命令均按 `PrivacyService` 过滤，未授权访问返回 404）。**降级保护**：只要存在任何 `visibility = private` 的账户，downgrade 到 `20260811_0024` 会被拒绝。
+
+- 升级只新增表和可空列；既有共享账本账户保持 `shared`，个人账本不受影响（`PrivacyService` 对 personal ledger 全部为 no-op）。
+- 升级后核对：`alembic current` 为 `20260812_0025`；无 `visibility = private AND owner_user_id IS NULL` 的账户；成员贡献统计与隐私过滤符合预期。
 
 ## 从 v0.5.0 升级到 v0.6.0（Budget 2.0 与 Recurring Rules）
 

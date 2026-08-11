@@ -45,7 +45,7 @@
 
 ## Web Dashboard
 
-v0.6.0 提供可选的中文 Web Dashboard，生产镜像已内置前端静态资源，无需额外 Node.js 服务：
+v0.7.0 提供可选的中文 Web Dashboard，生产镜像已内置前端静态资源，无需额外 Node.js 服务：
 
 - 财务总览、服务端分页账目管理、revision 时间线、软删除与恢复；账目列表显示账户、创建/编辑时可选择账户
 - **账户管理**：列表、创建、改名、设默认、归档、单账户余额与总资产/负债/净资产
@@ -223,7 +223,7 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 
 后续路线不在本次发布承诺内；v0.7.0 不扩展为多租户财务 ERP。
 
-镜像与版本：当前正式版本为 **v0.6.0**（v0.7.0 家庭共享与隐私已完成，但尚未发布镜像）。预构建镜像：`ghcr.io/0verme/larkledger:0.6.0`（亦有 `0.6` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.7.0**（家庭共享账本与账户隐私）。预构建镜像：`ghcr.io/0verme/larkledger:0.7.0`（亦有 `0.7` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -273,8 +273,8 @@ pytest --cov
 ## 使用预构建镜像（可选）
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.6.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.6.0"
+export LARK_LEDGER_IMAGE_TAG=0.7.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.7.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -290,7 +290,7 @@ curl http://127.0.0.1:8000/healthz
 - [架构说明](docs/architecture.md)
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
+- [变更日志](CHANGELOG.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 

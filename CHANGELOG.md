@@ -2,6 +2,27 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [0.7.0] - 2026-08-12
+
+### Added (P30 — Household Contribution; P31 — Household Overview; P32 — Account Privacy)
+
+- **家庭共享账本（P30）**：多个真实用户共同记账一个 `household` Ledger。`ledger_entries` 分离「谁记账」与「谁付钱」：`created_by_user_id`（录入人）与 `paid_by_user_id`（实际付款人）独立存在，默认付款人为录入人，也可在录入时指定其他成员。成员解析服务按 household alias / 显示名 / open_id / UUID 确定性解析付款人引用，解析失败时给出受控提示而不误入 AI 记账。Alembic migration `20260811_0024`。
+- **成员贡献统计**：`GET /ledgers/{ledger_id}/members/stats` 按 `paid_by_user_id` 聚合已确认账目（转账排除），而不是按录入人统计；预算支出对每位成员的共享支出只计一次。
+- **家庭概览（P31）**：`HouseholdOverviewService` 提供确定性家庭总览——期间收入 / 支出 / 净额（转账排除、待确认周期账目不计入）、预算进度（隐私过滤后）、账户余额汇总（隐私过滤）、成员贡献（按付款人）、Top 分类、即将到期的周期规则、最近交易。Web `GET /api/web/v1/overview` 与 `/overview` 页面（家庭总览导航）；飞书确定性命令 `概览` / `家庭概览` / `家庭开销` 走 `MessageProcessor → HouseholdOverviewService` 真实路径。
+- **账户隐私（P32）**：`accounts.visibility`（`shared` / `private`，默认 `shared`）与 `owner_user_id`（CHECK 约束），Alembic migration `20260812_0025`；**降级保护**：存在 private 账户时 downgrade 被拒绝。`PrivacyService` 在共享账本中执行账户可见范围过滤：private 账户的余额、交易、预算影响、周期规则 / Occurrence / Pending / 提醒数据对其他成员完全不可见（列表 / 详情 / 概览 / 成员统计 / 飞书命令，未授权访问返回 404），对 personal ledger 全部为 no-op。
+- **隐私覆盖范围**：accounts（list / get / get_default 404 语义）、entries（Web list / detail / dashboard、analytics、预算支出、飞书 list / detail / summary / report / export / mutations）、transfers（双方账户均可见才可见）、recurring（list / get / locked 校验、创建 / 更新校验、名称解析）、pendings（Web list / detail + dashboard 计数）、member stats 与 household overview。
+- **Web 隐私 UI**：`ClientAccount.visibility` + `owner_user_id`，`POST /accounts/{id}/visibility`（仅户主 / 账户 owner 可操作），Accounts 页面「共享 / 私人」徽标 + 切换 + 创建对话框。
+- **Shared recurring 付款人冻结**：规则创建时把 `paid_by_user_id` 冻结进生成的 Pending，任何活跃成员可确认 shared 周期 Pending，确认人不改变真正付款人。
+
+### Changed
+
+- Web Dashboard 现为 v0.7.0 版（家庭总览页、共享 / 私人账户 UI、visibility 控制）。
+- 飞书命令文档与帮助补充 payer 引用（如 `B 买菜 120` → created_by=A / paid_by=B）与隐私语义。
+
+### Removed / Clarified
+
+- 明确产品边界：**不是 AA / Splitwise**（无分摊、结算、债务关系、人均拆账）；**不是复式记账**；**不是企业财务**（无审计链、审批流、多币种结算、财务报告义务）。
+
 ## [0.6.0] - 2026-08-10
 
 ### Added (P29 — Recurring Rules)

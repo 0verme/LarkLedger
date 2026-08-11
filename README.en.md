@@ -34,7 +34,7 @@ Simple single text remains a direct write: `午饭32元` immediately creates the
 
 ## Web Dashboard
 
-v0.6.0 keeps the optional Chinese-first Dashboard and adds account, transfer, and recurring-rule management pages for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
+v0.7.0 keeps the optional Chinese-first Dashboard and adds account, transfer, and recurring-rule management pages for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
 
 The production image embeds the Vite build and serves it from FastAPI; Node.js is not needed at runtime. Enable it only behind HTTPS:
 
@@ -168,10 +168,10 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 
 Future roadmap themes are outside this release commitment; v0.7.0 does not expand into a multi-tenant finance ERP.
 
-Current release: **v0.6.0** (v0.7.0 household sharing and privacy are implemented but not yet released as an image). Prebuilt image: `ghcr.io/0verme/larkledger:0.6.0` (also `0.6` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.7.0** (household shared ledger & account privacy). Prebuilt image: `ghcr.io/0verme/larkledger:0.7.0` (also `0.7` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.6.0
+export LARK_LEDGER_IMAGE_TAG=0.7.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
