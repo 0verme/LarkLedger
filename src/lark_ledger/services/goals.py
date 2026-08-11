@@ -420,11 +420,18 @@ class GoalProgressService:
         transfer create / reverse automatically change the result on the next
         read, which is exactly the P33 contract (a goal never has a writable
         ``current_amount``).
+
+        Visibility is re-verified here (P33 §10): progress is a read path and
+        must 404 on goals the actor cannot see — including goals bound to
+        another member's private account — exactly like ``get``, so a direct
+        progress call can never be a balance-inference side channel.
         """
         await self._authorization.get_accessible(context.actor_user_id, context.ledger_id)
-        bindings = await GoalService(
+        service = GoalService(
             self._session, timezone=str(self._timezone), currency=self._currency
-        )._binding_rows(context, goal.id)
+        )
+        goal = await service.get(context, goal.id)
+        bindings = await service._binding_rows(context, goal.id)
         current = Decimal("0")
         transfers = TransferService(self._session)
         for binding in bindings:

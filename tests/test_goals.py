@@ -517,6 +517,12 @@ async def test_private_goal_invisible_to_other_member(session: AsyncSession) -> 
     assert [item.id for item in await service.list_goals(member_ctx)] == []
     with pytest.raises(GoalNotFoundError):
         await service.get(member_ctx, goal.id)  # type: ignore[union-attr]
+    # B cannot read progress either — a direct progress call must 404, never
+    # reveal a balance through a different exception type.
+    with pytest.raises(GoalNotFoundError):
+        await GoalProgressService(session, timezone=TZ, currency="CNY").progress(
+            member_ctx, goal  # type: ignore[arg-type]
+        )
     # B cannot manage it either.
     with pytest.raises(GoalNotFoundError):
         await service.update(member_ctx, goal.id, name="篡改")  # type: ignore[union-attr]
