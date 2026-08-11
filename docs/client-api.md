@@ -120,7 +120,7 @@ Authorization: Bearer llv1_xxx
 Idempotency-Key: breakfast-20260814
 
 {
-  "type": "expense",
+  "direction": "expense",
   "amount": "18.00",
   "currency": "CNY",
   "category": "餐饮",
@@ -238,7 +238,7 @@ curl -s -X POST http://ledger.example/api/v1/ledgers/$LEDGER/select \
 curl -s -X POST http://ledger.example/api/v1/transactions \
   -H "Authorization: Bearer $TOKEN" -H "Idempotency-Key: breakfast-1" \
   -H "Content-Type: application/json" \
-  -d '{"type":"expense","amount":"18.00","currency":"CNY","category":"餐饮","note":"早餐","occurred_at":"2026-08-14T08:00:00+08:00"}'
+  -d '{"direction":"expense","amount":"18.00","currency":"CNY","category":"餐饮","note":"早餐","occurred_at":"2026-08-14T08:00:00+08:00"}'
 
 # 6. 重试同一请求（同 key）→ replayed: true，不重复记账
 # 7. 查询总览

@@ -2,6 +2,22 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [0.9.0] - Unreleased
+
+### Added (P34 — Application Service Boundary; P35 — Channel-Neutral Client API; P36 — Adapter Contract)
+
+- **正式通道无关 Client API（P35）**：稳定契约 `/api/v1`（`/api/client/v1` 为同一组 handler 的兼容别名）。新增 `GET /ledgers/{ledger_id}`、`GET /recurring-rules`、`GET /goals`、`GET /overview`、`GET /insights`；`/transactions` 与 `/entries` 等价（list / create / get / patch / delete，`id` 接受 UUID 或短 ID）。错误 envelope 增加 `request_id`（可关联日志排错）；OpenAPI 声明 `clientBearer` security scheme；写请求继续强制 `Idempotency-Key`。
+- **API Token 管理（P35）**：Web Dashboard「系统 → API 令牌」页（创建 / 一次性明文展示 / 撤销），复用 `llv1_` Bearer（只存 SHA-256 摘要、可过期、scope 只缩权、撤销立即失效）。
+- **架构守护（P34 / P36）**：`tests/architecture/` AST 守护——Core/Application 不得 import `fastapi`、Feishu 客户端、渠道路由或 token 传输；Domain 不得 import Application；`RequestContext` 不携带渠道密钥；Domain 错误不泄漏 `HTTPException`。依赖方向固定为 Adapter → Application → Domain → Core。
+- **Adapter Contract Suite（P36）**：`tests/contracts/` 的 C01–C08 用单一 `CanonicalExpectation` 事实源证明 Feishu / Web（`ClientApplicationService`）/ Client API 对同一业务事实产生一致 Domain Result——expense 创建、家庭 payer（created_by ≠ paid_by）、private 账户三端不可见、预算口径、Recurring 确认保留 payer、Goal 进度、Insights 结构化 metric、重复投递 exactly-once（API 幂等 key + Feishu 事件幂等）。
+- **OpenAPI 契约测试**：`tests/contracts/test_openapi_v1.py` 守护 `/api/v1` 的 §22 必需面、双前缀等价、Bearer 声明、稳定错误 schema 与中性写 DTO。
+- **CI**：新增独立 `contracts` job（architecture guard + adapter contracts + OpenAPI）。
+
+### Changed
+
+- `ledger_entries.user_open_id` 标记 **deprecated**（v0.9.0）：仅保留用于历史行与安全回滚，新业务依赖 `created_by_user_id` / `paid_by_user_id` + `channel_identities`；删除安排后续 destructive migration。
+- README / docs/architecture / docs/help / docs/roadmap 更新「飞书是 Adapter」分层原则；新增 [Client API 文档](docs/client-api.md)（创建 Token、Bearer、选账本、幂等、交易、查询、错误处理、Quick Start、硬件兼容）。
+
 ## [0.8.0] - 2026-08-13
 
 ### Added (P33 — Financial Goals; P33 — Deterministic Insights)

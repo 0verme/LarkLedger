@@ -437,6 +437,11 @@ class LedgerEntry(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    # DEPRECATED (v0.9.0): transport-subject denormalization kept for legacy
+    # rows and safe rollback only. New business code MUST NOT depend on it —
+    # identity/authorization flow through ``created_by_user_id`` /
+    # ``paid_by_user_id`` + ``channel_identities``. Removal is a future
+    # destructive migration.
     user_open_id: Mapped[str] = mapped_column(String(128), nullable=False)
     # P30: who issued the booking action vs who actually paid. Legacy rows keep
     # ``user_open_id`` as the creator's transport subject; migration 0024
