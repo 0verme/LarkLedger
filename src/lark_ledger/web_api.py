@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger import __version__
 from lark_ledger.client_schemas import (
+    AccountVisibilityRequest,
     ClientAccount,
     ClientAccountBalance,
     ClientAccountCreateRequest,
@@ -32,6 +33,7 @@ from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
 from lark_ledger.models import (
     Account,
+    AccountVisibility,
     Direction,
     Household,
     HouseholdInvitation,
@@ -384,6 +386,8 @@ def _web_account(row: Account) -> ClientAccount:
             "opening_balance": row.opening_balance,
             "status": row.status,
             "is_default": row.is_default,
+            "visibility": row.visibility,
+            "owner_user_id": str(row.owner_user_id) if row.owner_user_id else None,
             "created_at": row.created_at,
             "updated_at": row.updated_at,
         }
@@ -618,6 +622,7 @@ async def create_account(
                 currency=body.currency,
                 opening_balance=body.opening_balance,
                 make_default=body.is_default,
+                visibility=AccountVisibility(body.visibility),
             )
             await session.commit()
         except AccountError as exc:
@@ -683,6 +688,31 @@ async def set_default_account(
     principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
 ) -> ClientAccount:
     return await _mutate_web_account(account_id, request, principal, operation="default")
+
+
+@router.post("/accounts/{account_id}/visibility", response_model=ClientAccount)
+async def set_account_visibility(
+    account_id: uuid.UUID,
+    body: AccountVisibilityRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ClientAccount:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            row = await ClientApplicationService(
+                session, currency=settings.currency, timezone=settings.timezone
+            ).set_account_visibility(
+                principal.request_context,
+                account_id,
+                AccountVisibility(body.visibility),
+            )
+            await session.commit()
+        except AccountError as exc:
+            await session.rollback()
+            raise _account_http_error(exc) from exc
+    return _web_account(row)
 
 
 @router.get("/accounts/{account_id}/balance", response_model=ClientAccountBalance)

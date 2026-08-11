@@ -598,6 +598,9 @@ class _EntryMixin:
 
     async def _find_latest_for_mutation(self, user_open_id: str) -> LedgerEntry | None:
         query = self._latest_query(user_open_id)
+        privacy = await self._privacy_entry_filter()
+        if privacy is not None:
+            query = query.where(privacy)
         if self._supports_for_update():
             query = query.with_for_update()
         return (await self.session.execute(query)).scalar_one_or_none()
@@ -605,10 +608,14 @@ class _EntryMixin:
     async def _find_entry_for_mutation(
         self, user_open_id: str, short_id: str
     ) -> LedgerEntry | None:
-        query = select(LedgerEntry).where(
+        filters = [
             self._entry_scope(user_open_id),
             LedgerEntry.short_id == short_id,
-        )
+        ]
+        privacy = await self._privacy_entry_filter()
+        if privacy is not None:
+            filters.append(privacy)
+        query = select(LedgerEntry).where(*filters)
         if self._supports_for_update():
             query = query.with_for_update()
         return (await self.session.execute(query.limit(1))).scalar_one_or_none()
@@ -800,6 +807,9 @@ class _EntryMixin:
             self._entry_scope(user_open_id),
             LedgerEntry.deleted_at.is_(None),
         ]
+        privacy = await self._privacy_entry_filter()
+        if privacy is not None:
+            filters.append(privacy)
         if command.range_start is not None and command.range_end is not None:
             filters.append(LedgerEntry.occurred_at >= command.range_start)
             filters.append(LedgerEntry.occurred_at < command.range_end)
@@ -884,6 +894,9 @@ class _EntryMixin:
             self._entry_scope(user_open_id),
             LedgerEntry.short_id == short_id,
         ]
+        privacy = await self._privacy_entry_filter()
+        if privacy is not None:
+            filters.append(privacy)
         if not include_deleted:
             filters.append(LedgerEntry.deleted_at.is_(None))
         return (

@@ -4,13 +4,21 @@ import re
 import unicodedata
 import uuid
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
-from lark_ledger.models import Account, AccountStatus, AccountType, Ledger
+from lark_ledger.models import (
+    Account,
+    AccountStatus,
+    AccountType,
+    AccountVisibility,
+    Ledger,
+)
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
+from lark_ledger.services.privacy import PrivacyService
 
 DEFAULT_ACCOUNT_NAME = "默认账户"
 MAX_ACCOUNT_NAME_LENGTH = 64
@@ -48,6 +56,13 @@ class AccountService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
         self._authorization = LedgerAuthorizationService(session)
+        self._privacy = PrivacyService(session)
+
+    async def _visible_scope(self, context: RequestContext) -> Any | None:
+        """Visibility filter, or ``None`` for personal ledgers (exact legacy behavior)."""
+        if not await self._privacy.privacy_enabled(context):
+            return None
+        return self._privacy.account_visibility_scope(context)
 
     @staticmethod
     async def create_default_for_ledger(session: AsyncSession, ledger: Ledger) -> Account:
@@ -85,6 +100,7 @@ class AccountService:
         currency: str | None = None,
         opening_balance: Decimal = Decimal("0"),
         make_default: bool = False,
+        visibility: AccountVisibility = AccountVisibility.SHARED,
     ) -> Account:
         ledger = await self._authorize(context)
         display, normalized = normalize_account_name(name)
@@ -111,6 +127,10 @@ class AccountService:
             opening_balance=opening_balance,
             status=AccountStatus.ACTIVE.value,
             is_default=make_default,
+            visibility=visibility.value,
+            owner_user_id=(
+                context.actor_user_id if visibility == AccountVisibility.PRIVATE else None
+            ),
         )
         self._session.add(account)
         await self._session.flush()
@@ -121,6 +141,9 @@ class AccountService:
     ) -> list[Account]:
         await self._authorize(context)
         query = select(Account).where(Account.ledger_id == context.ledger_id)
+        visible = await self._visible_scope(context)
+        if visible is not None:
+            query = query.where(visible)
         if not include_archived:
             query = query.where(Account.status == AccountStatus.ACTIVE.value)
         return list(
@@ -135,25 +158,29 @@ class AccountService:
         self, context: RequestContext, account_id: uuid.UUID, *, require_active: bool = False
     ) -> Account:
         await self._authorize(context)
-        account = await self._session.scalar(
-            select(Account).where(
-                Account.id == account_id,
-                Account.ledger_id == context.ledger_id,
-            )
+        query = select(Account).where(
+            Account.id == account_id,
+            Account.ledger_id == context.ledger_id,
         )
+        visible = await self._visible_scope(context)
+        if visible is not None:
+            query = query.where(visible)
+        account = await self._session.scalar(query)
         if account is None or (require_active and account.status != AccountStatus.ACTIVE.value):
             raise AccountNotFoundError("账户不存在或不属于当前账本")
         return account
 
     async def get_default(self, context: RequestContext) -> Account:
         ledger = await self._authorize(context)
-        account = await self._session.scalar(
-            select(Account).where(
-                Account.ledger_id == context.ledger_id,
-                Account.is_default.is_(True),
-                Account.status == AccountStatus.ACTIVE.value,
-            )
+        query = select(Account).where(
+            Account.ledger_id == context.ledger_id,
+            Account.is_default.is_(True),
+            Account.status == AccountStatus.ACTIVE.value,
         )
+        visible = await self._visible_scope(context)
+        if visible is not None:
+            query = query.where(visible)
+        account = await self._session.scalar(query)
         if account is None:
             account = await self.create_default_for_ledger(self._session, ledger)
         return account
@@ -189,6 +216,38 @@ class AccountService:
         account = await self.get(context, account_id, require_active=True)
         await self._clear_default(context.ledger_id)
         account.is_default = True
+        await self._session.flush()
+        await self._session.refresh(account)
+        return account
+
+    async def set_visibility(
+        self,
+        context: RequestContext,
+        account_id: uuid.UUID,
+        visibility: AccountVisibility,
+    ) -> Account:
+        """Toggle an account's visibility (P32), owner-only.
+
+        Governance: the ledger owner (household owner / personal sole user) or
+        the owner of a private account may change visibility. Marking an
+        account private assigns ownership to the actor.
+        """
+        account = await self.get(context, account_id)
+        from lark_ledger.services.member_resolution import MemberResolutionService
+
+        roles = await MemberResolutionService(self._session).member_roles(context)
+        ledger_owner = roles.get(context.actor_user_id) == "owner"
+        owns_private = (
+            account.owner_user_id is not None
+            and account.owner_user_id == context.actor_user_id
+        )
+        if not (ledger_owner or owns_private):
+            raise AccountNotFoundError("账户不存在或不属于当前账本")
+        if visibility == AccountVisibility.PRIVATE:
+            account.owner_user_id = context.actor_user_id
+        else:
+            account.owner_user_id = None
+        account.visibility = visibility.value
         await self._session.flush()
         await self._session.refresh(account)
         return account

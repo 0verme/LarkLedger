@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,7 @@ from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     Account,
     AccountType,
+    AccountVisibility,
     Direction,
     HouseholdInvitation,
     HouseholdMember,
@@ -157,6 +159,7 @@ class ClientApplicationService:
         currency: str | None,
         opening_balance: Decimal,
         make_default: bool,
+        visibility: AccountVisibility = AccountVisibility.SHARED,
     ) -> Account:
         return await AccountService(self._session).create(
             context,
@@ -167,6 +170,17 @@ class ClientApplicationService:
             currency=currency,
             opening_balance=opening_balance,
             make_default=make_default,
+            visibility=visibility,
+        )
+
+    async def set_account_visibility(
+        self,
+        context: RequestContext,
+        account_id: uuid.UUID,
+        visibility: AccountVisibility,
+    ) -> Account:
+        return await AccountService(self._session).set_visibility(
+            context, account_id, visibility
         )
 
     async def rename_account(
@@ -538,12 +552,19 @@ class ClientApplicationService:
         names: dict[uuid.UUID, str] = {}
         if not account_ids:
             return names
+        filters: list[Any] = [
+            Account.ledger_id == context.ledger_id,
+            Account.id.in_(account_ids),
+        ]
+        # P32: never surface a private account's name to a non-owner.
+        from lark_ledger.services.privacy import PrivacyService
+
+        privacy = PrivacyService(self._session)
+        if await privacy.privacy_enabled(context):
+            filters.append(privacy.account_visibility_scope(context))
         rows = (
             await self._session.execute(
-                select(Account.id, Account.name).where(
-                    Account.ledger_id == context.ledger_id,
-                    Account.id.in_(account_ids),
-                )
+                select(Account.id, Account.name).where(*filters)
             )
         ).all()
         for account_id, name in rows:
@@ -720,7 +741,10 @@ class ClientApplicationService:
             channel_identity_id=context.channel_identity_id,
             external_subject_id=context.external_subject_id,
         )
-        return await MemberStatsService(self._session).stats(target)
+        from lark_ledger.services.privacy import PrivacyService
+
+        privacy_filter = await PrivacyService(self._session).entry_visibility_scope(target)
+        return await MemberStatsService(self._session).stats(target, privacy_filter=privacy_filter)
 
     def _ledger_manager(self) -> LedgerManagementService:
         return LedgerManagementService(

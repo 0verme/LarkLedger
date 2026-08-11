@@ -83,6 +83,9 @@ class _ReportMixin:
             )
 
         filters: list[Any] = [self._entry_scope(user_open_id)]
+        privacy = await self._privacy_entry_filter()
+        if privacy is not None:
+            filters.append(privacy)
         if not command.include_deleted:
             filters.append(LedgerEntry.deleted_at.is_(None))
         if range_start is not None and range_end is not None:
@@ -149,6 +152,9 @@ class _ReportMixin:
             LedgerEntry.occurred_at >= command.range_start,
             LedgerEntry.occurred_at < command.range_end,
         ]
+        privacy = await self._privacy_entry_filter()
+        if privacy is not None:
+            filters.append(privacy)
         filters.append(
             LedgerEntry.direction == (command.direction or Direction.EXPENSE)
         )
@@ -177,6 +183,15 @@ class _ReportMixin:
         if local_end - local_start > timedelta(days=366):
             return ExecutionResult(message="单份消费报告最长支持 366 天，请缩短时间范围后重试。")
 
+        filters: list[Any] = [
+            self._entry_scope(user_open_id),
+            LedgerEntry.deleted_at.is_(None),
+            LedgerEntry.occurred_at >= command.range_start,
+            LedgerEntry.occurred_at < command.range_end,
+        ]
+        privacy = await self._privacy_entry_filter()
+        if privacy is not None:
+            filters.append(privacy)
         rows = (
             await self.session.execute(
                 select(
@@ -184,12 +199,7 @@ class _ReportMixin:
                     LedgerEntry.direction,
                     LedgerEntry.category,
                     LedgerEntry.occurred_at,
-                ).where(
-                    self._entry_scope(user_open_id),
-                    LedgerEntry.deleted_at.is_(None),
-                    LedgerEntry.occurred_at >= command.range_start,
-                    LedgerEntry.occurred_at < command.range_end,
-                )
+                ).where(*filters)
             )
         ).all()
         if not rows:

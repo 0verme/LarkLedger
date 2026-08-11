@@ -77,6 +77,8 @@ export type Account = {
   opening_balance: string;
   status: "active" | "archived";
   is_default: boolean;
+  visibility: "shared" | "private";
+  owner_user_id: string | null;
   created_at: string;
   updated_at: string;
 };

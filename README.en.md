@@ -10,8 +10,12 @@
 
 Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
 
-## What works in v0.6.0
+## What works in v0.7.0
 
+- **Shared household ledger (v0.7.0)**: one family = one internal-user group + one dedicated shared ledger, bookkept together by real members:
+  - **Payer attribution**: `created_by ≠ paid_by` with deterministic payer resolution by member alias / display name / open_id / UUID (`B 买菜120` → B pays); aliases are maintained by the household owner and spending aggregates by payer
+  - **Household overview**: one deterministic “family home” view (period income / expense / net, budget progress, member contributions, top categories, upcoming recurring, recent transactions, account balances); Feishu `概览 / 家庭概览 / 家庭开销` and Web `/overview` share the same backend
+  - **Account-level privacy**: an account can be `shared` (all members) or `private` (owner only); a private account's balance, entries, recurring rules, pendings, budget consumption and member stats are invisible to everyone else, while personal ledgers behave exactly as before
 - **Recurring rules**: turn known future income / expense into deterministic rules (`每月8号房租3500` / `每年6月15日保险2000` / `每周健身房100`). When a rule comes due the Recurring Worker generates a frozen confirmation pending and proactively sends a Feishu reminder card; **a rule only posts after confirmation**. Rules and pendings never consume budget — only confirmed expenses do. Pause / resume / skip / disable are supported, edits affect only future periods, and the same rule + period can never produce two pendings or two transactions under concurrency / retry
 - **Budget 2.0**: monthly total and per-category budgets keyed by explicit month, with plan-vs-actual, remaining, usage rate and over-limit status derived live; transfers never count, and delete / restore / revision all recompute from current facts
 - **Ledger-scoped accounts and transfers**: entries bind to a ledger account (cash / asset / liability) with opening balances, rename / default / archive lifecycle; transfers stay outside income / expense stats; per-account balance and total assets / liabilities / net worth are available from both Feishu and Web
@@ -157,12 +161,14 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - A lightweight Cleanup Worker deletes only terminal delivery records in bounded batches: successful events / sent replies default to 30 days, while dead records default to 90 days. Ledger entries and revisions are never deleted. Cleanup is not a database backup; review audit requirements before shortening retention.
 - Administrators can use the Dashboard or the dry-run-by-default `python -m lark_ledger.admin replay-event` CLI to replay provably safe `dead` / `failed` events; only an explicit second confirmation or `--execute` reruns business, and every accepted replay writes an audit. Events with an Outbox, source ledger results, or unproven historical atomicity are refused. Result replay consumes only the existing Outbox and never reruns business.
 - **High-risk confirmation (v0.3.0)**: image / voice / batch / likely-duplicate writes wait for a user `确认 #C-XXXXX` (or a card button) before writing. Confirmations expire (default 24h) and are per-user only; no multi-level approval or shared confirmation.
+- **Privacy is account-level, not field-level**: a private account hides balance / entries / recurring rules / pendings / budget consumption / member stats, but never member identity, aliases, or the payer aggregation口径; there is no amount-threshold, category or per-field ACL
 - The Dashboard has only `USER` and `ADMIN`; there is no enterprise multi-tenancy, organization tree, complex RBAC, or shared ledger
+- **Not AA / Splitwise**: no splitting, settlement, debt relations or per-person breakdown; **not double-entry**: the sole-proprietor chart-of-accounts / vouchers / debit-credit domain stays a future track and accounting fields never leak into personal income/expense; **not business finance**: no audit trails, approval flows, multi-currency settlement or financial-reporting duties
 - **JSON export is not a formal capability** (CSV only)
 
-Future roadmap themes are outside this release commitment; v0.6.0 does not expand into a multi-tenant finance ERP.
+Future roadmap themes are outside this release commitment; v0.7.0 does not expand into a multi-tenant finance ERP.
 
-Current release: **v0.6.0**. Prebuilt image: `ghcr.io/0verme/larkledger:0.6.0` (also `0.6` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.6.0** (v0.7.0 household sharing and privacy are implemented but not yet released as an image). Prebuilt image: `ghcr.io/0verme/larkledger:0.6.0` (also `0.6` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
 export LARK_LEDGER_IMAGE_TAG=0.6.0

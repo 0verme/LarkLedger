@@ -32,6 +32,9 @@ class WebPendingQueryService:
     ) -> PendingPage:
         current = now or datetime.now(UTC)
         filters = [self._scope(user_open_id)]
+        privacy = await self._privacy_pending_scope(user_open_id)
+        if privacy is not None:
+            filters.append(privacy)
         if group == "pending":
             filters.extend(
                 [
@@ -82,12 +85,11 @@ class WebPendingQueryService:
         now: datetime | None = None,
     ) -> PendingDetail | None:
         code = normalize_confirmation_code(confirmation_id)
-        row = await self._session.scalar(
-            select(PendingCommand).where(
-                self._scope(user_open_id),
-                PendingCommand.confirmation_code == code,
-            )
-        )
+        filters = [self._scope(user_open_id), PendingCommand.confirmation_code == code]
+        privacy = await self._privacy_pending_scope(user_open_id)
+        if privacy is not None:
+            filters.append(privacy)
+        row = await self._session.scalar(select(PendingCommand).where(*filters))
         if row is None:
             return None
         preview = PendingPreview.from_json(row.preview_json)
@@ -129,6 +131,14 @@ class WebPendingQueryService:
                 PendingCommand.user_open_id == scope.external_subject_id,
             ),
         )
+
+    async def _privacy_pending_scope(self, scope: RequestContext | str) -> Any | None:
+        """P32: privacy filter for pending queries, ``None`` when not applicable."""
+        if not isinstance(scope, RequestContext):
+            return None
+        from lark_ledger.services.privacy import PrivacyService
+
+        return await PrivacyService(self._session).pending_visibility_scope(scope)
 
     @staticmethod
     def _pending(row: PendingCommand, *, now: datetime) -> WebPending:

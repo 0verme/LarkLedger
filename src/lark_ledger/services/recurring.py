@@ -15,9 +15,10 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, true, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
@@ -206,6 +207,7 @@ class RecurringService:
             select(RecurringRule).where(
                 RecurringRule.id == rule_id,
                 RecurringRule.ledger_id == context.ledger_id,
+                await self._privacy_rule_scope(context),
             )
         )
         if row is None:
@@ -218,10 +220,26 @@ class RecurringService:
             (
                 await self._session.scalars(
                     select(RecurringRule)
-                    .where(RecurringRule.ledger_id == context.ledger_id)
+                    .where(
+                        RecurringRule.ledger_id == context.ledger_id,
+                        await self._privacy_rule_scope(context),
+                    )
                     .order_by(RecurringRule.next_occurrence, RecurringRule.created_at)
                 )
             ).all()
+        )
+
+    async def _privacy_rule_scope(self, context: RequestContext) -> Any:
+        """P32: hide rules whose target account is private to another owner.
+        Personal ledgers have no privacy, so this is a no-op there."""
+        from lark_ledger.services.privacy import PrivacyService
+
+        privacy = PrivacyService(self._session)
+        if not await privacy.privacy_enabled(context):
+            return true()
+        return or_(
+            RecurringRule.account_id.is_(None),
+            privacy.account_visible_exists(context, RecurringRule.account_id),
         )
 
     async def update(
@@ -382,6 +400,7 @@ class RecurringService:
             .where(
                 RecurringRule.id == rule_id,
                 RecurringRule.ledger_id == context.ledger_id,
+                await self._privacy_rule_scope(context),
             )
             .with_for_update()
         )

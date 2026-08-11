@@ -47,6 +47,13 @@ class AccountStatus(StrEnum):
     ARCHIVED = "archived"
 
 
+class AccountVisibility(StrEnum):
+    """Account-level privacy (P32): private accounts are visible only to their owner."""
+
+    SHARED = "shared"
+    PRIVATE = "private"
+
+
 class RecurringFrequency(StrEnum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"
@@ -341,6 +348,13 @@ class Account(Base):
         ),
         CheckConstraint("type IN ('cash', 'asset', 'liability')", name="ck_accounts_type"),
         CheckConstraint("status IN ('active', 'archived')", name="ck_accounts_status"),
+        CheckConstraint(
+            "visibility IN ('shared', 'private')", name="ck_accounts_visibility"
+        ),
+        CheckConstraint(
+            "(visibility <> 'private') OR (owner_user_id IS NOT NULL)",
+            name="ck_accounts_private_owner",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -361,6 +375,15 @@ class Account(Base):
     )
     is_default: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default=text("false")
+    )
+    visibility: Mapped[str] = mapped_column(
+        String(16),
+        nullable=False,
+        default=AccountVisibility.SHARED.value,
+        server_default=text("'shared'"),
+    )
+    owner_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

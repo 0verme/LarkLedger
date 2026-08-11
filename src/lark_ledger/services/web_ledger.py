@@ -70,6 +70,9 @@ class WebLedgerQueryService:
         order: SortOrder = "desc",
     ) -> EntryPage:
         filters = [self._entry_scope(user_open_id)]
+        privacy = await self._privacy_entry_scope(user_open_id)
+        if privacy is not None:
+            filters.append(privacy)
         if deleted == "active":
             filters.append(LedgerEntry.deleted_at.is_(None))
         elif deleted == "deleted":
@@ -145,12 +148,11 @@ class WebLedgerQueryService:
         self, user_open_id: RequestContext | str, short_id: str
     ) -> EntryDetail | None:
         code = normalize_entry_ref(short_id)
-        entry = await self._session.scalar(
-            select(LedgerEntry).where(
-                self._entry_scope(user_open_id),
-                LedgerEntry.short_id == code,
-            )
-        )
+        filters = [self._entry_scope(user_open_id), LedgerEntry.short_id == code]
+        privacy = await self._privacy_entry_scope(user_open_id)
+        if privacy is not None:
+            filters.append(privacy)
+        entry = await self._session.scalar(select(LedgerEntry).where(*filters))
         if entry is None:
             return None
         revisions = (
@@ -202,6 +204,9 @@ class WebLedgerQueryService:
             self._entry_scope(user_open_id),
             LedgerEntry.deleted_at.is_(None),
         )
+        privacy = await self._privacy_entry_scope(user_open_id)
+        if privacy is not None:
+            active = and_(active, privacy)
         totals = (
             await self._session.execute(
                 select(
@@ -245,13 +250,22 @@ class WebLedgerQueryService:
         recent_payer_names = await self._payer_names(
             user_open_id, {row.paid_by_user_id for row in recent}
         )
+        pending_filters = [
+            self._pending_scope(user_open_id),
+            PendingCommand.status == PendingStatus.PENDING.value,
+            PendingCommand.expires_at > current.astimezone(UTC),
+        ]
+        if isinstance(user_open_id, RequestContext):
+            from lark_ledger.services.privacy import PrivacyService
+
+            pending_privacy = await PrivacyService(self._session).pending_visibility_scope(
+                user_open_id
+            )
+            if pending_privacy is not None:
+                pending_filters.append(pending_privacy)
         pending_count = int(
             await self._session.scalar(
-                select(func.count()).select_from(PendingCommand).where(
-                    self._pending_scope(user_open_id),
-                    PendingCommand.status == PendingStatus.PENDING.value,
-                    PendingCommand.expires_at > current.astimezone(UTC),
-                )
+                select(func.count()).select_from(PendingCommand).where(*pending_filters)
             )
             or 0
         )
@@ -408,6 +422,14 @@ class WebLedgerQueryService:
                 PendingCommand.user_open_id == legacy,
             ),
         )
+
+    async def _privacy_entry_scope(self, scope: RequestContext | str) -> Any | None:
+        """P32: privacy filter for entry queries, ``None`` when not applicable."""
+        if not isinstance(scope, RequestContext):
+            return None
+        from lark_ledger.services.privacy import PrivacyService
+
+        return await PrivacyService(self._session).entry_visibility_scope(scope)
 
     @staticmethod
     def _entry(

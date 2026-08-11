@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from lark_ledger.context import RequestContext
@@ -144,12 +144,14 @@ class TransferService:
 
     async def get(self, context: RequestContext, transfer_id: uuid.UUID) -> Transfer:
         await self._authorization.get_accessible(context.actor_user_id, context.ledger_id)
-        row = await self._session.scalar(
-            select(Transfer).where(
-                Transfer.id == transfer_id,
-                Transfer.ledger_id == context.ledger_id,
-            )
-        )
+        filters = [
+            Transfer.id == transfer_id,
+            Transfer.ledger_id == context.ledger_id,
+        ]
+        visible = await self._both_accounts_visible(context)
+        if visible is not None:
+            filters.append(visible)
+        row = await self._session.scalar(select(Transfer).where(*filters))
         if row is None:
             raise TransferNotFoundError("转账不存在或不属于当前账本")
         return row
@@ -158,11 +160,13 @@ class TransferService:
         self, context: RequestContext, *, page: int, page_size: int
     ) -> tuple[list[Transfer], int]:
         await self._authorization.get_accessible(context.actor_user_id, context.ledger_id)
+        filters = [Transfer.ledger_id == context.ledger_id]
+        visible = await self._both_accounts_visible(context)
+        if visible is not None:
+            filters.append(visible)
         total = int(
             await self._session.scalar(
-                select(func.count()).select_from(Transfer).where(
-                    Transfer.ledger_id == context.ledger_id
-                )
+                select(func.count()).select_from(Transfer).where(*filters)
             )
             or 0
         )
@@ -170,7 +174,7 @@ class TransferService:
             (
                 await self._session.scalars(
                     select(Transfer)
-                    .where(Transfer.ledger_id == context.ledger_id)
+                    .where(*filters)
                     .order_by(
                         Transfer.occurred_at.desc(),
                         Transfer.created_at.desc(),
@@ -183,6 +187,18 @@ class TransferService:
             .all()
         )
         return list(rows), total
+
+    async def _both_accounts_visible(self, context: RequestContext) -> Any | None:
+        """P32: a transfer is visible iff the actor can see both accounts."""
+        from lark_ledger.services.privacy import PrivacyService
+
+        privacy = PrivacyService(self._session)
+        if not await privacy.privacy_enabled(context):
+            return None
+        return and_(
+            privacy.account_visible_exists(context, Transfer.from_account_id),
+            privacy.account_visible_exists(context, Transfer.to_account_id),
+        )
 
     async def revisions(
         self, context: RequestContext, transfer_id: uuid.UUID

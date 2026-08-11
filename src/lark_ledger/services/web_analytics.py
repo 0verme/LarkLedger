@@ -54,6 +54,18 @@ class WebAnalyticsQueryService:
         list[AnalyticsMonthlyPoint],
     ]:
         start, end = local_date_bounds(start_date, end_date, self._timezone)
+        filters = [
+            self._entry_scope(user_open_id),
+            LedgerEntry.deleted_at.is_(None),
+            LedgerEntry.occurred_at >= start,
+            LedgerEntry.occurred_at < end,
+        ]
+        if isinstance(user_open_id, RequestContext):
+            from lark_ledger.services.privacy import PrivacyService
+
+            privacy = await PrivacyService(self._session).entry_visibility_scope(user_open_id)
+            if privacy is not None:
+                filters.append(privacy)
         rows = (
             await self._session.execute(
                 select(
@@ -61,12 +73,7 @@ class WebAnalyticsQueryService:
                     LedgerEntry.direction,
                     LedgerEntry.category,
                     LedgerEntry.occurred_at,
-                ).where(
-                    self._entry_scope(user_open_id),
-                    LedgerEntry.deleted_at.is_(None),
-                    LedgerEntry.occurred_at >= start,
-                    LedgerEntry.occurred_at < end,
-                )
+                ).where(*filters)
             )
         ).all()
         income = Decimal("0")

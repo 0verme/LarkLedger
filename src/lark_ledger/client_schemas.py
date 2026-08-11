@@ -74,6 +74,8 @@ class ClientAccount(BaseModel):
     opening_balance: Decimal
     status: AccountStatus
     is_default: bool
+    visibility: str = "shared"
+    owner_user_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -91,6 +93,12 @@ class ClientAccountCreateRequest(BaseModel):
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     opening_balance: Decimal = Field(default=Decimal("0"), max_digits=14, decimal_places=2)
     is_default: bool = False
+    visibility: str = Field(default="shared", pattern="^(shared|private)$")
+
+
+class AccountVisibilityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    visibility: str = Field(pattern="^(shared|private)$")
 
 
 class ClientAccountRenameRequest(BaseModel):

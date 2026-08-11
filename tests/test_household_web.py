@@ -209,3 +209,52 @@ async def test_overview_web(factory: async_sessionmaker[AsyncSession]) -> None:
         assert body["recent_transactions"][0]["payer_name"] == "B"
     finally:
         await client.aclose()
+
+
+async def test_account_visibility_web(factory: async_sessionmaker[AsyncSession]) -> None:
+    """P32: private accounts hide from other members via the web API; the
+    visibility endpoint is owner-only."""
+    ids = await _household(factory)
+    owner_client, owner_csrf = await _client(factory, "ou_owner", ledger_id=ids["ledger_id"])
+    member_client, member_csrf = await _client(factory, "ou_member", ledger_id=ids["ledger_id"])
+    headers = {"X-CSRF-Token": owner_csrf}
+    try:
+        # Owner creates a private account.
+        created = await owner_client.post(
+            "/api/web/v1/accounts",
+            headers=headers,
+            json={"name": "私房钱", "type": "cash", "visibility": "private"},
+        )
+        assert created.status_code == 201
+        account_id = created.json()["id"]
+        assert created.json()["visibility"] == "private"
+        assert created.json()["owner_user_id"] == ids["owner_user_id"]
+
+        # Member's account list hides it.
+        member_accounts = await member_client.get("/api/web/v1/accounts")
+        assert member_accounts.status_code == 200
+        assert account_id not in {
+            item["id"] for item in member_accounts.json()["items"]
+        }
+        hidden = await member_client.get(f"/api/web/v1/accounts/{account_id}")
+        assert hidden.status_code == 404
+
+        # A member cannot toggle it; the owner can flip it back to shared.
+        denied = await member_client.post(
+            f"/api/web/v1/accounts/{account_id}/visibility",
+            headers={"X-CSRF-Token": member_csrf},
+            json={"visibility": "shared"},
+        )
+        assert denied.status_code == 404
+        toggled = await owner_client.post(
+            f"/api/web/v1/accounts/{account_id}/visibility",
+            headers=headers,
+            json={"visibility": "shared"},
+        )
+        assert toggled.status_code == 200
+        assert toggled.json()["visibility"] == "shared"
+        member_accounts = await member_client.get("/api/web/v1/accounts")
+        assert account_id in {item["id"] for item in member_accounts.json()["items"]}
+    finally:
+        await owner_client.aclose()
+        await member_client.aclose()

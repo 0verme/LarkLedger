@@ -39,6 +39,7 @@ from lark_ledger.models import (
 from lark_ledger.services.budget import BudgetService, normalize_period, period_key
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.member_stats import MemberStatsService
+from lark_ledger.services.privacy import PrivacyService
 from lark_ledger.services.transfers import TransferService
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 from lark_ledger.web_schemas import (
@@ -89,6 +90,10 @@ class HouseholdOverviewService:
         target = normalize_period(period or current.date())
         period_start, period_end = self._period_bounds(target)
         entry_scope = self._entry_scope(context)
+        if privacy_filter is None:
+            privacy_filter = await PrivacyService(self._session).entry_visibility_scope(
+                context
+            )
 
         active_entries = [
             entry_scope,
@@ -106,7 +111,7 @@ class HouseholdOverviewService:
         top_categories = await self._top_categories(active_entries, expense_total)
         budget = await self._budget_overview(context, target, now)
         balances = await self._account_balances(context)
-        upcoming = await self._upcoming_recurring(context)
+        upcoming = await self._upcoming_recurring(context, privacy_filter)
         recent = await self._recent_transactions(context, privacy_filter)
 
         return HouseholdOverview(
@@ -203,18 +208,28 @@ class HouseholdOverviewService:
         )
 
     async def _upcoming_recurring(
-        self, context: RequestContext
+        self, context: RequestContext, privacy_filter: Any | None
     ) -> list[UpcomingRecurringItem]:
         today = current_local_date(self._timezone)
+        filters: list[Any] = [
+            RecurringRule.ledger_id == context.ledger_id,
+            RecurringRule.status == RecurringRuleStatus.ACTIVE.value,
+            RecurringRule.next_occurrence >= today,
+        ]
+        if privacy_filter is not None:
+            # Privacy filters entries; upcoming rules are filtered by their own
+            # account visibility so private-account rules never surface.
+            from lark_ledger.services.recurring import RecurringService
+
+            rule_scope = await RecurringService(
+                self._session, currency=self._currency, timezone=str(self._timezone)
+            )._privacy_rule_scope(context)
+            filters.append(rule_scope)
         rules = list(
             (
                 await self._session.scalars(
                     select(RecurringRule)
-                    .where(
-                        RecurringRule.ledger_id == context.ledger_id,
-                        RecurringRule.status == RecurringRuleStatus.ACTIVE.value,
-                        RecurringRule.next_occurrence >= today,
-                    )
+                    .where(*filters)
                     .order_by(RecurringRule.next_occurrence, RecurringRule.created_at)
                     .limit(UPCOMING_RECURRING_LIMIT)
                 )

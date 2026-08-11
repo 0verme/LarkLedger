@@ -226,6 +226,14 @@ class LedgerService(_EntryMixin, _BudgetMixin, _ReportMixin, _AccountQueryMixin)
             ),
         )
 
+    async def _privacy_entry_filter(self) -> Any | None:
+        """P32: privacy filter for entry reads/mutations, ``None`` when not applicable."""
+        from lark_ledger.services.privacy import PrivacyService
+
+        return await PrivacyService(self.session).entry_visibility_scope(
+            self._request_context()
+        )
+
     def _budget_scope(self, legacy_subject: str) -> Any:
         return or_(
             CategoryBudget.ledger_id == self._request_context().ledger_id,

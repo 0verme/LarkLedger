@@ -258,14 +258,23 @@ class BudgetService:
         self, scope: RequestContext | str, start: datetime, end: datetime
     ) -> dict[str, Decimal]:
         """Sum expense amounts per category for ``[start, end)`` in one query."""
+        filters = [
+            self._entry_scope(scope),
+            LedgerEntry.direction == Direction.EXPENSE,
+            LedgerEntry.deleted_at.is_(None),
+            LedgerEntry.occurred_at >= start,
+            LedgerEntry.occurred_at < end,
+        ]
+        if isinstance(scope, RequestContext):
+            from lark_ledger.services.privacy import PrivacyService
+
+            privacy = await PrivacyService(self._session).entry_visibility_scope(scope)
+            if privacy is not None:
+                filters.append(privacy)
         rows = (
             await self._session.execute(
                 select(LedgerEntry.category, func.sum(LedgerEntry.amount).label("total")).where(
-                    self._entry_scope(scope),
-                    LedgerEntry.direction == Direction.EXPENSE,
-                    LedgerEntry.deleted_at.is_(None),
-                    LedgerEntry.occurred_at >= start,
-                    LedgerEntry.occurred_at < end,
+                    *filters
                 ).group_by(LedgerEntry.category)
             )
         ).all()
