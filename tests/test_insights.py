@@ -349,22 +349,28 @@ async def test_i03_upcoming_recurring_grouped_by_currency(session: AsyncSession)
     context = _context(owner)
     account = await _account(session, context, "现金")
     service = RecurringService(session, currency="CNY", timezone=TZ)
-    today = datetime(2026, 8, 8, 4, tzinfo=UTC).date()
+    # Fixed business date so the validation window never depends on wall-clock
+    # time (the WSL test clock advances past the sample dates over time).
+    fixed_now = datetime(2026, 8, 8, 4, tzinfo=UTC)
+    today = fixed_now.date()
     await service.create(
         context, transaction_type=Direction.EXPENSE, amount=Decimal("88"), currency=None,
         category="娱乐", description="Netflix", frequency=RecurringFrequency.MONTHLY,
         interval=1, next_occurrence=today + timedelta(days=5), account_id=account.id,
+        now=fixed_now,
     )
     await service.create(
         context, transaction_type=Direction.EXPENSE, amount=Decimal("3500"), currency=None,
         category="居住", description="房租", frequency=RecurringFrequency.MONTHLY,
         interval=1, next_occurrence=today + timedelta(days=12), account_id=account.id,
+        now=fixed_now,
     )
     # Disabled rule outside the window must never count.
     await service.create(
         context, transaction_type=Direction.EXPENSE, amount=Decimal("999999"), currency=None,
         category="测试", description="禁用项", frequency=RecurringFrequency.MONTHLY,
         interval=1, next_occurrence=today + timedelta(days=3), account_id=account.id,
+        now=fixed_now,
     )
     await session.commit()
     disabled = list(
