@@ -21,6 +21,8 @@ export type Entry = {
   deleted_at: string | null;
   account_id: string;
   account_name: string | null;
+  payer_user_id: string;
+  payer_name: string | null;
 };
 
 export type EntryPage = {
@@ -245,6 +247,44 @@ export type AnalyticsOverview = { summary: AnalyticsSummary; trend: AnalyticsTre
 export type BudgetStatus = "none" | "normal" | "warning" | "exceeded";
 export type BudgetItem = { category: string; amount: string | null; spent: string; remaining: string | null; usage_rate: string | null; status: BudgetStatus };
 export type BudgetOverview = { currency: string; period: string; total_budget: string | null; total_spent: string; total_remaining: string | null; usage_rate: string | null; status: BudgetStatus; total_limit_set: boolean; allocated: string; unallocated: string | null; items: BudgetItem[] };
+
+export type MemberStats = {
+  user_id: string;
+  display_name: string;
+  alias: string | null;
+  role: "owner" | "member";
+  expense_total: string;
+  income_total: string;
+  transaction_count: number;
+};
+export type OverviewBudget = { total_budget: string | null; total_spent: string; total_remaining: string | null; usage_rate: string | null; status: BudgetStatus };
+export type AccountBalanceSummary = { currency: string; total_assets: string; total_liabilities: string; net_assets: string; account_count: number };
+export type UpcomingRecurringItem = {
+  rule_id: string;
+  transaction_type: "expense" | "income";
+  amount: string;
+  currency: string;
+  category: string;
+  description: string;
+  frequency: RecurringFrequency;
+  next_occurrence: string;
+  account_name: string | null;
+};
+export type HouseholdOverview = {
+  ledger_id: string;
+  ledger_name: string;
+  ledger_kind: "personal" | "household_shared" | "business";
+  period: string;
+  income_total: string;
+  expense_total: string;
+  net_total: string;
+  budget: OverviewBudget;
+  account_balance_summary: AccountBalanceSummary;
+  member_contributions: MemberStats[];
+  top_categories: Array<{ category: string; amount: string; ratio: string }>;
+  upcoming_recurring: UpcomingRecurringItem[];
+  recent_transactions: Entry[];
+};
 export type ReportData = { range_start: string; range_end: string; currency: string; income_total: string; expense_total: string; balance: string; entry_count: number; categories: Array<{ category: string; amount: string }>; trend: Array<{ period: string; amount: string }>; trend_granularity: "day" | "month" };
 
 export type RecurringFrequency = "weekly" | "monthly" | "yearly";

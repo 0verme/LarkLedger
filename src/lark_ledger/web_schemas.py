@@ -153,6 +153,64 @@ class MemberStats(BaseModel):
     transaction_count: int
 
 
+class OverviewBudget(BaseModel):
+    """Period budget progress for the overview (P31)."""
+
+    total_budget: Decimal | None
+    total_spent: Decimal
+    total_remaining: Decimal | None
+    usage_rate: Decimal | None
+    status: BudgetStatus
+
+
+class AccountBalanceSummary(BaseModel):
+    """Privacy-filtered account balances for the overview (P31)."""
+
+    currency: str
+    total_assets: Decimal
+    total_liabilities: Decimal
+    net_assets: Decimal
+    account_count: int
+
+
+class UpcomingRecurringItem(BaseModel):
+    """One active recurring rule coming due (P31)."""
+
+    rule_id: str
+    transaction_type: str
+    amount: Decimal
+    currency: str
+    category: str
+    description: str
+    frequency: str
+    next_occurrence: date
+    account_name: str | None = None
+
+
+class HouseholdOverview(BaseModel):
+    """One deterministic, ledger-scoped home view for the Web dashboard (P31).
+
+    Every figure is computed by the backend from the live ledger facts with the
+    same口径 as the rest of the app: income / expense only by ``direction``,
+    transfers never counted, pending recurring not counted until confirmed.
+    For personal ledgers ``member_contributions`` contains the single owner.
+    """
+
+    ledger_id: str
+    ledger_name: str
+    ledger_kind: str
+    period: str
+    income_total: Decimal
+    expense_total: Decimal
+    net_total: Decimal
+    budget: OverviewBudget
+    account_balance_summary: AccountBalanceSummary
+    member_contributions: list[MemberStats]
+    top_categories: list[CategoryValue]
+    upcoming_recurring: list[UpcomingRecurringItem]
+    recent_transactions: list[WebEntry]
+
+
 class WebHousehold(BaseModel):
     id: str
     name: str

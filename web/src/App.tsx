@@ -12,6 +12,7 @@ import {
   Download,
   FileText,
   HeartPulse,
+  Home,
   Landmark,
   LogOut,
   Menu,
@@ -33,6 +34,7 @@ import { EntriesPage } from "./pages/EntriesPage";
 import { AnalyticsPage, BudgetsPage, ExportsPage, ReportsPage } from "./pages/FinancePages";
 import { PendingPage } from "./pages/PendingPage";
 import { HouseholdsPage } from "./pages/HouseholdsPage";
+import { OverviewPage } from "./pages/OverviewPage";
 import { RecurringRulesPage } from "./pages/RecurringRulesPage";
 import { AboutPage, ConfigPage } from "./pages/SystemPages";
 
@@ -42,6 +44,7 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
   {
     items: [
       { label: "总览", path: "/", icon: BarChart3 },
+      { label: "家庭总览", path: "/overview", icon: Home },
       { label: "账目", path: "/entries", icon: BookOpen },
       { label: "账户", path: "/accounts", icon: Landmark },
       { label: "转账", path: "/transfers", icon: ArrowLeftRight },
@@ -107,6 +110,7 @@ function LoadingScreen() {
 
 function pageElement(item: NavItem) {
   if (item.path === "/") return <DashboardPage />;
+  if (item.path === "/overview") return <OverviewPage />;
   if (item.path === "/entries") return <EntriesPage />;
   if (item.path === "/accounts") return <AccountsPage />;
   if (item.path === "/transfers") return <TransfersPage />;

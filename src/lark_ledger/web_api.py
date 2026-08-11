@@ -120,6 +120,7 @@ from lark_ledger.web_schemas import (
     HouseholdCreateRequest,
     HouseholdInviteRequest,
     HouseholdList,
+    HouseholdOverview,
     LedgerList,
     LedgerNameRequest,
     MemberAliasRequest,
@@ -1217,6 +1218,21 @@ async def dashboard(
         ).dashboard(
             principal.request_context
         )
+
+
+@router.get("/overview", response_model=HouseholdOverview)
+async def overview(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+    period: str | None = None,
+) -> HouseholdOverview:
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    target = _budget_period(period)
+    async with factory() as session:
+        return await ClientApplicationService(
+            session, currency=settings.currency, timezone=settings.timezone
+        ).household_overview(principal.request_context, period=target)
 
 
 @router.get("/entries", response_model=EntryPage)

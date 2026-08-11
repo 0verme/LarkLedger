@@ -243,8 +243,33 @@ describe("dashboard routing and protection", () => {
     expect(await screen.findByLabelText("账户")).toHaveValue("account-1");
   });
 
-  it("lists and creates recurring rules", async () => {
-    const rule = { id: "rule-1", ledger_id: "ledger-1", transaction_type: "expense", amount: "3500.00", currency: "CNY", category: "房租", description: "房租", frequency: "monthly", interval: 1, next_occurrence: "2026-09-08", status: "active", account_id: "account-1", account_name: "默认账户", pending_count: 1, created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z" };
+  it("renders the household overview", async () => {
+    const entry = { id: "1", short_id: "A83F2", amount: "120.00", currency: "CNY", direction: "EXPENSE", category: "餐饮", note: "买菜", occurred_at: "2026-08-08T04:00:00Z", source_type: "text", created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z", deleted_at: null, account_id: "account-1", account_name: "默认账户", payer_user_id: "user-b", payer_name: "B" };
+    const overview = {
+      ledger_id: "ledger-1", ledger_name: "小家公共账本", ledger_kind: "household_shared", period: "2026-08",
+      income_total: "500", expense_total: "120", net_total: "380",
+      budget: { total_budget: "1000", total_spent: "120", total_remaining: "880", usage_rate: "12", status: "normal" },
+      account_balance_summary: { currency: "CNY", total_assets: "1000", total_liabilities: "200", net_assets: "800", account_count: 2 },
+      member_contributions: [{ user_id: "user-a", display_name: "A", alias: null, role: "owner", expense_total: "0", income_total: "500", transaction_count: 1 }, { user_id: "user-b", display_name: "B", alias: "老婆", role: "member", expense_total: "120", income_total: "0", transaction_count: 1 }],
+      top_categories: [{ category: "餐饮", amount: "120", ratio: "100" }],
+      upcoming_recurring: [{ rule_id: "rule-1", transaction_type: "expense", amount: "300", currency: "CNY", category: "居住", description: "房租", frequency: "monthly", next_occurrence: "2026-09-01", account_name: "默认账户" }],
+      recent_transactions: [entry],
+    };
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/me")) return Promise.resolve(Response.json({ open_id: "ou_user", name: "小飞", avatar_url: "", role: "USER", expires_at: "2026-08-08T12:00:00+00:00" }));
+      if (url.endsWith("/overview")) return Promise.resolve(Response.json(overview));
+      return Promise.resolve(Response.json({ items: [], page: 1, page_size: 25, total: 0, pages: 0 }));
+    }));
+    renderApp("/overview");
+    expect(await screen.findByRole("heading", { name: /小家公共账本/ })).toBeInTheDocument();
+    expect(await screen.findByText("老婆")).toBeInTheDocument();
+    expect(screen.getByText("房租")).toBeInTheDocument();
+    expect(screen.getAllByText(/¥120\.00/).length).toBeGreaterThan(0);
+    expect(screen.getByRole("link", { name: /A83F2/ })).toBeInTheDocument();
+  });
+
+  it("lists and creates recurring rules", async () => {    const rule = { id: "rule-1", ledger_id: "ledger-1", transaction_type: "expense", amount: "3500.00", currency: "CNY", category: "房租", description: "房租", frequency: "monthly", interval: 1, next_occurrence: "2026-09-08", status: "active", account_id: "account-1", account_name: "默认账户", pending_count: 1, created_at: "2026-08-08T04:00:00Z", updated_at: "2026-08-08T04:00:00Z" };
     const created = { ...rule, id: "rule-2", amount: "100.00", category: "健身房", description: "健身房", next_occurrence: "2026-08-16", frequency: "weekly" };
     let rules: Array<typeof rule> = [rule];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

@@ -51,6 +51,7 @@ from lark_ledger.web_schemas import (
     EntryDetail,
     EntryPage,
     EntrySort,
+    HouseholdOverview,
     MemberStats,
     PendingDetail,
     PendingGroup,
@@ -294,6 +295,17 @@ class ClientApplicationService:
         return await WebLedgerQueryService(
             self._session, timezone=self._timezone, currency=self._currency
         ).dashboard(context)
+
+    async def household_overview(
+        self, context: RequestContext, *, period: date | None = None
+    ) -> HouseholdOverview:
+        """Deterministic overview for the current ledger (P31)."""
+        await self.authorize(context)
+        from lark_ledger.services.household_overview import HouseholdOverviewService
+
+        return await HouseholdOverviewService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).overview(context, period=period)
 
     async def list_entries(self, context: RequestContext, query: EntryQuery) -> EntryPage:
         await self.authorize(context)

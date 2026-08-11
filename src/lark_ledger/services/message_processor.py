@@ -49,6 +49,7 @@ from lark_ledger.outbox import (
     build_file_payload,
     build_text_payload,
 )
+from lark_ledger.overview_commands import try_parse_overview_command
 from lark_ledger.recurring_commands import (
     RecurringCommand,
     RecurringCommandAction,
@@ -70,6 +71,7 @@ from lark_ledger.services.household_management import (
     HouseholdManagementError,
 )
 from lark_ledger.services.identity import IdentityService
+from lark_ledger.services.ledger_authorization import LedgerAuthorizationError
 from lark_ledger.services.ledger_management import LedgerManagementError
 from lark_ledger.services.member_resolution import PayerResolutionError
 from lark_ledger.services.outbox import ReplyOutboxStore
@@ -89,6 +91,7 @@ from lark_ledger.services.risk import MediaKind, RiskAssessment, RiskDecision, R
 from lark_ledger.services.transfers import AccountHintAmbiguousError
 from lark_ledger.services.worker import generate_owner_id
 from lark_ledger.transfer_commands import try_parse_transfer_command
+from lark_ledger.web_schemas import HouseholdOverview
 
 MAX_POST_IMAGES = 5
 
@@ -333,6 +336,19 @@ class MessageProcessor:
                 account_command = try_parse_account_command(text) if command is None else None
                 if account_command is not None:
                     command = account_command
+                # Household overview (P31): deterministic 概览 / 家庭概览.
+                if command is None:
+                    overview_command = try_parse_overview_command(text)
+                    if overview_command is not None:
+                        stage = "overview"
+                        outbox_rows = await self._handle_overview_command(
+                            message_id=message_id,
+                            user_open_id=user_open_id,
+                            event_id=event_id,
+                        )
+                        stage = "reply"
+                        await self._signal_or_deliver(outbox_rows)
+                        return
             if command is None:
                 command = await self.interpreter.interpret(text, now=now, images=images)
                 bound = bind_entry_refs_from_message(command, text)
@@ -971,6 +987,83 @@ class MessageProcessor:
                     parent.business_committed_at = datetime.now(UTC)
             await session.commit()
             return [row]
+
+    async def _handle_overview_command(
+        self,
+        *,
+        message_id: str,
+        user_open_id: str,
+        event_id: str | None,
+    ) -> list[ReplyOutbox]:
+        """Render a compact deterministic overview for the current ledger (P31)."""
+        async with self.session_factory() as session:
+            context = await IdentityService(
+                session,
+                currency=self.settings.currency,
+                timezone=self.settings.timezone,
+            ).resolve_or_bootstrap(channel="feishu", external_subject_id=user_open_id)
+            application = ClientApplicationService(
+                session, currency=self.settings.currency, timezone=self.settings.timezone
+            )
+            try:
+                overview = await application.household_overview(context)
+                reply_text = self._overview_message(overview)
+            except LedgerAuthorizationError:
+                reply_text = "当前账本不可访问，请先切换到可用的账本。"
+            except Exception:
+                logger.exception("household overview generation failed")
+                reply_text = "无法生成概览，请稍后重试。"
+
+            row = self._make_outbox_row(
+                event_id=event_id,
+                message_id=message_id,
+                reply_type=ReplyType.TEXT,
+                sequence=0,
+                payload=build_text_payload(reply_text),
+                blob=None,
+            )
+            session.add(row)
+            if event_id is not None:
+                parent = await session.get(ProcessedEvent, event_id)
+                if parent is not None:
+                    parent.business_committed_at = datetime.now(UTC)
+            await session.commit()
+            return [row]
+
+    def _overview_message(self, overview: HouseholdOverview) -> str:
+        lines = [
+            f"{overview.ledger_name} · {overview.period} 概览",
+            (
+                f"本月支出 {self._format_money(overview.expense_total)} · "
+                f"收入 {self._format_money(overview.income_total)} · "
+                f"结余 {self._format_money(overview.net_total)}"
+            ),
+        ]
+        budget = overview.budget
+        if budget.total_budget is not None:
+            usage = (
+                f"{budget.usage_rate:.1f}%"
+                if budget.usage_rate is not None
+                else "未设置预算使用率"
+            )
+            lines.append(
+                f"预算 {self._format_money(budget.total_budget)} · "
+                f"已用 {self._format_money(budget.total_spent)} · {usage}"
+            )
+        if overview.member_contributions:
+            lines.append("成员支出：")
+            for member in overview.member_contributions:
+                name = member.alias or member.display_name or member.user_id[:8]
+                lines.append(f"· {name}：{self._format_money(member.expense_total)}")
+        if overview.upcoming_recurring:
+            lines.append("未来周期：")
+            for upcoming in overview.upcoming_recurring[:3]:
+                label = upcoming.description or upcoming.category
+                lines.append(
+                    f"· {label}：{self._format_money(upcoming.amount)}"
+                    f"（{upcoming.next_occurrence}）"
+                )
+        return "\n".join(lines)
 
     async def _handle_recurring_command(
         self,

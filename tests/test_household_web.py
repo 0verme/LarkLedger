@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -101,10 +102,18 @@ async def _household(factory: async_sessionmaker[AsyncSession]) -> dict[str, str
 
 
 async def _client(
-    factory: async_sessionmaker[AsyncSession], open_id: str
+    factory: async_sessionmaker[AsyncSession], open_id: str, ledger_id: str | None = None
 ) -> tuple[httpx.AsyncClient, str]:
     auth = DashboardAuthService(settings(), factory)
     created = await auth.create_session({"open_id": open_id, "name": "用户", "avatar_url": ""})
+    if ledger_id is not None:
+        from lark_ledger.models import DashboardSession
+
+        async with factory() as session:
+            row = await session.get(DashboardSession, uuid.UUID(created.principal.session_id))
+            assert row is not None
+            row.ledger_id = uuid.UUID(ledger_id)
+            await session.commit()
     app = FastAPI()
     app.state.settings = settings()
     app.state.session_factory = factory
@@ -182,5 +191,21 @@ async def test_member_alias_requires_owner(
             json={"alias": "家长"},
         )
         assert response.status_code == 403
+    finally:
+        await client.aclose()
+
+
+async def test_overview_web(factory: async_sessionmaker[AsyncSession]) -> None:
+    ids = await _household(factory)
+    client, _ = await _client(factory, "ou_owner", ledger_id=ids["ledger_id"])
+    try:
+        response = await client.get("/api/web/v1/overview?period=2026-08")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["period"] == "2026-08"
+        assert body["expense_total"] == "120.00"
+        assert body["ledger_kind"] == "household_shared"
+        assert body["member_contributions"][0]["user_id"] == ids["member_user_id"]
+        assert body["recent_transactions"][0]["payer_name"] == "B"
     finally:
         await client.aclose()
