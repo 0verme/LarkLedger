@@ -386,6 +386,20 @@ export type Insight = {
 };
 export type InsightList = { insights: Insight[] };
 
+export type ClientCredentialScope = "ledger:read" | "ledger:write" | "pending:write";
+export type ClientCredential = {
+  id: string;
+  name: string;
+  token_prefix: string;
+  scopes: string[];
+  created_at: string;
+  last_used_at: string | null;
+  expires_at: string | null;
+  revoked_at: string | null;
+};
+export type ClientCredentialCreated = ClientCredential & { token: string };
+export type ClientCredentialList = { items: ClientCredential[] };
+
 export const money = (value: string | number) =>
   new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
 

@@ -13,6 +13,7 @@ import {
   FileText,
   HeartPulse,
   Home,
+  KeyRound,
   Landmark,
   LogOut,
   Menu,
@@ -39,6 +40,7 @@ import { HouseholdsPage } from "./pages/HouseholdsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { RecurringRulesPage } from "./pages/RecurringRulesPage";
 import { AboutPage, ConfigPage } from "./pages/SystemPages";
+import { ApiTokensPage } from "./pages/ApiTokensPage";
 
 type NavItem = { label: string; path: string; icon: typeof Activity; admin?: boolean };
 
@@ -78,6 +80,7 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
     items: [
       { label: "健康状态", path: "/admin/health", icon: HeartPulse, admin: true },
       { label: "配置", path: "/admin/config", icon: Settings, admin: true },
+      { label: "API 令牌", path: "/api-tokens", icon: KeyRound },
       { label: "关于", path: "/about", icon: ShieldCheck },
     ],
   },
@@ -130,6 +133,7 @@ function pageElement(item: NavItem) {
   if (item.path === "/admin/dead") return <DeadPage />;
   if (item.path === "/admin/health") return <HealthPage />;
   if (item.path === "/admin/config") return <ConfigPage />;
+  if (item.path === "/api-tokens") return <ApiTokensPage />;
   return <AboutPage />;
 }
 
