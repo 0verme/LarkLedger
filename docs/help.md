@@ -6,18 +6,20 @@
 
 ## Client API（v1）
 
-机器客户端使用 `/api/client/v1/*`，响应是稳定的结构化 JSON，不以 AI 展示文本作为业务结果。Bearer 凭证需要先在已登录的 Web Dashboard 会话中通过 `POST /api/web/v1/client-credentials` 创建；该请求仍受 Cookie + CSRF 保护。明文凭证只在创建响应中出现一次，服务端仅保存摘要。浏览器 Session Cookie 不能代替 Bearer，Bearer 也不能绕过 Web CSRF。
+机器客户端使用通道无关的稳定契约 `/api/v1/*`（v0.9.0 起正式；`/api/client/v1/*` 为兼容别名，同一组 handler）。响应是稳定的结构化 JSON，不以 AI 展示文本作为业务结果。Bearer 个人令牌（`llv1_`）在 Web Dashboard 的「系统 → API 令牌」页或 `POST /api/web/v1/client-credentials` 创建；该请求仍受 Cookie + CSRF 保护。明文只在创建响应中出现一次，服务端仅保存 SHA-256 摘要；令牌可设过期、可随时撤销。浏览器 Session Cookie 不能代替 Bearer，Bearer 也不能绕过 Web CSRF。完整说明见 [Client API 文档](client-api.md)。
 
 ```bash
 curl -H "Authorization: Bearer llv1_..." \
-  https://ledger.example/api/client/v1/me
+  https://ledger.example/api/v1/me
 
-curl -X POST https://ledger.example/api/client/v1/entries \
+curl -X POST https://ledger.example/api/v1/transactions \
   -H "Authorization: Bearer llv1_..." \
   -H "Idempotency-Key: device-20260809-0001" \
   -H "Content-Type: application/json" \
-  -d '{"amount":"32.00","direction":"expense","category":"餐饮","note":"午饭","occurred_at":"2026-08-09T12:00:00+08:00"}'
+  -d '{"type":"expense","amount":"32.00","currency":"CNY","category":"餐饮","note":"午饭","occurred_at":"2026-08-09T12:00:00+08:00"}'
 ```
+
+（`/api/v1/transactions` 与 `/api/v1/entries` 等价。）
 
 - 写请求必须带 1–128 字符的 `Idempotency-Key`。同一用户、操作和账本中的相同键 + 相同负载返回原业务快照；负载不同返回 `conflict`。不同用户或账本可安全复用相同键。
 - 当前账本保存在具体凭证上。`POST /ledgers/{ledger_id}/select` 会重新认证并授权；家庭成员退出或被移除后，下次请求立即回退默认个人账本。
@@ -25,7 +27,7 @@ curl -X POST https://ledger.example/api/client/v1/entries \
 - 高风险写入仍进入既有 Pending。具有 `pending:write` scope 的凭证才能确认或取消；确认时重新检查冻结的 `actor_user_id + ledger_id`，重复确认只执行一次。
 - 稳定错误码为 `authentication_required`、`permission_denied`、`resource_not_found`、`validation_error`、`conflict`、`expired`、`rate_limited`、`temporary_failure`。未授权资源统一使用不可枚举的 not-found 响应。
 
-`/api/client/v1` 在 v1 内保持向后兼容：新增字段优先为可选字段，破坏性变更通过新的版本路径发布。完整 OpenAPI 可从运行实例的 `/openapi.json` 获取。
+`/api/v1` 自 v0.9.0 起是稳定契约：新增字段优先为可选字段，破坏性变更通过新的版本路径发布。完整 OpenAPI（含 Bearer security scheme）可从运行实例的 `/openapi.json` 获取；错误 envelope 带 `request_id`，日志中只记录令牌前缀。
 
 > 群聊中请先 `@飞账`；与机器人单聊时可以直接发送。只有收到“已记录”“已修改”“已撤销”或查询结果，才表示操作成功。
 
@@ -296,7 +298,7 @@ source_type, created_at, updated_at, deleted_at
 ## P27 转账与余额
 
 - 飞书文字转账使用明确账户名，例如：`招商银行 → 支付宝 1000`。账户名不能唯一匹配时会要求确认，不会猜测账户。
-- Client / Web API：`POST /transfers`、`GET /transfers/{transfer_id}`、`POST /transfers/{transfer_id}/reverse`、`GET /accounts/{account_id}/balance`、`GET /assets`（分别位于 `/api/client/v1` 与 `/api/web/v1`）。
+- Client / Web API：`POST /transfers`、`GET /transfers/{transfer_id}`、`POST /transfers/{transfer_id}/reverse`、`GET /accounts/{account_id}/balance`、`GET /assets`（分别位于 `/api/v1`、`/api/client/v1` 与 `/api/web/v1`）。
 - Transfer 是独立账务事实，不是 income/expense LedgerEntry，因此不进入收支、分类消费与预算统计。
 - 资产/现金账户的正余额表示持有资产：`opening + income - expense + inbound transfer - outbound transfer`。
 - 负债账户的正余额表示当前负债，资金流方向取反：收入/转入降低负债，支出/转出增加负债。净资产始终为总资产减总负债。

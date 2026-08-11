@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exception_handlers import (
@@ -10,10 +10,12 @@ from fastapi.exception_handlers import (
     request_validation_exception_handler,
 )
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
 
 from lark_ledger import __version__
 from lark_ledger.api import router
+from lark_ledger.client_api import api_v1_router
 from lark_ledger.client_api import router as client_router
 from lark_ledger.config import EventMode, Settings, get_settings
 from lark_ledger.dashboard_static import DashboardSecurityHeaders, DashboardStaticFiles
@@ -180,12 +182,60 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         version=__version__,
         lifespan=lifespan,
     )
+
+    @application.middleware("http")
+    async def attach_request_id(request: Request, call_next: Any) -> Response:
+        if request.url.path.startswith("/api/v1/") or request.url.path.startswith(
+            "/api/client/v1/"
+        ):
+            import uuid as _uuid
+
+            request.state.request_id = _uuid.uuid4().hex[:16]
+        else:
+            request.state.request_id = ""
+        response = await call_next(request)
+        return cast(Response, response)
+
     application.include_router(router)
     application.include_router(client_router)
+    application.include_router(api_v1_router)
+
+    def custom_openapi() -> dict[str, Any]:
+        """Standard OpenAPI plus a documented Bearer security scheme for the
+        channel-neutral client API (``/api/v1`` and its legacy alias)."""
+        if application.openapi_schema:
+            return application.openapi_schema
+        schema = get_openapi(
+            title=application.title,
+            version=application.version,
+            description=application.description,
+            routes=application.routes,
+        )
+        schema.setdefault("components", {}).setdefault("securitySchemes", {})
+        schema["components"]["securitySchemes"]["clientBearer"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "llv1_",
+            "description": "Personal access token created in the Web dashboard; "
+            "only a digest is stored server-side.",
+        }
+        for path, operations in schema.get("paths", {}).items():
+            if path.startswith("/api/v1/") or path.startswith("/api/client/v1/"):
+                for operation in operations.values():
+                    operation["security"] = [{"clientBearer": []}]
+        application.openapi_schema = schema
+        return schema
+
+    # FastAPI documents ``app.openapi = custom_openapi``; direct assignment
+    # trips pyright's method-assign, setattr trips ruff B010 — use noqa.
+    setattr(application, "openapi", custom_openapi)  # noqa: B010
 
     @application.exception_handler(HTTPException)
     async def client_http_error(request: Request, exc: HTTPException) -> Response:
-        if not request.url.path.startswith("/api/client/v1/"):
+        if not (
+            request.url.path.startswith("/api/v1/")
+            or request.url.path.startswith("/api/client/v1/")
+        ):
             return await http_exception_handler(request, exc)
         detail: dict[str, Any] = exc.detail if isinstance(exc.detail, dict) else {}
         return JSONResponse(
@@ -194,6 +244,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": {
                     "code": detail.get("code", "temporary_failure"),
                     "message": detail.get("message", "request failed"),
+                    "request_id": getattr(request.state, "request_id", ""),
                 }
             },
             headers=exc.headers,
@@ -203,7 +254,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def client_validation_error(
         request: Request, exc: RequestValidationError
     ) -> Response:
-        if not request.url.path.startswith("/api/client/v1/"):
+        if not (
+            request.url.path.startswith("/api/v1/")
+            or request.url.path.startswith("/api/client/v1/")
+        ):
             return await request_validation_exception_handler(request, exc)
         return JSONResponse(
             status_code=422,
@@ -211,6 +265,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": {
                     "code": "validation_error",
                     "message": "request validation failed",
+                    "request_id": getattr(request.state, "request_id", ""),
                 }
             },
         )
@@ -220,13 +275,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request, exc: LedgerAuthorizationError
     ) -> JSONResponse:
         del exc
-        if request.url.path.startswith("/api/client/v1/"):
+        if request.url.path.startswith("/api/v1/") or request.url.path.startswith(
+            "/api/client/v1/"
+        ):
             return JSONResponse(
                 status_code=404,
                 content={
                     "error": {
                         "code": "resource_not_found",
                         "message": "resource not found",
+                        "request_id": getattr(request.state, "request_id", ""),
                     }
                 },
             )

@@ -10,7 +10,7 @@
 2. **个人多账本（已完成）**：创建、列出、切换默认账本；短 ID、预算、统计、Pending 和 revision
    全部按 Ledger 隔离。
 3. **家庭空间 MVP（已完成）**：Household、成员、邀请与家庭公共账本；个人账本默认不挂载、不共享，公共账本按查询无复制汇总。
-4. **统一 Client API（已完成）**：飞书与 Web 共用 `ClientApplicationService` 命令/查询边界；提供 `/api/client/v1`、可撤销 Bearer、持久化幂等快照与稳定错误契约。具体 ESP32、Telegram、微信客户端仍按后续验证顺序实施。
+4. **统一 Client API（已完成）**：飞书与 Web 共用 `ClientApplicationService` 命令/查询边界；v0.9.0 正式确立通道无关的 `/api/v1` 契约（`/api/client/v1` 为兼容别名）、可撤销 / 可过期 Bearer 令牌（只存哈希、scope 只缩权）、持久化幂等快照与稳定错误契约（含 `request_id`）。CI 有 AST 架构守护测试（Core 不 import Feishu / FastAPI）与 OpenAPI 契约测试。具体 ESP32、Telegram、微信客户端仍按后续验证顺序实施。
 5. **P26 Account Domain（已完成）**：建立账本范围内的现金、资产和负债账户；历史账目无损绑定默认账户，Web / Client API 提供账户生命周期能力，旧记账入口保持默认账户兼容。
 6. **P27 Transfer & Balance（已完成）**：独立 Transfer 事实与 append-only audit 支持同账本账户转账、撤销和 revision；余额由 opening balance、有效收支与有效转账统一派生，提供账户余额、总资产、总负债和净资产视图。转账不进入收入、支出、预算或分类消费统计。
 7. **P28 Budget 2.0（已完成）**：账本范围的月度总预算与分类预算以显式月份为周期，计划 vs 实际、剩余、使用率与 `normal / warning / exceeded / none` 状态由统一 `BudgetService` 从实时账目事实派生；`category_budgets` 保留为月度默认预算，周期预算在当月覆盖它。预算只统计支出，转账永不进入预算，删除 / 恢复 / 金额与分类修订均按当前有效事实重算。Web 按月查看与设置总 / 分类预算，飞书支持设置本月总预算与查看预算进度。
@@ -33,7 +33,7 @@
 ## 决策门槛
 
 - 个人多账本完成且现有功能无回归，才启动家庭空间。
-- Client API 与设备认证稳定，才让 ESP32 接触正式账务数据。
+- Client API 与设备认证稳定（v0.9.0 已确立 `/api/v1`、Bearer 令牌与幂等），才让 ESP32 接触正式账务数据。
 - 家庭主线稳定（v0.7.0 已含共享记账 / 付款人归属 / 家庭总览 / 账户级隐私），并有真实企业样本和会计复核者，才启动一人公司复式记账。
 - 实际出现独立发布节奏或工程成本，才讨论模块发行或拆仓。
 

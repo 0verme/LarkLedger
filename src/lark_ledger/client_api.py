@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
@@ -29,6 +30,7 @@ from lark_ledger.client_schemas import (
 )
 from lark_ledger.config import Settings
 from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirmation_code
+from lark_ledger.context import RequestContext
 from lark_ledger.models import (
     Account,
     ClientIdempotencyRecord,
@@ -37,6 +39,9 @@ from lark_ledger.models import (
     Ledger,
     LedgerEntry,
     Transfer,
+)
+from lark_ledger.models import (
+    FinancialGoal as FinancialGoalModel,
 )
 from lark_ledger.schemas import Action, ParsedCommand, ReportData
 from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
@@ -79,18 +84,27 @@ from lark_ledger.web_schemas import (
     EntrySort,
     EntryUpdateRequest,
     EntryVersionRequest,
+    GoalAccountBindingItem,
+    GoalList,
+    GoalProgress,
     HouseholdCreateRequest,
     HouseholdInviteRequest,
     HouseholdList,
+    HouseholdOverview,
+    Insight,
     PendingActionResponse,
     PendingDetail,
     PendingGroup,
     PendingPage,
+    RecurringRuleList,
     SortOrder,
     WebHousehold,
     WebHouseholdInvitation,
     WebHouseholdMember,
     WebLedger,
+)
+from lark_ledger.web_schemas import (
+    FinancialGoal as FinancialGoalView,
 )
 
 router = APIRouter(prefix="/api/client/v1", tags=["client-v1"])
@@ -1114,6 +1128,7 @@ async def dashboard(
 
 
 @router.get("/entries", response_model=EntryPage, responses=ERRORS)
+@router.get("/transactions", response_model=EntryPage, responses=ERRORS)
 async def entries(
     request: Request,
     principal: Annotated[ClientPrincipal, Depends(client_principal)],
@@ -1150,6 +1165,7 @@ async def entries(
 
 
 @router.post("/entries", response_model=ClientCommandResult, status_code=201, responses=ERRORS)
+@router.post("/transactions", response_model=ClientCommandResult, status_code=201, responses=ERRORS)
 async def create_entry(
     payload: ClientEntryCreateRequest,
     request: Request,
@@ -1215,13 +1231,41 @@ async def create_entry(
         return ClientCommandResult.model_validate(data)
 
 
-@router.get("/entries/{short_id}", response_model=EntryDetail, responses=ERRORS)
+async def _resolve_entry_ref(
+    request: Request,
+    principal: ClientPrincipal,
+    entry_id: str,
+) -> str:
+    """Accept either a short id (``1TTS4``) or a full entry UUID.
+
+    A UUID resolves strictly inside the actor's current ledger; anything else
+    is treated as a short id. Failures surface as 404 (no existence leak).
+    """
+    try:
+        parsed = uuid.UUID(entry_id)
+    except ValueError:
+        return entry_id
+    async with _factory(request)() as session:
+        row = await session.scalar(
+            select(LedgerEntry).where(
+                LedgerEntry.id == parsed,
+                LedgerEntry.ledger_id == principal.context.ledger_id,
+            )
+        )
+    if row is None:
+        raise client_error(404, "resource_not_found", "resource not found")
+    return row.short_id
+
+
+@router.get("/entries/{entry_id}", response_model=EntryDetail, responses=ERRORS)
+@router.get("/transactions/{entry_id}", response_model=EntryDetail, responses=ERRORS)
 async def entry_detail(
-    short_id: str,
+    entry_id: str,
     request: Request,
     principal: Annotated[ClientPrincipal, Depends(client_principal)],
 ) -> EntryDetail:
     _require(principal, "ledger:read")
+    short_id = await _resolve_entry_ref(request, principal, entry_id)
     async with _factory(request)() as session:
         try:
             detail = await _application(session, _settings(request)).entry_detail(
@@ -1283,15 +1327,17 @@ async def _mutate_entry(
             raise client_error(409, "conflict", "entry was modified by another request") from exc
 
 
-@router.patch("/entries/{short_id}", response_model=EntryDetail, responses=ERRORS)
+@router.patch("/entries/{entry_id}", response_model=EntryDetail, responses=ERRORS)
+@router.patch("/transactions/{entry_id}", response_model=EntryDetail, responses=ERRORS)
 async def update_entry(
-    short_id: str,
+    entry_id: str,
     payload: EntryUpdateRequest,
     request: Request,
     principal: Annotated[ClientPrincipal, Depends(client_principal)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> EntryDetail:
     _require(principal, "ledger:write")
+    short_id = await _resolve_entry_ref(request, principal, entry_id)
     command = ParsedCommand(
         action=Action.UPDATE_ENTRY,
         entry_ref=short_id,
@@ -1313,15 +1359,17 @@ async def update_entry(
     )
 
 
-@router.delete("/entries/{short_id}", response_model=EntryDetail, responses=ERRORS)
+@router.delete("/entries/{entry_id}", response_model=EntryDetail, responses=ERRORS)
+@router.delete("/transactions/{entry_id}", response_model=EntryDetail, responses=ERRORS)
 async def delete_entry(
-    short_id: str,
+    entry_id: str,
     payload: EntryVersionRequest,
     request: Request,
     principal: Annotated[ClientPrincipal, Depends(client_principal)],
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> EntryDetail:
     _require(principal, "ledger:write")
+    short_id = await _resolve_entry_ref(request, principal, entry_id)
     return await _mutate_entry(
         short_id=short_id,
         command=ParsedCommand(action=Action.DELETE_ENTRY, entry_ref=short_id),
@@ -1729,3 +1777,146 @@ async def cancel_pending(
         principal=principal,
         idempotency_key=idempotency_key,
     )
+
+@router.get("/ledgers/{ledger_id}", response_model=ClientLedger, responses=ERRORS)
+async def ledger_detail(
+    ledger_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+) -> ClientLedger:
+    """Fetch one ledger the actor can access (404 when it does not exist)."""
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        try:
+            target_context = RequestContext(
+                actor_user_id=principal.context.actor_user_id,
+                ledger_id=ledger_id,
+                source_channel=principal.context.source_channel,
+                external_subject_id=principal.context.external_subject_id,
+            )
+            row = await _application(session, _settings(request)).authorize(target_context)
+        except LedgerAuthorizationError as exc:
+            await session.rollback()
+            raise client_error(404, "resource_not_found", "resource not found") from exc
+    return _ledger(row, ledger_id)
+
+
+@router.get("/recurring-rules", response_model=RecurringRuleList, responses=ERRORS)
+async def recurring_rules(
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+) -> RecurringRuleList:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        items = await _application(session, _settings(request)).recurring_rule_views(
+            principal.context
+        )
+    return RecurringRuleList(items=items)
+
+
+def _goal_view(
+    goal: FinancialGoalModel,
+    bindings: list[GoalAccountBindingItem],
+    progress: GoalProgress | None,
+) -> FinancialGoalView:
+    return FinancialGoalView(
+        id=str(goal.id),
+        ledger_id=str(goal.ledger_id),
+        name=goal.name,
+        description=goal.description,
+        goal_type=goal.goal_type,
+        target_amount=goal.target_amount,
+        currency=goal.currency,
+        target_date=goal.target_date,
+        status=goal.status,
+        created_by_user_id=str(goal.created_by_user_id),
+        created_at=goal.created_at,
+        updated_at=goal.updated_at,
+        account_bindings=bindings,
+        current_amount=progress.current_amount if progress else Decimal("0"),
+        remaining_amount=progress.remaining_amount if progress else None,
+        progress_percent=progress.progress_percent if progress else None,
+        is_target_reached=progress.is_target_reached if progress else False,
+    )
+
+
+@router.get("/goals", response_model=GoalList, responses=ERRORS)
+async def goals(
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+) -> GoalList:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        app = _application(session, _settings(request))
+        pairs = await app.goal_list_with_progress(principal.context)
+        items = [
+            _goal_view(
+                goal,
+                await app.goal_binding_items(principal.context, goal.id),
+                progress,
+            )
+            for goal, progress in pairs
+        ]
+    return GoalList(items=items)
+
+
+@router.get("/overview", response_model=HouseholdOverview, responses=ERRORS)
+async def overview(
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    period: str | None = None,
+) -> HouseholdOverview:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        return await _application(session, _settings(request)).household_overview(
+            principal.context, period=_client_period(period)
+        )
+
+
+@router.get("/insights", response_model=list[Insight], responses=ERRORS)
+async def insights(
+    request: Request,
+    principal: Annotated[ClientPrincipal, Depends(client_principal)],
+    period: str | None = None,
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
+) -> list[Insight]:
+    _require(principal, "ledger:read")
+    async with _factory(request)() as session:
+        return await _application(session, _settings(request)).insights(
+            principal.context,
+            period=_client_period(period),
+            limit=limit,
+        )
+
+
+def _clone_to_prefix(source: APIRouter, prefix: str) -> APIRouter:
+    """Serve the same handlers under a second, canonical prefix.
+
+    v0.9.0 promotes the channel-neutral client API to ``/api/v1``; the legacy
+    ``/api/client/v1`` prefix keeps serving identical handlers so existing
+    clients are not broken.
+    """
+    from fastapi.routing import APIRoute
+
+    target = APIRouter(prefix=prefix, tags=["client-v1"])
+    for route in source.routes:
+        if isinstance(route, APIRoute):
+            target.add_api_route(
+                route.path.removeprefix(source.prefix or ""),
+                route.endpoint,
+                methods=route.methods,
+                response_model=route.response_model,
+                status_code=route.status_code,
+                tags=route.tags,
+                summary=route.summary,
+                description=route.description,
+                responses=route.responses,
+                name=route.name,
+                dependencies=route.dependencies,
+            )
+    return target
+
+
+#: v0.9.0 canonical channel-neutral path; ``/api/client/v1`` remains a
+#: backward-compatible alias (same handlers, registered by ``main.py``).
+api_v1_router = _clone_to_prefix(router, "/api/v1")

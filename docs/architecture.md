@@ -2,15 +2,47 @@
 
 > Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
 
-本文说明 LarkLedger v0.8.0 的运行组件、消息数据流、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
+本文说明 LarkLedger v0.9.0 的运行组件、消息数据流、通道无关的 Application Layer、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
+
+## 架构分层：飞书是 Adapter（v0.9.0）
+
+v0.9.0 正式确立**通道无关核心**：Feishu、Web、Client API 只是 Adapter，三者进入
+**同一个 Application Layer**。依赖方向只有一种，并由 CI 的 AST 架构守护测试强制：
+
+```text
+                ┌──────── Feishu Adapter（消息 / 卡片 / 事件 Worker）
+                ├──────── Web Adapter（OAuth 会话路由）
+Client Layer ───┼──────── Client API（/api/v1，Bearer 令牌）
+                ├──────── CLI / Future
+                └──────── Hardware / Future
+                           │
+                           ↓
+                 Application Layer（ClientApplicationService）
+                           │
+                           ↓
+                 Domain / Core（账本 / 预算 / 隐私 / 目标 / 洞察）
+                           │
+                           ↓
+                       Repository → PostgreSQL
+```
+
+- `tests/architecture/` 守护：Core/Application 不得 import `fastapi`、Feishu
+  客户端、渠道路由或 token 传输；Domain 不得 import Application；`RequestContext`
+  不携带渠道密钥；Domain/Application 错误不泄漏 `HTTPException`。
+- `RequestContext(actor_user_id, ledger_id, source_channel, …)` 平台无关；
+  `source`（`feishu` / `web` / `api` / `worker`）只是审计元数据，**不决定业务
+  结果**。同一业务事实（如「早餐 18 元」）经任一入口得到语义一致的 Domain
+  Result；`tests/contracts/` 的 Adapter Contract Suite（C01–C08）证明这一点。
+- 移除飞书后核心业务完整成立；新增客户端只需实现 Adapter。
 
 ## 统一 Client Application Service（阶段 4）
 
-`ClientApplicationService` 是飞书、Web Dashboard 和 `/api/client/v1` 共用的应用层边界。它只接收认证适配器生成的 `RequestContext`，区分确定性管理命令、财务写命令、查询和 Pending 操作，并继续委托既有 `LedgerService`、`LedgerManagementService`、`HouseholdManagementService` 与查询服务。每次账本操作首先调用 `LedgerAuthorizationService`；传输层、AI 和请求 body 均不能覆盖 actor 或授权后的 ledger。
+`ClientApplicationService` 是飞书、Web Dashboard 和 `/api/v1`（兼容别名
+`/api/client/v1`）共用的应用层边界。它只接收认证适配器生成的 `RequestContext`，区分确定性管理命令、财务写命令、查询和 Pending 操作，并继续委托既有 `LedgerService`、`LedgerManagementService`、`HouseholdManagementService` 与查询服务。每次账本操作首先调用 `LedgerAuthorizationService`；传输层、AI 和请求 body 均不能覆盖 actor 或授权后的 ledger。
 
 客户端认证由 `ClientCredentialService` 负责：高熵 `llv1_` Bearer 的 SHA-256 摘要持久化到 `client_credentials`，明文仅创建时返回；凭证包含最小 scope、当前账本、创建/最后使用/过期/撤销时间。撤销、过期、用户禁用以及家庭成员关系失效都会在每次请求时重新验证。Web 仍使用服务端 `DashboardSession` Cookie + CSRF，飞书仍由 `ChannelIdentity` 解析 User，三种认证不会互相降级或混用。
 
-`client_idempotency_records` 以 `(actor_user_id, operation, ledger_id, idempotency_key)` 唯一约束绑定请求摘要和结构化响应快照，过期索引由 Cleanup Worker 分批清理。该表不复用 `processed_events` 或 `reply_outbox`，因此不会改变飞书事件 claim、回复投递或 Worker 重试语义。Pending 继续冻结 actor/ledger 并在行锁内一次执行。
+`client_idempotency_records` 以 `(actor_user_id, operation, ledger_id, idempotency_key)` 唯一约束绑定请求摘要和结构化响应快照，过期索引由 Cleanup Worker 分批清理。`/api/v1` 写操作**必须**携带 `Idempotency-Key`：同 key 同负载重试返回原业务快照（`replayed: true`），同 key 不同负载返回 `409 conflict`，并发重试由数据库唯一约束保证只写入一次（PostgreSQL 集成测试覆盖）。该表不复用 `processed_events` 或 `reply_outbox`，因此不会改变飞书事件 claim、回复投递或 Worker 重试语义。Pending 继续冻结 actor/ledger 并在行锁内一次执行。
 
 ## 身份、家庭与账本边界（Unreleased）
 

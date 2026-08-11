@@ -265,14 +265,14 @@ async def test_client_api_uses_stable_error_envelope_and_openapi(
     ) as client:
         response = await client.get("/api/client/v1/me")
     assert response.status_code == 401
-    assert response.json() == {
-        "error": {
-            "code": "authentication_required",
-            "message": "valid bearer credential required",
-        }
-    }
+    error = response.json()["error"]
+    assert error["code"] == "authentication_required"
+    assert error["message"] == "valid bearer credential required"
+    # Stable v1 envelope carries a request_id for traceability (§32).
+    assert isinstance(error["request_id"], str) and error["request_id"]
     schema = app.openapi()
     assert "/api/client/v1/entries" in schema["paths"]
+    assert "/api/v1/transactions" in schema["paths"]
     assert "ClientErrorResponse" in schema["components"]["schemas"]
 
 

@@ -31,7 +31,7 @@
 - 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
 - **可靠投递**：事件 / 回复后台 Worker、事务性回复 Outbox、PostgreSQL 租约与指数退避重试、readiness、终态清理与受控人工事件重放
 - **Web Dashboard**：飞书 OAuth、财务总览、账目与 revision、Pending、分析、预算、**财务目标（/goals，创建 / 编辑 / 进度 / 归档 / 删除）**、**洞察卡片（/overview「值得关注」）**、周期账单、报表、CSV 下载及管理员可靠性控制台
-- **统一 Client API**：`/api/client/v1/*` 为设备和未来客户端提供结构化命令/查询边界；Bearer 凭证可撤销、只保存摘要，写请求使用持久化 `Idempotency-Key`
+- **通道无关 Client API（v0.9.0）**：正式契约 `/api/v1`（`/api/client/v1` 为兼容别名）为 CLI / 硬件 / 未来客户端提供结构化命令/查询边界；Bearer 个人令牌（`llv1_`，只保存 SHA-256 摘要、可撤销、可过期、scope 只缩权）与持久化 `Idempotency-Key`。飞书与 Web 只是 Adapter，与 API 共用同一个 `ClientApplicationService`，同一业务事实产生一致 Domain Result
 - 自托管：FastAPI、React / TypeScript / Vite、PostgreSQL、Docker Compose
 
 完整消息示例见[用户手册](docs/help.md)。
@@ -250,6 +250,33 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 
 AI 不能访问数据库，也不能生成或执行 SQL。更多设计见[架构说明](docs/architecture.md)。
 
+## 架构原则：飞书是 Adapter
+
+```text
+                ┌──────── Feishu Adapter（消息 / 卡片 / 事件 Worker）
+                ├──────── Web Adapter（OAuth 会话路由）
+Client Layer ───┼──────── Client API（/api/v1，Bearer 令牌）
+                ├──────── CLI / Future
+                └──────── Hardware / Future
+                           │
+                           ↓
+                 Application Layer（ClientApplicationService）
+                           │
+                           ↓
+                       Domain / Core（账本 / 预算 / 隐私 / 目标 / 洞察）
+                           │
+                           ↓
+                       Repository → PostgreSQL
+```
+
+- **依赖方向只有一种**：Adapter → Application → Domain → Core。Core 从不
+  import Feishu 客户端、FastAPI Request 或渠道事件 DTO（CI 有 AST 架构守护
+  测试强制）。
+- `RequestContext`（actor / ledger / source）平台无关；`source` 只是审计
+  元数据，不决定业务结果。
+- 移除飞书后核心业务完整成立；新增客户端只需实现 Adapter。见
+  [Client API 文档](docs/client-api.md)。
+
 ## 本地开发
 
 需要 Python 3.11+ 与可访问的 PostgreSQL：
@@ -291,6 +318,7 @@ curl http://127.0.0.1:8000/healthz
 - [用户手册](docs/help.md)：消息示例、预算、报告、限制、FAQ
 - [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
 - [架构说明](docs/architecture.md)
+- [Client API（`/api/v1`）](docs/client-api.md)
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
 - [变更日志](CHANGELOG.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
