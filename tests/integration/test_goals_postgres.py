@@ -206,7 +206,14 @@ async def test_goal_lifecycle_progress_and_privacy_on_postgres(
             raise AssertionError("cross-ledger binding must violate the FK")
         except Exception:
             pass
+        # rollback expires every ORM object; capture ids first and reload the
+        # goals so the async session never triggers a sync lazy-load later.
+        shared_goal_id = shared_goal.id
+        private_goal_id = private_goal.id
         await session.rollback()
+        shared_goal = await session.get(type(shared_goal), shared_goal_id)
+        private_goal = await session.get(type(private_goal), private_goal_id)
+        assert shared_goal is not None and private_goal is not None
 
         # Real balance progress: 60000/120000 = 50%.
         progress_service = GoalProgressService(session, timezone="Asia/Shanghai", currency="CNY")
