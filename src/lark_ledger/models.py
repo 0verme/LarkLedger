@@ -54,6 +54,31 @@ class AccountVisibility(StrEnum):
     PRIVATE = "private"
 
 
+class GoalType(StrEnum):
+    """Financial goal types (P33).
+
+    v0.8.0 ships only ``savings``: progress is derived from the live balance of
+    bound accounts. Spending-limit goals are already covered by period budgets
+    (P28), so no second semantics is invented — the engine stays deterministic
+    instead of maintaining a parallel "goal ledger".
+    """
+
+    SAVINGS = "savings"
+
+
+class GoalStatus(StrEnum):
+    """User-managed lifecycle of a financial goal (P33).
+
+    ``is_target_reached`` is a derived fact computed from live ledger data and
+    never stored here; ``status`` remains under user control (a balance may
+    later drop below the target).
+    """
+
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    ARCHIVED = "archived"
+
+
 class RecurringFrequency(StrEnum):
     WEEKLY = "weekly"
     MONTHLY = "monthly"
@@ -527,6 +552,97 @@ class TransferRevision(Base):
     change_type: Mapped[str] = mapped_column(String(16), nullable=False)
     before_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
     after_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class FinancialGoal(Base):
+    """A savings target defined on top of real ledger facts (P33).
+
+    A goal never moves money and never holds a parallel balance: progress is
+    derived at query time from the live balances of its bound accounts, so
+    creating / editing / deleting a goal can never touch accounts, entries or
+    transfers. ``current_amount`` / ``progress_percent`` are **not** stored —
+    they are recomputed deterministically by ``GoalProgressService`` and may
+    only be cached as performance hints, never as the source of truth.
+    """
+
+    __tablename__ = "financial_goals"
+    __table_args__ = (
+        UniqueConstraint("ledger_id", "id", name="uq_financial_goals_ledger_id"),
+        CheckConstraint("target_amount > 0", name="ck_financial_goals_positive_target"),
+        CheckConstraint("goal_type IN ('savings')", name="ck_financial_goals_type"),
+        CheckConstraint(
+            "status IN ('active', 'completed', 'archived')",
+            name="ck_financial_goals_status",
+        ),
+        CheckConstraint(
+            "length(name) > 0 AND length(name) <= 64", name="ck_financial_goals_name"
+        ),
+        Index("ix_financial_goals_ledger_status", "ledger_id", "status", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="RESTRICT"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    description: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    goal_type: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=GoalType.SAVINGS.value
+    )
+    target_amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")
+    # Business date in the configured application timezone; NULL = no deadline.
+    target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=GoalStatus.ACTIVE.value
+    )
+    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class GoalAccountBinding(Base):
+    """Which real accounts count toward a savings goal (P33).
+
+    The composite foreign key ``(ledger_id, account_id) -> accounts`` keeps a
+    binding inside its own ledger; the unique constraint makes a goal-account
+    pair idempotent. Deleting a goal cascades its bindings and never touches
+    the accounts themselves.
+    """
+
+    __tablename__ = "goal_account_bindings"
+    __table_args__ = (
+        UniqueConstraint("goal_id", "account_id", name="uq_goal_account_bindings_pair"),
+        UniqueConstraint("ledger_id", "id", name="uq_goal_account_bindings_ledger_id"),
+        ForeignKeyConstraint(
+            ["ledger_id", "goal_id"],
+            ["financial_goals.ledger_id", "financial_goals.id"],
+            name="fk_goal_bindings_ledger_goal",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["ledger_id", "account_id"],
+            ["accounts.ledger_id", "accounts.id"],
+            name="fk_goal_bindings_ledger_account",
+            ondelete="RESTRICT",
+        ),
+        Index("ix_goal_bindings_goal", "goal_id"),
+        Index("ix_goal_bindings_account", "account_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    goal_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    ledger_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
