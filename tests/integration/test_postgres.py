@@ -746,9 +746,7 @@ async def test_entry_account_update_moves_balance_on_postgres(
         ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_pg_account_move")
         accounts = AccountService(session)
         default = await accounts.get_default(context)
-        wallet = await accounts.create(
-            context, name="pg 钱包", account_type=AccountType.ASSET
-        )
+        wallet = await accounts.create(context, name="pg 钱包", account_type=AccountType.ASSET)
         await LedgerService(session).execute(
             context,
             ParsedCommand(

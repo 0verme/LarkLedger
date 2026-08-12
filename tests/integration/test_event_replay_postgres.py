@@ -1,4 +1,4 @@
-﻿"""P06e PostgreSQL locking and migration coverage for manual event replay."""
+"""P06e PostgreSQL locking and migration coverage for manual event replay."""
 
 from __future__ import annotations
 
@@ -91,9 +91,7 @@ async def test_two_operators_concurrently_replay_only_once(
     assert sorted([first.outcome, second.outcome]) == ["rejected", "requeued"]
     async with postgres_session_factory() as session:
         row = await session.get(ProcessedEvent, "evt-replay-concurrent")
-        audits = int(
-            await session.scalar(select(func.count()).select_from(EventReplayAudit)) or 0
-        )
+        audits = int(await session.scalar(select(func.count()).select_from(EventReplayAudit)) or 0)
         assert row is not None
         assert row.status == EventProcessStatus.RECEIVED.value
         assert row.manual_replay_count == 1

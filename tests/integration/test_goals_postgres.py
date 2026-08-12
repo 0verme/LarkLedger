@@ -61,9 +61,7 @@ async def test_goals_migration_upgrade_downgrade_single_head(
             }
             assert tables == {"financial_goals", "goal_account_bindings"}
             # Single head.
-            head = await connection.scalar(
-                text("SELECT version_num FROM alembic_version")
-            )
+            head = await connection.scalar(text("SELECT version_num FROM alembic_version"))
             assert head == "20260814_0027"
 
         # Downgrade one step drops both tables.
@@ -166,18 +164,14 @@ async def test_goal_lifecycle_progress_and_privacy_on_postgres(
             opening_balance=Decimal("10000"),
             visibility=AccountVisibility.PRIVATE,
         )
-        shared_goal = await GoalService(
-            session, timezone="Asia/Shanghai", currency="CNY"
-        ).create(
+        shared_goal = await GoalService(session, timezone="Asia/Shanghai", currency="CNY").create(
             owner_ctx,
             name="家庭应急储备",
             target_amount=Decimal("120000"),
             account_ids=[shared.id],
             target_date=date(2027, 12, 31),
         )
-        private_goal = await GoalService(
-            session, timezone="Asia/Shanghai", currency="CNY"
-        ).create(
+        private_goal = await GoalService(session, timezone="Asia/Shanghai", currency="CNY").create(
             owner_ctx,
             name="私密储备",
             target_amount=Decimal("20000"),
@@ -244,23 +238,21 @@ async def test_goal_lifecycle_progress_and_privacy_on_postgres(
         assert shared_progress.progress_percent == Decimal("45.00")
 
         # Soft delete removes it; restore brings it back.
-        entry = await session.scalar(
-            text("SELECT id FROM ledger_entries WHERE short_id = 'PG01'")
-        )
+        entry = await session.scalar(text("SELECT id FROM ledger_entries WHERE short_id = 'PG01'"))
         await session.execute(
             text("UPDATE ledger_entries SET deleted_at = now() WHERE id = :id"), {"id": entry}
         )
         await session.commit()
-        assert (
-            await progress_service.progress(owner_ctx, shared_goal)
-        ).current_amount == Decimal("60000")
+        assert (await progress_service.progress(owner_ctx, shared_goal)).current_amount == Decimal(
+            "60000"
+        )
         await session.execute(
             text("UPDATE ledger_entries SET deleted_at = NULL WHERE id = :id"), {"id": entry}
         )
         await session.commit()
-        assert (
-            await progress_service.progress(owner_ctx, shared_goal)
-        ).current_amount == Decimal("54000")
+        assert (await progress_service.progress(owner_ctx, shared_goal)).current_amount == Decimal(
+            "54000"
+        )
 
         # Household privacy: B sees the shared goal with identical progress but
         # the private goal is a 404 (no inference possible).

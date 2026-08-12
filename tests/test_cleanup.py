@@ -432,9 +432,7 @@ async def test_cleanup_expires_due_pending_and_keeps_open_and_terminal() -> None
         session.add(pending_row("CAAAA3", "executed", expires_at=past))  # terminal, not re-expired
         await session.commit()
 
-    expired = await CleanupStore(factory).expire_pending_batch(
-        cutoff=NOW, now=NOW, batch_size=10
-    )
+    expired = await CleanupStore(factory).expire_pending_batch(cutoff=NOW, now=NOW, batch_size=10)
     assert expired == 1
 
     async with factory() as session:
@@ -477,16 +475,10 @@ async def test_cleanup_service_sweeps_pending_confirmations() -> None:
     past = NOW - timedelta(hours=2)
     async with factory() as session:
         session.add(pending_row("CCCCC1", "pending", expires_at=past))
-        session.add(
-            pending_row(
-                "CCCCC2", "executed", updated_at=NOW - timedelta(days=14)
-            )
-        )
+        session.add(pending_row("CCCCC2", "executed", updated_at=NOW - timedelta(days=14)))
         await session.commit()
 
-    result = await CleanupService(CleanupStore(factory), RetentionPolicy()).run_once(
-        now=NOW
-    )
+    result = await CleanupService(CleanupStore(factory), RetentionPolicy()).run_once(now=NOW)
     assert result.pending_expired == 1
     assert result.pending_deleted == 1
     assert result.total == 2
