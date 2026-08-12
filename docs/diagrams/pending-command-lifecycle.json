@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "PendingCommand 生命周期",
+    "subtitle": "高风险记账确认单：冻结、等待确认、执行、恢复与全部结束方式",
+    "output": "docs/diagrams/pending-command-lifecycle.html",
+    "animation": "none",
+    "visual_preset": "editorial",
+    "quality_profile": "showcase",
+    "viewBox": [1180, 760],
+    "views": [
+      {
+        "id": "main-progress",
+        "label": "主进度",
+        "focus": ["created", "frozen", "awaiting-confirmation", "executing", "executed"],
+        "note": "确认单冻结后等待用户决策；确认时在行锁下执行，成功后与回执同事务提交。"
+      },
+      {
+        "id": "wait-recovery",
+        "label": "等待与恢复",
+        "focus": ["awaiting-confirmation", "transient-failure", "executing"],
+        "note": "瞬态异常回滚执行中写入，PendingCommand 仍为 pending，由事件工作器重试确认事件。"
+      },
+      {
+        "id": "all-endings",
+        "label": "全部结束方式",
+        "focus": ["executed", "cancelled", "expired", "failed"],
+        "note": "四种终态完整展示；它们都会在保留期后由 Cleanup Worker 删除。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "主进度" },
+    { "id": "interruptions", "label": "等待或中断状态" },
+    { "id": "terminal", "label": "终态与最终清理" }
+  ],
+  "states": [
+    {
+      "id": "created",
+      "type": "start",
+      "label": "确认单已创建",
+      "sublabel": "冻结命令、预览与目标",
+      "tag": "入口事件",
+      "step": "01",
+      "lane": "main",
+      "col": 0
+    },
+    {
+      "id": "frozen",
+      "type": "active",
+      "label": "内容已冻结",
+      "sublabel": "命令、预览与目标入库",
+      "tag": "status=pending",
+      "step": "02",
+      "lane": "main",
+      "col": 1
+    },
+    {
+      "id": "executing",
+      "type": "active",
+      "label": "执行中",
+      "sublabel": "行锁 + 冻结命令执行",
+      "tag": "status=executing",
+      "step": "03",
+      "lane": "main",
+      "col": 4
+    },
+    {
+      "id": "awaiting-confirmation",
+      "type": "waiting",
+      "label": "等待用户确认",
+      "sublabel": "可确认、取消或到期",
+      "tag": "status=pending",
+      "lane": "interruptions",
+      "col": 0
+    },
+    {
+      "id": "transient-failure",
+      "type": "failure",
+      "label": "瞬态执行失败",
+      "sublabel": "事务回滚；存储状态仍为 pending",
+      "tag": "可重试中断",
+      "lane": "interruptions",
+      "col": 1,
+      "yOffset": 90
+    },
+    {
+      "id": "executed",
+      "type": "success",
+      "label": "执行成功",
+      "sublabel": "账本写入与回执已提交",
+      "tag": "status=executed",
+      "lane": "terminal",
+      "col": 2
+    },
+    {
+      "id": "cancelled",
+      "type": "failure",
+      "label": "已取消",
+      "sublabel": "用户取消；未写入账本",
+      "tag": "status=cancelled",
+      "lane": "terminal",
+      "col": 0
+    },
+    {
+      "id": "expired",
+      "type": "failure",
+      "label": "已过期",
+      "sublabel": "操作时检查或清理扫描",
+      "tag": "status=expired",
+      "lane": "terminal",
+      "col": 1
+    },
+    {
+      "id": "failed",
+      "type": "failure",
+      "label": "永久失败",
+      "sublabel": "确定性错误；不可再次执行",
+      "tag": "status=failed",
+      "lane": "terminal",
+      "col": 2,
+      "yOffset": 100
+    }
+  ],
+  "transitions": [
+    {
+      "id": "create-await",
+      "from": "created",
+      "to": "frozen",
+      "label": "风险命中",
+      "labelAt": [171, 202],
+      "variant": "emphasis"
+    },
+    {
+      "id": "freeze-await",
+      "from": "frozen",
+      "to": "awaiting-confirmation",
+      "label": "预览投递",
+      "variant": "emphasis"
+    },
+    {
+      "id": "confirm-execute",
+      "from": "awaiting-confirmation",
+      "to": "executing",
+      "label": "确认",
+      "variant": "emphasis"
+    },
+    {
+      "id": "execute-success",
+      "from": "executing",
+      "to": "executed",
+      "label": "成功提交",
+      "variant": "emphasis"
+    },
+    {
+      "id": "user-cancel",
+      "from": "awaiting-confirmation",
+      "to": "cancelled",
+      "label": "取消",
+      "variant": "security"
+    },
+    {
+      "id": "wait-timeout",
+      "from": "awaiting-confirmation",
+      "to": "expired",
+      "label": "超时",
+      "variant": "security",
+      "fromSide": "left",
+      "toSide": "top",
+      "via": [[303, 307], [303, 438], [556, 438]]
+    },
+    {
+      "id": "execute-permanent-failure",
+      "from": "executing",
+      "to": "failed",
+      "label": "永久错误",
+      "variant": "security",
+      "route": "right-channel"
+    },
+    {
+      "id": "execute-transient-failure",
+      "from": "executing",
+      "to": "transient-failure",
+      "label": "瞬态异常 / 回滚",
+      "variant": "security"
+    },
+    {
+      "id": "retry-confirm-event",
+      "from": "transient-failure",
+      "to": "executing",
+      "label": "工作器重试",
+      "variant": "emphasis",
+      "route": "right-channel",
+      "channelX": 865
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "主进度",
+      "items": [
+        "创建时已冻结结构化命令、预览和账本/账户目标",
+        "确认在 SELECT FOR UPDATE 行锁下校验 pending 与 expires_at",
+        "executing 是事务内进度；成功时与回执一起提交为 executed"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "等待、超时与重试",
+      "items": [
+        "pending 等待用户确认，也允许取消",
+        "到期可由确认/取消入口即时发现，也可由 Cleanup Worker 扫描",
+        "瞬态异常回滚为 pending 并抛出，让事件工作器重试；不是终态"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "终态完整性",
+      "items": [
+        "真实终态只有 executed、cancelled、expired、failed",
+        "四种终态均会在 pending_retention_days 后物理删除",
+        "PendingStatus.CONFIRMED 虽被枚举声明，但当前代码无写入转换，因此不是可达状态"
+      ]
+    }
+  ]
+}
