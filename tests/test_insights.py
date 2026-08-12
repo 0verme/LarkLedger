@@ -48,9 +48,7 @@ TZ = "Asia/Shanghai"
 
 
 async def _identity(session: AsyncSession, open_id: str, name: str) -> RequestContext:
-    return await IdentityService(
-        session, currency="CNY", timezone=TZ
-    ).resolve_or_bootstrap(
+    return await IdentityService(session, currency="CNY", timezone=TZ).resolve_or_bootstrap(
         channel="feishu", external_subject_id=open_id, display_name=name
     )
 
@@ -152,9 +150,9 @@ async def _insights(
     now: datetime | None = None,
     policy: InsightPolicy | None = None,
 ) -> list:
-    return await InsightService(
-        session, timezone=TZ, currency="CNY", policy=policy
-    ).insights(context, period=period, now=now)
+    return await InsightService(session, timezone=TZ, currency="CNY", policy=policy).insights(
+        context, period=period, now=now
+    )
 
 
 # -- I01 spending change -----------------------------------------------------
@@ -170,17 +168,25 @@ async def test_i01_spending_change_exact_numbers(session: AsyncSession) -> None:
     now = datetime(2026, 8, 8, tzinfo=UTC)
     for month_offset, amount in ((3, "1000"), (2, "1000"), (1, "1000")):
         await _entry(
-            session, context, short_id=f"H{month_offset}", amount=amount,
+            session,
+            context,
+            short_id=f"H{month_offset}",
+            amount=amount,
             category="餐饮",
             occurred_at=now - timedelta(days=30 * month_offset),
         )
     await _entry(
-        session, context, short_id="C1", amount="1500", category="餐饮",
+        session,
+        context,
+        short_id="C1",
+        amount="1500",
+        category="餐饮",
         occurred_at=now - timedelta(days=1),
     )
     insights = await _insights(session, context, period=date(2026, 8, 1), now=now)
     change = [
-        item for item in insights
+        item
+        for item in insights
         if item.type == "spending_change" and item.related_category == "餐饮"
     ]
     assert len(change) == 1
@@ -200,30 +206,57 @@ async def test_i01_income_transfer_pending_deleted_excluded(session: AsyncSessio
     other = await _account(session, context, "支付宝")
     now = datetime(2026, 8, 8, tzinfo=UTC)
     # Baseline month: one 餐饮 expense.
-    await _entry(session, context, short_id="B1", amount="1000", category="餐饮",
-                 occurred_at=now - timedelta(days=40), account_id=account.id)
+    await _entry(
+        session,
+        context,
+        short_id="B1",
+        amount="1000",
+        category="餐饮",
+        occurred_at=now - timedelta(days=40),
+        account_id=account.id,
+    )
     # Current month: income, transfer, deleted expense, real expense.
     await _entry(
-        session, context, short_id="I1", amount="5000", category="餐饮",
-        direction=Direction.INCOME, occurred_at=now - timedelta(days=2),
+        session,
+        context,
+        short_id="I1",
+        amount="5000",
+        category="餐饮",
+        direction=Direction.INCOME,
+        occurred_at=now - timedelta(days=2),
         account_id=account.id,
     )
     await TransferService(session).create(
-        context, from_account_id=account.id, to_account_id=other.id,
-        amount=Decimal("999"), occurred_at=now - timedelta(days=2),
+        context,
+        from_account_id=account.id,
+        to_account_id=other.id,
+        amount=Decimal("999"),
+        occurred_at=now - timedelta(days=2),
     )
     await session.commit()
     await _entry(
-        session, context, short_id="D1", amount="3000", category="餐饮",
-        occurred_at=now - timedelta(days=1), account_id=account.id, deleted=True,
+        session,
+        context,
+        short_id="D1",
+        amount="3000",
+        category="餐饮",
+        occurred_at=now - timedelta(days=1),
+        account_id=account.id,
+        deleted=True,
     )
     await _entry(
-        session, context, short_id="R1", amount="1500", category="餐饮",
-        occurred_at=now - timedelta(days=1), account_id=account.id,
+        session,
+        context,
+        short_id="R1",
+        amount="1500",
+        category="餐饮",
+        occurred_at=now - timedelta(days=1),
+        account_id=account.id,
     )
     insights = await _insights(session, context, period=date(2026, 8, 1), now=now)
     change = [
-        item for item in insights
+        item
+        for item in insights
         if item.type == "spending_change" and item.related_category == "餐饮"
     ]
     assert len(change) == 1
@@ -242,17 +275,26 @@ async def test_i01_zero_baseline_no_division_by_zero(session: AsyncSession) -> N
     # History: 餐饮 only — 健身 has a zero baseline.
     for month_offset, amount in ((3, "1000"), (2, "1000"), (1, "1000")):
         await _entry(
-            session, context, short_id=f"Z{month_offset}", amount=amount,
-            category="餐饮", occurred_at=now - timedelta(days=30 * month_offset),
+            session,
+            context,
+            short_id=f"Z{month_offset}",
+            amount=amount,
+            category="餐饮",
+            occurred_at=now - timedelta(days=30 * month_offset),
         )
     # Current month: brand-new 健身 spending appears.
     await _entry(
-        session, context, short_id="N1", amount="1000", category="健身",
+        session,
+        context,
+        short_id="N1",
+        amount="1000",
+        category="健身",
         occurred_at=now - timedelta(days=1),
     )
     insights = await _insights(session, context, period=date(2026, 8, 1), now=now)
     new = [
-        item for item in insights
+        item
+        for item in insights
         if item.type == "spending_change" and item.related_category == "健身"
     ]
     assert len(new) == 1
@@ -270,12 +312,20 @@ async def test_i01_below_threshold_no_insight(session: AsyncSession) -> None:
     now = datetime(2026, 8, 8, tzinfo=UTC)
     for month_offset, amount in ((3, "1000"), (2, "1000"), (1, "1000")):
         await _entry(
-            session, context, short_id=f"L{month_offset}", amount=amount,
-            category="餐饮", occurred_at=now - timedelta(days=30 * month_offset),
+            session,
+            context,
+            short_id=f"L{month_offset}",
+            amount=amount,
+            category="餐饮",
+            occurred_at=now - timedelta(days=30 * month_offset),
         )
     # +20% change is below the 30% threshold.
     await _entry(
-        session, context, short_id="L4", amount="1200", category="餐饮",
+        session,
+        context,
+        short_id="L4",
+        amount="1200",
+        category="餐饮",
         occurred_at=now - timedelta(days=1),
     )
     insights = await _insights(session, context, period=date(2026, 8, 1), now=now)
@@ -289,10 +339,22 @@ async def test_i01_insufficient_history_no_change_insight(session: AsyncSession)
     await session.commit()
     context = _context(owner)
     now = datetime(2026, 8, 8, tzinfo=UTC)
-    await _entry(session, context, short_id="M1", amount="1000", category="餐饮",
-                 occurred_at=now - timedelta(days=4))
-    await _entry(session, context, short_id="M2", amount="2000", category="餐饮",
-                 occurred_at=now - timedelta(days=1))
+    await _entry(
+        session,
+        context,
+        short_id="M1",
+        amount="1000",
+        category="餐饮",
+        occurred_at=now - timedelta(days=4),
+    )
+    await _entry(
+        session,
+        context,
+        short_id="M2",
+        amount="2000",
+        category="餐饮",
+        occurred_at=now - timedelta(days=1),
+    )
     insights = await _insights(session, context, period=date(2026, 8, 1), now=now)
     assert [item for item in insights if item.type == "spending_change"] == []
 
@@ -309,8 +371,14 @@ async def test_i02_budget_risk_fires_above_margin(session: AsyncSession) -> None
     context = _context(owner)
     # day 10 of August 2026.
     now = datetime(2026, 8, 10, 4, tzinfo=UTC)
-    await _entry(session, context, short_id="B1", amount="2100", category="餐饮",
-                 occurred_at=now - timedelta(days=1))
+    await _entry(
+        session,
+        context,
+        short_id="B1",
+        amount="2100",
+        category="餐饮",
+        occurred_at=now - timedelta(days=1),
+    )
     await BudgetService(session, currency="CNY", timezone=TZ).set_category_budget(
         context, period=date(2026, 8, 1), category="餐饮", amount=Decimal("3000")
     )
@@ -329,8 +397,14 @@ async def test_i02_budget_risk_below_margin_no_insight(session: AsyncSession) ->
     await session.commit()
     context = _context(owner)
     now = datetime(2026, 8, 10, 4, tzinfo=UTC)
-    await _entry(session, context, short_id="C1", amount="900", category="餐饮",
-                 occurred_at=now - timedelta(days=1))
+    await _entry(
+        session,
+        context,
+        short_id="C1",
+        amount="900",
+        category="餐饮",
+        occurred_at=now - timedelta(days=1),
+    )
     await BudgetService(session, currency="CNY", timezone=TZ).set_category_budget(
         context, period=date(2026, 8, 1), category="餐饮", amount=Decimal("3000")
     )
@@ -354,22 +428,43 @@ async def test_i03_upcoming_recurring_grouped_by_currency(session: AsyncSession)
     fixed_now = datetime(2026, 8, 8, 4, tzinfo=UTC)
     today = fixed_now.date()
     await service.create(
-        context, transaction_type=Direction.EXPENSE, amount=Decimal("88"), currency=None,
-        category="娱乐", description="Netflix", frequency=RecurringFrequency.MONTHLY,
-        interval=1, next_occurrence=today + timedelta(days=5), account_id=account.id,
+        context,
+        transaction_type=Direction.EXPENSE,
+        amount=Decimal("88"),
+        currency=None,
+        category="娱乐",
+        description="Netflix",
+        frequency=RecurringFrequency.MONTHLY,
+        interval=1,
+        next_occurrence=today + timedelta(days=5),
+        account_id=account.id,
         now=fixed_now,
     )
     await service.create(
-        context, transaction_type=Direction.EXPENSE, amount=Decimal("3500"), currency=None,
-        category="居住", description="房租", frequency=RecurringFrequency.MONTHLY,
-        interval=1, next_occurrence=today + timedelta(days=12), account_id=account.id,
+        context,
+        transaction_type=Direction.EXPENSE,
+        amount=Decimal("3500"),
+        currency=None,
+        category="居住",
+        description="房租",
+        frequency=RecurringFrequency.MONTHLY,
+        interval=1,
+        next_occurrence=today + timedelta(days=12),
+        account_id=account.id,
         now=fixed_now,
     )
     # Disabled rule outside the window must never count.
     await service.create(
-        context, transaction_type=Direction.EXPENSE, amount=Decimal("999999"), currency=None,
-        category="测试", description="禁用项", frequency=RecurringFrequency.MONTHLY,
-        interval=1, next_occurrence=today + timedelta(days=3), account_id=account.id,
+        context,
+        transaction_type=Direction.EXPENSE,
+        amount=Decimal("999999"),
+        currency=None,
+        category="测试",
+        description="禁用项",
+        frequency=RecurringFrequency.MONTHLY,
+        interval=1,
+        next_occurrence=today + timedelta(days=3),
+        account_id=account.id,
         now=fixed_now,
     )
     await session.commit()
@@ -380,9 +475,7 @@ async def test_i03_upcoming_recurring_grouped_by_currency(session: AsyncSession)
             )
         ).all()
     )
-    await RecurringService(session, currency="CNY", timezone=TZ).disable(
-        context, disabled[0].id
-    )
+    await RecurringService(session, currency="CNY", timezone=TZ).disable(context, disabled[0].id)
     await session.commit()
 
     insights = await _insights(session, context, now=datetime(2026, 8, 8, tzinfo=UTC))
@@ -406,14 +499,28 @@ async def test_i03_mixed_currency_never_summed(session: AsyncSession) -> None:
     service = RecurringService(session, currency="CNY", timezone=TZ)
     today = datetime(2026, 8, 8, 4, tzinfo=UTC).date()
     await service.create(
-        context, transaction_type=Direction.EXPENSE, amount=Decimal("88"), currency=None,
-        category="娱乐", description="Netflix", frequency=RecurringFrequency.MONTHLY,
-        interval=1, next_occurrence=today + timedelta(days=5), account_id=cny.id,
+        context,
+        transaction_type=Direction.EXPENSE,
+        amount=Decimal("88"),
+        currency=None,
+        category="娱乐",
+        description="Netflix",
+        frequency=RecurringFrequency.MONTHLY,
+        interval=1,
+        next_occurrence=today + timedelta(days=5),
+        account_id=cny.id,
     )
     await service.create(
-        context, transaction_type=Direction.EXPENSE, amount=Decimal("10"), currency="USD",
-        category="娱乐", description="iCloud", frequency=RecurringFrequency.MONTHLY,
-        interval=1, next_occurrence=today + timedelta(days=6), account_id=usd.id,
+        context,
+        transaction_type=Direction.EXPENSE,
+        amount=Decimal("10"),
+        currency="USD",
+        category="娱乐",
+        description="iCloud",
+        frequency=RecurringFrequency.MONTHLY,
+        interval=1,
+        next_occurrence=today + timedelta(days=6),
+        account_id=usd.id,
     )
     await session.commit()
     insights = await _insights(session, context, now=datetime(2026, 8, 8, tzinfo=UTC))
@@ -439,16 +546,29 @@ async def test_i04_goal_reached_and_shortfall_insights(session: AsyncSession) ->
     now = datetime(2026, 8, 8, tzinfo=UTC)
     # Goal A: reached (balance 5000 >= target 3000).
     goal_a = await GoalService(session, timezone=TZ, currency="CNY").create(
-        context, name="小目标", target_amount=Decimal("3000"), account_ids=[account.id],
+        context,
+        name="小目标",
+        target_amount=Decimal("3000"),
+        account_ids=[account.id],
     )
     # Goal B: far from target, deadline in 10 days, tiny saving rate → shortfall.
     goal_b = await GoalService(session, timezone=TZ, currency="CNY").create(
-        context, name="大目标", target_amount=Decimal("100000"), account_ids=[account.id],
+        context,
+        name="大目标",
+        target_amount=Decimal("100000"),
+        account_ids=[account.id],
         target_date=date(2026, 8, 18),
     )
     # Trailing 45 days of small savings → rate > 0 but nowhere near 95000 in 10 days.
-    await _entry(session, context, short_id="S1", amount="100", category="工资",
-                 direction=Direction.INCOME, occurred_at=now - timedelta(days=45))
+    await _entry(
+        session,
+        context,
+        short_id="S1",
+        amount="100",
+        category="工资",
+        direction=Direction.INCOME,
+        occurred_at=now - timedelta(days=45),
+    )
     await session.commit()
     insights = await _insights(session, context, now=now)
     reached = [item for item in insights if item.related_goal == str(goal_a.id)]
@@ -489,20 +609,39 @@ async def test_privacy_side_channel_insights(session: AsyncSession) -> None:
     insights — no category totals, no budget spend, no goal progress."""
     owner_ctx, member_ctx, _ = await _household(session)
     private = await _account(
-        session, owner_ctx, "私房钱", opening_balance=Decimal("10000"),
+        session,
+        owner_ctx,
+        "私房钱",
+        opening_balance=Decimal("10000"),
         visibility=AccountVisibility.PRIVATE,
     )
     now = datetime(2026, 8, 8, tzinfo=UTC)
     # A: private spending that jumps this month (baseline 500 → current 1500).
     for month_offset, amount in ((3, "500"), (2, "500"), (1, "500")):
-        await _entry(session, owner_ctx, short_id=f"P{month_offset}", amount=amount,
-                     category="私人购物", account_id=private.id,
-                     occurred_at=now - timedelta(days=30 * month_offset))
-    await _entry(session, owner_ctx, short_id="P4", amount="1500", category="私人购物",
-                 account_id=private.id, occurred_at=now - timedelta(days=1))
+        await _entry(
+            session,
+            owner_ctx,
+            short_id=f"P{month_offset}",
+            amount=amount,
+            category="私人购物",
+            account_id=private.id,
+            occurred_at=now - timedelta(days=30 * month_offset),
+        )
+    await _entry(
+        session,
+        owner_ctx,
+        short_id="P4",
+        amount="1500",
+        category="私人购物",
+        account_id=private.id,
+        occurred_at=now - timedelta(days=1),
+    )
     # A: private goal already reached (balance 7000 >= target 5000).
     private_goal = await GoalService(session, timezone=TZ, currency="CNY").create(
-        owner_ctx, name="私密目标", target_amount=Decimal("5000"), account_ids=[private.id],
+        owner_ctx,
+        name="私密目标",
+        target_amount=Decimal("5000"),
+        account_ids=[private.id],
     )
     await session.commit()
 

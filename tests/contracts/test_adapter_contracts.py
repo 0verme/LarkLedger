@@ -101,9 +101,7 @@ class IntentInterpreter:
     def transcription_configured(self) -> bool:
         return False
 
-    async def interpret(
-        self, text: str, *, now: datetime, images: list[bytes]
-    ) -> ParsedCommand:
+    async def interpret(self, text: str, *, now: datetime, images: list[bytes]) -> ParsedCommand:
         del text, now, images
         return self.command
 
@@ -134,9 +132,7 @@ async def feishu_process(
         IntentInterpreter(command),
     )
     service = EventService(factory, processor, worker_enabled=False)
-    await service.handle_safely(
-        str(event["event_id"]), event, transport="webhook"
-    )
+    await service.handle_safely(str(event["event_id"]), event, transport="webhook")
 
 
 # ---------------------------------------------------------------------------
@@ -157,19 +153,13 @@ async def contract_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     await engine.dispose()
 
 
-async def _identity(
-    session: AsyncSession, open_id: str, display_name: str = ""
-) -> RequestContext:
+async def _identity(session: AsyncSession, open_id: str, display_name: str = "") -> RequestContext:
     return await IdentityService(
         session, currency="CNY", timezone="Asia/Shanghai"
-    ).resolve_or_bootstrap(
-        channel="feishu", external_subject_id=open_id, display_name=display_name
-    )
+    ).resolve_or_bootstrap(channel="feishu", external_subject_id=open_id, display_name=display_name)
 
 
-async def _select_channel_ledger(
-    session: AsyncSession, open_id: str, ledger_id: uuid.UUID
-) -> None:
+async def _select_channel_ledger(session: AsyncSession, open_id: str, ledger_id: uuid.UUID) -> None:
     """Switch a Feishu channel identity to a ledger (as the real user would)."""
     from lark_ledger.models import ChannelIdentity
     from lark_ledger.services.ledger_management import LedgerManagementService
@@ -183,9 +173,7 @@ async def _select_channel_ledger(
     assert identity is not None
     await LedgerManagementService(
         session, currency="CNY", timezone="Asia/Shanghai"
-    ).select_for_channel(
-        user_id=identity.user_id, identity_id=identity.id, ledger_id=ledger_id
-    )
+    ).select_for_channel(user_id=identity.user_id, identity_id=identity.id, ledger_id=ledger_id)
     await session.flush()
 
 
@@ -535,9 +523,7 @@ async def test_c03_private_account_is_invisible_on_every_adapter(
     # The account query path replies synchronously through the processor; use
     # the same event plumbing so identity resolution matches the Feishu flow.
     feishu = RecordingFeishu()
-    processor = MessageProcessor(
-        _settings(), contract_factory, feishu, IntentInterpreter(command)
-    )
+    processor = MessageProcessor(_settings(), contract_factory, feishu, IntentInterpreter(command))
     event_service = EventService(contract_factory, processor, worker_enabled=False)
     await event_service.handle_safely(
         "evt_c03",
@@ -608,9 +594,9 @@ async def test_c04_budget_spent_is_channel_independent(
             source_message_id="web_c04_transfer",
         )
         await session.commit()
-        overview = await BudgetService(
-            session, currency="CNY", timezone="Asia/Shanghai"
-        ).overview(ctx, period=None)
+        overview = await BudgetService(session, currency="CNY", timezone="Asia/Shanghai").overview(
+            ctx, period=None
+        )
     assert overview.total_spent == Decimal("150.00")
 
 
@@ -744,9 +730,7 @@ async def test_c06_goal_progress_is_channel_independent(
     # Client API
     client, _, token = await _api_client(contract_factory, "ou_g")
     async with client:
-        response = await client.get(
-            "/api/v1/goals", headers={"Authorization": f"Bearer {token}"}
-        )
+        response = await client.get("/api/v1/goals", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     items = response.json()["items"]
     assert items, "goals list must be non-empty"
@@ -858,27 +842,34 @@ async def test_c08_duplicate_delivery_is_exactly_once(
     )
     # Re-deliver the exact same event (same event_id): claim must reject it.
     settings = _settings()
-    processor = MessageProcessor(settings, contract_factory, RecordingFeishu(), IntentInterpreter(
-        _command(
-            Action.CREATE,
-            amount="22.00",
-            direction=Direction.EXPENSE,
-            category="餐饮",
-            note="午餐",
-        )
-    ))
+    processor = MessageProcessor(
+        settings,
+        contract_factory,
+        RecordingFeishu(),
+        IntentInterpreter(
+            _command(
+                Action.CREATE,
+                amount="22.00",
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                note="午餐",
+            )
+        ),
+    )
     service = EventService(contract_factory, processor, worker_enabled=False)
     duplicate = await service.claim("om_c08", event, transport="webhook")
     assert duplicate is False, "duplicate Feishu event_id must not be claimed twice"
 
     async with contract_factory() as session:
         count = await session.scalar(
-            select(func.count()).select_from(LedgerEntry).where(
-                LedgerEntry.source_message_id == "om_c08"
-            )
+            select(func.count())
+            .select_from(LedgerEntry)
+            .where(LedgerEntry.source_message_id == "om_c08")
         )
         api_count = await session.scalar(
-            select(func.count()).select_from(LedgerEntry).where(
+            select(func.count())
+            .select_from(LedgerEntry)
+            .where(
                 LedgerEntry.note == "早餐",
                 LedgerEntry.category == "餐饮",
             )

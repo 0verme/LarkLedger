@@ -1778,6 +1778,7 @@ async def cancel_pending(
         idempotency_key=idempotency_key,
     )
 
+
 @router.get("/ledgers/{ledger_id}", response_model=ClientLedger, responses=ERRORS)
 async def ledger_detail(
     ledger_id: uuid.UUID,

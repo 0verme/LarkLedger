@@ -67,9 +67,7 @@ def _app(factory: async_sessionmaker[AsyncSession]) -> FastAPI:
 
 async def _client(factory: async_sessionmaker[AsyncSession]) -> httpx.AsyncClient:
     app = _app(factory)
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://ledger.test"
-    )
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ledger.test")
 
 
 async def test_api_v1_me_and_error_envelope(
@@ -122,9 +120,7 @@ async def test_api_v1_and_legacy_prefix_behave_identically(
     legacy_resource = legacy.json()["resource"]
     assert canonical_resource is not None and legacy_resource is not None
     # Message text embeds each row's short id; strip the ref before comparing.
-    canonical_message = re.sub(
-        r"#[A-Z0-9]+ ", "#REF ", canonical.json()["message"]
-    )
+    canonical_message = re.sub(r"#[A-Z0-9]+ ", "#REF ", canonical.json()["message"])
     legacy_message = re.sub(r"#[A-Z0-9]+ ", "#REF ", legacy.json()["message"])
     assert canonical_message == legacy_message
     for key in canonical_resource:
@@ -153,9 +149,7 @@ async def test_api_v1_ledger_detail_is_authorization_gated(
         assert ledgers.status_code == 200
         first = ledgers.json()["items"][0]
         detail = await client.get(f"/api/v1/ledgers/{first['id']}", headers=headers)
-        missing = await client.get(
-            f"/api/v1/ledgers/{uuid.uuid4()}", headers=headers
-        )
+        missing = await client.get(f"/api/v1/ledgers/{uuid.uuid4()}", headers=headers)
     assert detail.status_code == 200
     assert detail.json()["id"] == first["id"]
     assert missing.status_code == 404
@@ -191,12 +185,8 @@ async def test_api_v1_transaction_update_delete_with_idempotency(
         "occurred_at": "2026-08-14T12:00:00+08:00",
     }
     async with await _client(client_factory) as client:
-        created = await client.post(
-            "/api/v1/transactions", headers=headers | idem, json=payload
-        )
-        replay = await client.post(
-            "/api/v1/transactions", headers=headers | idem, json=payload
-        )
+        created = await client.post("/api/v1/transactions", headers=headers | idem, json=payload)
+        replay = await client.post("/api/v1/transactions", headers=headers | idem, json=payload)
     assert created.status_code == 201
     assert replay.status_code == 201
     assert created.json()["replayed"] is False
@@ -255,9 +245,7 @@ async def test_api_v1_read_scope_rejects_writes(
             session,
             user_id=context.actor_user_id,
             current_ledger_id=context.ledger_id,
-            request=ClientCredentialCreateRequest(
-                name="read only", scopes=["ledger:read"]
-            ),
+            request=ClientCredentialCreateRequest(name="read only", scopes=["ledger:read"]),
         )
         token = created.token
     headers = {"Authorization": f"Bearer {token}"}

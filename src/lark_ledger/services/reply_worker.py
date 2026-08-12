@@ -225,17 +225,13 @@ class ReplyDeliverer:
         if not item.message_id:
             raise ReplyPayloadError("outbox row is missing message_id (routing field)")
         if item.payload_version != OUTBOX_PAYLOAD_VERSION:
-            raise ReplyPayloadError(
-                f"unsupported outbox payload_version: {item.payload_version}"
-            )
+            raise ReplyPayloadError(f"unsupported outbox payload_version: {item.payload_version}")
         payload = item.payload_json
         if item.reply_type == ReplyType.TEXT.value:
             text = payload.get("text")
             if not isinstance(text, str) or not text:
                 raise ReplyPayloadError("text outbox row is missing a text payload")
-            message_id = await self._feishu.reply_text(
-                item.message_id, text, uuid=item.id.hex
-            )
+            message_id = await self._feishu.reply_text(item.message_id, text, uuid=item.id.hex)
             return SendResult(message_id=message_id)
         if item.reply_type == ReplyType.FILE.value:
             file_meta = payload.get("file")
@@ -245,16 +241,12 @@ class ReplyDeliverer:
             file_key = item.remote_file_key
             reused = file_key is not None
             if file_key is None:
-                file_key = await self._feishu.upload_file(
-                    item.payload_blob, file_meta["filename"]
-                )
+                file_key = await self._feishu.upload_file(item.payload_blob, file_meta["filename"])
                 if not await self._store.persist_file_key(
                     item.id, self._owner_id, file_key=file_key, now=now
                 ):
                     raise LeaseLostError("lease lost while persisting file_key")
-            message_id = await self._feishu.reply_file(
-                item.message_id, file_key, uuid=item.id.hex
-            )
+            message_id = await self._feishu.reply_file(item.message_id, file_key, uuid=item.id.hex)
             logger.info(
                 "file reply sent outbox_id=%s reused_existing_key=%s file_key_len=%d",
                 item.id,
@@ -303,9 +295,7 @@ class ReplyDeliverer:
                         image_key,
                         str(image_meta.get("alt") or ""),
                     )
-            message_id = await self._feishu.reply_card(
-                item.message_id, card, uuid=item.id.hex
-            )
+            message_id = await self._feishu.reply_card(item.message_id, card, uuid=item.id.hex)
             return SendResult(message_id=message_id, image_key=image_key)
         raise ReplyPayloadError(f"unsupported reply_type: {item.reply_type}")
 
@@ -317,9 +307,7 @@ class ReplyDeliverer:
         Idempotency comes from the same Feishu ``uuid`` key (the outbox row id).
         """
         if item.payload_version != OUTBOX_PAYLOAD_VERSION:
-            raise ReplyPayloadError(
-                f"unsupported outbox payload_version: {item.payload_version}"
-            )
+            raise ReplyPayloadError(f"unsupported outbox payload_version: {item.payload_version}")
         payload = item.payload_json
         open_id = payload.get("open_id")
         if not isinstance(open_id, str) or not open_id:
@@ -547,9 +535,7 @@ class ReplyWorker:
                     break
                 await self._sleep_until_next_poll()
         finally:
-            logger.info(
-                "reply worker stopped owner=%s", safe_owner_id(self._owner_id)
-            )
+            logger.info("reply worker stopped owner=%s", safe_owner_id(self._owner_id))
 
     async def _sleep_until_next_poll(self) -> None:
         if self._wakeup_event is not None:

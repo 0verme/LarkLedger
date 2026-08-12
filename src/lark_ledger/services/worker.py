@@ -213,9 +213,7 @@ class EventWorkerStore:
             if row is None:
                 raise EventPayloadError(f"claimed event missing from database: {event_id}")
             if row.payload_json is None:
-                raise EventPayloadError(
-                    f"event {event_id} has no payload and is not replayable"
-                )
+                raise EventPayloadError(f"event {event_id} has no payload and is not replayable")
             parsed = parse_stored_payload(row.payload_json)
             return business_event_from_payload(parsed)
 
@@ -449,15 +447,12 @@ class EventWorker:
             logger.info("event succeeded event_id=%s attempt=%d", event_id, attempt)
         else:
             logger.warning(
-                "event lease lost after processing; status not overwritten "
-                "event_id=%s owner=%s",
+                "event lease lost after processing; status not overwritten event_id=%s owner=%s",
                 event_id,
                 safe_owner_id(self._owner_id),
             )
 
-    async def _record_failure(
-        self, item: ClaimedEvent, now: datetime, exc: BaseException
-    ) -> None:
+    async def _record_failure(self, item: ClaimedEvent, now: datetime, exc: BaseException) -> None:
         event_id = item.event_id
         attempt = item.attempt_count
         permanent = is_permanent_error(exc)

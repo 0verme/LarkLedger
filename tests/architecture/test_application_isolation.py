@@ -110,9 +110,9 @@ def test_application_boundary_is_the_only_shared_application_layer() -> None:
     # The boundary itself must not depend on any adapter either.
     module = module_of(boundary)
     for imported in imported_modules(boundary):
-        assert not starts_with_any(
-            imported, ADAPTER_MODULES | BANNED_THIRD_PARTY
-        ), f"{module} imports adapter/transport module {imported}"
+        assert not starts_with_any(imported, ADAPTER_MODULES | BANNED_THIRD_PARTY), (
+            f"{module} imports adapter/transport module {imported}"
+        )
 
 
 def test_application_boundary_authorizes_before_business() -> None:

@@ -456,12 +456,14 @@ class PendingCommandStore:
             # hint at creation time so confirming after the user switches ledger
             # or changes the default account still writes to the frozen target.
             account_id = (
-                await TransferService(session).resolve_account_hint(
-                    context, command.account_hint
-                )
-            ).id if command.account_hint is not None else (
-                await AccountService(session).get_default(context)
-            ).id
+                (
+                    await TransferService(session).resolve_account_hint(
+                        context, command.account_hint
+                    )
+                ).id
+                if command.account_hint is not None
+                else (await AccountService(session).get_default(context)).id
+            )
         elif (
             command.action in {Action.UPDATE_ENTRY, Action.DELETE_ENTRY, Action.RESTORE_ENTRY}
             and command.entry_ref
@@ -685,8 +687,7 @@ class PendingCommandStore:
         rows = list(
             (
                 await session.scalars(
-                    select(PendingCommand)
-                    .where(
+                    select(PendingCommand).where(
                         PendingCommand.confirmation_code == confirmation_code,
                         PendingCommand.recurring_rule_id.is_not(None),
                         PendingCommand.ledger_id.in_([ledger.id for ledger in accessible]),
@@ -791,9 +792,7 @@ class PendingCommandStore:
                 )
                 if row is not None:
                     row = await session.scalar(
-                        select(PendingCommand)
-                        .where(PendingCommand.id == row.id)
-                        .with_for_update()
+                        select(PendingCommand).where(PendingCommand.id == row.id).with_for_update()
                     )
             if row is None:
                 message = "未找到该确认单，或它不属于当前用户。"
@@ -1067,9 +1066,7 @@ class PendingCommandStore:
             return message, [reply]
 
     @staticmethod
-    async def _mark_occurrence_cancelled(
-        session: AsyncSession, pending: PendingCommand
-    ) -> None:
+    async def _mark_occurrence_cancelled(session: AsyncSession, pending: PendingCommand) -> None:
         """Terminate the occurrence of a cancelled recurring pending (P29)."""
         if pending.recurring_rule_id is None or pending.occurrence_date is None:
             return

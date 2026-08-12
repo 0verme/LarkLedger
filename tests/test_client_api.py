@@ -61,9 +61,7 @@ async def _credential(
             session,
             user_id=context.actor_user_id,
             current_ledger_id=context.ledger_id,
-            request=ClientCredentialCreateRequest(
-                name="test device", expires_at=expires_at
-            ),
+            request=ClientCredentialCreateRequest(name="test device", expires_at=expires_at),
         )
         return created.token, created.id
 
@@ -80,9 +78,7 @@ async def test_bearer_digest_scopes_revocation_and_expiry(
     client_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     token, credential_id = await _credential(client_factory, subject="ou_client")
-    service = ClientCredentialService(
-        client_factory, currency="CNY", timezone="Asia/Shanghai"
-    )
+    service = ClientCredentialService(client_factory, currency="CNY", timezone="Asia/Shanghai")
     principal = await service.authenticate(token)
     assert principal.context.source_channel == "client_api"
     assert principal.scopes == frozenset({"ledger:read", "ledger:write"})
@@ -287,9 +283,7 @@ async def test_bearer_rechecks_household_membership_and_falls_back(
         member = await identity.resolve_or_bootstrap(
             channel="feishu", external_subject_id="ou_household_member"
         )
-        manager = HouseholdManagementService(
-            session, currency="CNY", timezone="Asia/Shanghai"
-        )
+        manager = HouseholdManagementService(session, currency="CNY", timezone="Asia/Shanghai")
         household = await manager.create(owner.actor_user_id, "family")
         invitation = await manager.invite(
             owner.actor_user_id, household.household.id, member.actor_user_id
@@ -301,9 +295,7 @@ async def test_bearer_rechecks_household_membership_and_falls_back(
             current_ledger_id=member.ledger_id,
             request=ClientCredentialCreateRequest(name="member device"),
         )
-    service = ClientCredentialService(
-        client_factory, currency="CNY", timezone="Asia/Shanghai"
-    )
+    service = ClientCredentialService(client_factory, currency="CNY", timezone="Asia/Shanghai")
     principal = await service.authenticate(created.token)
     async with client_factory() as session:
         await ClientCredentialService.select_ledger(
@@ -510,9 +502,7 @@ async def test_client_account_entry_balance_and_reporting_lifecycle(
         )
         assert expense.status_code == 201
 
-        balance = await client.get(
-            f"/api/client/v1/accounts/{wallet_id}/balance", headers=headers
-        )
+        balance = await client.get(f"/api/client/v1/accounts/{wallet_id}/balance", headers=headers)
         assert balance.status_code == 200
         assert balance.json()["current_balance"] == "145.00"
         assets = await client.get("/api/client/v1/assets", headers=headers)
@@ -632,9 +622,7 @@ async def test_client_household_invitation_membership_and_leave_lifecycle(
         )
         assert renamed.status_code == 200
         assert (
-            await client.get(
-                f"/api/client/v1/households/{household_id}", headers=owner_headers
-            )
+            await client.get(f"/api/client/v1/households/{household_id}", headers=owner_headers)
         ).status_code == 200
         assert (
             await client.get(
@@ -753,9 +741,7 @@ async def test_client_pending_query_confirm_cancel_and_frozen_scope(
         detail = await client.get("/api/client/v1/pending/CA83F2", headers=headers)
         assert detail.status_code == 200
         assert detail.json()["pending"]["confirmation_id"] == "#C-A83F2"
-        assert (
-            await client.get("/api/client/v1/pending/NO!", headers=headers)
-        ).status_code == 404
+        assert (await client.get("/api/client/v1/pending/NO!", headers=headers)).status_code == 404
         assert (
             await client.post(
                 "/api/client/v1/pending/NO!/confirm",
@@ -802,9 +788,7 @@ async def test_client_financial_error_envelopes_and_write_scope(
             session,
             user_id=context.actor_user_id,
             current_ledger_id=context.ledger_id,
-            request=ClientCredentialCreateRequest(
-                name="read only", scopes=["ledger:read"]
-            ),
+            request=ClientCredentialCreateRequest(name="read only", scopes=["ledger:read"]),
         )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=_app(client_factory)),
@@ -953,9 +937,7 @@ async def test_client_patch_entry_account_moves_binding_and_rejects_foreign(
         assert updated.json()["entry"]["account_id"] == wallet_id
         assert updated.json()["entry"]["account_name"] == "支付宝"
         assert updated.json()["revisions"][0]["change_type"] == "update"
-        assert (
-            updated.json()["revisions"][0]["before"]["account_id"] == default_id
-        )
+        assert updated.json()["revisions"][0]["before"]["account_id"] == default_id
         assert updated.json()["revisions"][0]["after"]["account_id"] == wallet_id
 
         # Balance moved between the two accounts.

@@ -79,7 +79,9 @@ async def _entry_count(factory: async_sessionmaker[AsyncSession]) -> int:
     async with factory() as session:
         return int(
             await session.scalar(
-                select(func.count()).select_from(LedgerEntry).where(
+                select(func.count())
+                .select_from(LedgerEntry)
+                .where(
                     LedgerEntry.ledger_id.is_not(None),
                     LedgerEntry.category == "餐饮",
                     LedgerEntry.note == "早餐",
@@ -98,17 +100,13 @@ async def test_idempotency_concurrent_same_key_creates_one_entry(
 
     async def post_once() -> httpx.Response:
         transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(
-            transport=transport, base_url="http://ledger.test"
-        ) as client:
+        async with httpx.AsyncClient(transport=transport, base_url="http://ledger.test") as client:
             return await client.post(
                 "/api/v1/transactions", headers=headers, json=_payload("18.00")
             )
 
     results = await asyncio.gather(post_once(), post_once(), return_exceptions=True)
-    statuses = sorted(
-        r.status_code if isinstance(r, httpx.Response) else 999 for r in results
-    )
+    statuses = sorted(r.status_code if isinstance(r, httpx.Response) else 999 for r in results)
     # Allowed convergence: one fresh create (+ either a replayed snapshot or an
     # in-progress 503 for the loser). Anything else means a duplicate slipped in.
     assert statuses in ([201, 201], [201, 503]), statuses
@@ -170,8 +168,8 @@ async def test_idempotency_records_persist_and_expire_via_ttl(
 
     async with factory() as session:
         count = await session.scalar(
-            select(func.count()).select_from(ClientIdempotencyRecord).where(
-                ClientIdempotencyRecord.idempotency_key == "persist-key-7"
-            )
+            select(func.count())
+            .select_from(ClientIdempotencyRecord)
+            .where(ClientIdempotencyRecord.idempotency_key == "persist-key-7")
         )
         assert count == 1

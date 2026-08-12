@@ -1,476 +1,645 @@
 export type Me = {
-  open_id: string;
-  name: string;
-  avatar_url: string;
-  role: "USER" | "ADMIN";
-  expires_at: string;
+	open_id: string;
+	name: string;
+	avatar_url: string;
+	role: "USER" | "ADMIN";
+	expires_at: string;
 };
 
 export type Entry = {
-  id: string;
-  short_id: string;
-  amount: string;
-  currency: string;
-  direction: "EXPENSE" | "INCOME";
-  category: string;
-  note: string;
-  occurred_at: string;
-  source_type: string;
-  created_at: string;
-  updated_at: string;
-  deleted_at: string | null;
-  account_id: string;
-  account_name: string | null;
-  payer_user_id: string;
-  payer_name: string | null;
+	id: string;
+	short_id: string;
+	amount: string;
+	currency: string;
+	direction: "EXPENSE" | "INCOME";
+	category: string;
+	note: string;
+	occurred_at: string;
+	source_type: string;
+	created_at: string;
+	updated_at: string;
+	deleted_at: string | null;
+	account_id: string;
+	account_name: string | null;
+	payer_user_id: string;
+	payer_name: string | null;
 };
 
 export type EntryPage = {
-  items: Entry[];
-  page: number;
-  page_size: number;
-  total: number;
-  pages: number;
+	items: Entry[];
+	page: number;
+	page_size: number;
+	total: number;
+	pages: number;
 };
 
 export type EntryDetail = {
-  entry: Entry;
-  revisions: Array<{
-    id: string;
-    change_type: "update" | "delete" | "restore";
-    before: Record<string, unknown>;
-    after: Record<string, unknown>;
-    created_at: string;
-  }>;
+	entry: Entry;
+	revisions: Array<{
+		id: string;
+		change_type: "update" | "delete" | "restore";
+		before: Record<string, unknown>;
+		after: Record<string, unknown>;
+		created_at: string;
+	}>;
 };
 
 export type DashboardData = {
-  month_income: string;
-  month_expense: string;
-  month_balance: string;
-  budget_usage_rate: string | null;
-  pending_count: number;
-  recent_entries: Entry[];
-  trend: Array<{ period: string; income: string; expense: string; balance: string }>;
-  categories: Array<{ category: string; amount: string; ratio: string }>;
+	month_income: string;
+	month_expense: string;
+	month_balance: string;
+	budget_usage_rate: string | null;
+	pending_count: number;
+	recent_entries: Entry[];
+	trend: Array<{
+		period: string;
+		income: string;
+		expense: string;
+		balance: string;
+	}>;
+	categories: Array<{ category: string; amount: string; ratio: string }>;
 };
 
 export type AccountBalance = {
-  account_id: string;
-  ledger_id: string;
-  account_name: string;
-  account_type: "cash" | "asset" | "liability";
-  currency: string;
-  opening_balance: string;
-  current_balance: string;
-  archived: boolean;
+	account_id: string;
+	ledger_id: string;
+	account_name: string;
+	account_type: "cash" | "asset" | "liability";
+	currency: string;
+	opening_balance: string;
+	current_balance: string;
+	archived: boolean;
 };
 
 export type Account = {
-  id: string;
-  ledger_id: string;
-  name: string;
-  type: "cash" | "asset" | "liability";
-  subtype: string | null;
-  provider: string | null;
-  currency: string;
-  opening_balance: string;
-  status: "active" | "archived";
-  is_default: boolean;
-  visibility: "shared" | "private";
-  owner_user_id: string | null;
-  created_at: string;
-  updated_at: string;
+	id: string;
+	ledger_id: string;
+	name: string;
+	type: "cash" | "asset" | "liability";
+	subtype: string | null;
+	provider: string | null;
+	currency: string;
+	opening_balance: string;
+	status: "active" | "archived";
+	is_default: boolean;
+	visibility: "shared" | "private";
+	owner_user_id: string | null;
+	created_at: string;
+	updated_at: string;
 };
 
 export type AccountList = { items: Account[] };
 
 export type Transfer = {
-  id: string;
-  ledger_id: string;
-  from_account_id: string;
-  to_account_id: string;
-  amount: string;
-  currency: string;
-  note: string;
-  occurred_at: string;
-  reversed_at: string | null;
-  created_at: string;
-  updated_at: string;
+	id: string;
+	ledger_id: string;
+	from_account_id: string;
+	to_account_id: string;
+	amount: string;
+	currency: string;
+	note: string;
+	occurred_at: string;
+	reversed_at: string | null;
+	created_at: string;
+	updated_at: string;
 };
 
 export type TransferPage = {
-  items: Transfer[];
-  page: number;
-  page_size: number;
-  total: number;
-  pages: number;
+	items: Transfer[];
+	page: number;
+	page_size: number;
+	total: number;
+	pages: number;
 };
 
 export type TransferDetail = {
-  transfer: Transfer;
-  revisions: Array<{
-    id: string;
-    change_type: "create" | "update" | "reverse";
-    before: Record<string, unknown>;
-    after: Record<string, unknown>;
-    created_at: string;
-  }>;
+	transfer: Transfer;
+	revisions: Array<{
+		id: string;
+		change_type: "create" | "update" | "reverse";
+		before: Record<string, unknown>;
+		after: Record<string, unknown>;
+		created_at: string;
+	}>;
 };
 
 export type AssetSummary = {
-  ledger_id: string;
-  currency: string;
-  total_assets: string;
-  total_liabilities: string;
-  net_assets: string;
-  accounts: AccountBalance[];
+	ledger_id: string;
+	currency: string;
+	total_assets: string;
+	total_liabilities: string;
+	net_assets: string;
+	accounts: AccountBalance[];
 };
 
 export type Ledger = {
-  id: string;
-  name: string;
-  is_default: boolean;
-  is_current: boolean;
-  currency: string;
-  timezone: string;
-  kind: "personal" | "household_shared" | "business";
-  household_id: string | null;
+	id: string;
+	name: string;
+	is_default: boolean;
+	is_current: boolean;
+	currency: string;
+	timezone: string;
+	kind: "personal" | "household_shared" | "business";
+	household_id: string | null;
 };
 
 export type LedgerList = { items: Ledger[] };
 
-export type HouseholdMember = { user_id: string; display_name: string; role: "owner" | "member"; joined_at: string | null };
+export type HouseholdMember = {
+	user_id: string;
+	display_name: string;
+	role: "owner" | "member";
+	joined_at: string | null;
+};
 export type Household = {
-  id: string;
-  name: string;
-  owner_user_id: string;
-  role: "owner" | "member";
-  status: string;
-  ledger: Ledger;
-  created_at: string;
-  updated_at: string;
-  members: HouseholdMember[] | null;
+	id: string;
+	name: string;
+	owner_user_id: string;
+	role: "owner" | "member";
+	status: string;
+	ledger: Ledger;
+	created_at: string;
+	updated_at: string;
+	members: HouseholdMember[] | null;
 };
 export type HouseholdList = { items: Household[] };
 export type HouseholdInvitation = {
-  id: string;
-  invitation_code: string;
-  household_id: string;
-  household_name: string;
-  target_user_id: string;
-  status: string;
-  expires_at: string;
-  created_at: string;
+	id: string;
+	invitation_code: string;
+	household_id: string;
+	household_name: string;
+	target_user_id: string;
+	status: string;
+	expires_at: string;
+	created_at: string;
 };
 
 export type PendingSummary = {
-  confirmation_id: string;
-  status: string;
-  source_type: string;
-  transport: string;
-  risk_reason: string;
-  entries_total: number;
-  income_total: string;
-  expense_total: string;
-  currency: string;
-  created_at: string;
-  expires_at: string;
-  completed_at: string | null;
+	confirmation_id: string;
+	status: string;
+	source_type: string;
+	transport: string;
+	risk_reason: string;
+	entries_total: number;
+	income_total: string;
+	expense_total: string;
+	currency: string;
+	created_at: string;
+	expires_at: string;
+	completed_at: string | null;
 };
 
 export type PendingPage = {
-  items: PendingSummary[];
-  page: number;
-  page_size: number;
-  total: number;
-  pages: number;
+	items: PendingSummary[];
+	page: number;
+	page_size: number;
+	total: number;
+	pages: number;
 };
 
 export type PendingDetail = {
-  pending: PendingSummary;
-  preview: {
-    items: Array<{ index: number | null; direction: string; amount: string; currency: string; category: string; occurred_at: string; note: string; duplicate_of: string | null }>;
-    budgets: Array<{ category: string; amount: string; currency: string }>;
-    anomalies: string[];
-  };
+	pending: PendingSummary;
+	preview: {
+		items: Array<{
+			index: number | null;
+			direction: string;
+			amount: string;
+			currency: string;
+			category: string;
+			occurred_at: string;
+			note: string;
+			duplicate_of: string | null;
+		}>;
+		budgets: Array<{ category: string; amount: string; currency: string }>;
+		anomalies: string[];
+	};
 };
 
 export type PendingActionResponse = { message: string; pending: PendingDetail };
 
 export type AdminEvent = {
-  event_id: string;
-  source_message_id: string | null;
-  status: string;
-  attempt_count: number;
-  transport: string | null;
-  received_at: string | null;
-  processed_at: string;
-  last_error_code: string | null;
-  updated_at: string;
+	event_id: string;
+	source_message_id: string | null;
+	status: string;
+	attempt_count: number;
+	transport: string | null;
+	received_at: string | null;
+	processed_at: string;
+	last_error_code: string | null;
+	updated_at: string;
 };
 
 export type AdminOutbox = {
-  id: string;
-  event_id: string | null;
-  reply_type: string;
-  sequence: number;
-  status: string;
-  attempt_count: number;
-  created_at: string;
-  sent_at: string | null;
-  last_error_code: string | null;
+	id: string;
+	event_id: string | null;
+	reply_type: string;
+	sequence: number;
+	status: string;
+	attempt_count: number;
+	created_at: string;
+	sent_at: string | null;
+	last_error_code: string | null;
 };
 
-export type AdminEventPage = { items: AdminEvent[]; page: number; page_size: number; total: number; pages: number };
-export type AdminOutboxPage = { items: AdminOutbox[]; page: number; page_size: number; total: number; pages: number };
-export type AdminDeadSummary = { event_count: number; reply_count: number; latest_events: AdminEvent[]; latest_replies: AdminOutbox[] };
+export type AdminEventPage = {
+	items: AdminEvent[];
+	page: number;
+	page_size: number;
+	total: number;
+	pages: number;
+};
+export type AdminOutboxPage = {
+	items: AdminOutbox[];
+	page: number;
+	page_size: number;
+	total: number;
+	pages: number;
+};
+export type AdminDeadSummary = {
+	event_count: number;
+	reply_count: number;
+	latest_events: AdminEvent[];
+	latest_replies: AdminOutbox[];
+};
 export type ReplayPreflight = {
-  event_found: boolean;
-  eligible: boolean;
-  status: string | null;
-  business_result_committed: boolean;
-  outbox_count: number;
-  ledger_entry_count: number;
-  batch_risk: string;
-  lease_state: string;
-  reason_codes: string[];
-  recommended_action: string;
+	event_found: boolean;
+	eligible: boolean;
+	status: string | null;
+	business_result_committed: boolean;
+	outbox_count: number;
+	ledger_entry_count: number;
+	batch_risk: string;
+	lease_state: string;
+	reason_codes: string[];
+	recommended_action: string;
 };
-export type EventReplayResult = { mode: string; outcome: string; audit_id: string | null; resulting_status: string | null; preflight: ReplayPreflight };
-export type HealthSnapshot = { status: string; checks: Record<string, { status: string; reason?: string; current?: string; enabled?: boolean; running?: boolean; last_error_code?: string | null }> };
-export type SafeSystemConfig = { version: string; event_mode: string; timezone: string; currency: string; worker_enabled: boolean; reply_worker_enabled: boolean; cleanup_worker_enabled: boolean; pending_enabled: boolean; ai_provider: string; ai_model: string; ai_api_key_configured: boolean; lark_app_secret_configured: boolean; dashboard_base_url: string; session_ttl_seconds: number; secure_cookie: boolean };
+export type EventReplayResult = {
+	mode: string;
+	outcome: string;
+	audit_id: string | null;
+	resulting_status: string | null;
+	preflight: ReplayPreflight;
+};
+export type HealthSnapshot = {
+	status: string;
+	checks: Record<
+		string,
+		{
+			status: string;
+			reason?: string;
+			current?: string;
+			enabled?: boolean;
+			running?: boolean;
+			last_error_code?: string | null;
+		}
+	>;
+};
+export type SafeSystemConfig = {
+	version: string;
+	event_mode: string;
+	timezone: string;
+	currency: string;
+	worker_enabled: boolean;
+	reply_worker_enabled: boolean;
+	cleanup_worker_enabled: boolean;
+	pending_enabled: boolean;
+	ai_provider: string;
+	ai_model: string;
+	ai_api_key_configured: boolean;
+	lark_app_secret_configured: boolean;
+	dashboard_base_url: string;
+	session_ttl_seconds: number;
+	secure_cookie: boolean;
+};
 
-export type AnalyticsSummary = { range_start: string; range_end: string; income: string; expense: string; balance: string; entry_count: number };
-export type AnalyticsTrendPoint = { period: string; income: string; expense: string; balance: string };
-export type AnalyticsCategory = { category: string; amount: string; ratio: string };
-export type AnalyticsMonthlyPoint = { period: string; income: string; expense: string; balance: string };
-export type AnalyticsOverview = { summary: AnalyticsSummary; trend: AnalyticsTrendPoint[]; categories: AnalyticsCategory[] };
+export type AnalyticsSummary = {
+	range_start: string;
+	range_end: string;
+	income: string;
+	expense: string;
+	balance: string;
+	entry_count: number;
+};
+export type AnalyticsTrendPoint = {
+	period: string;
+	income: string;
+	expense: string;
+	balance: string;
+};
+export type AnalyticsCategory = {
+	category: string;
+	amount: string;
+	ratio: string;
+};
+export type AnalyticsMonthlyPoint = {
+	period: string;
+	income: string;
+	expense: string;
+	balance: string;
+};
+export type AnalyticsOverview = {
+	summary: AnalyticsSummary;
+	trend: AnalyticsTrendPoint[];
+	categories: AnalyticsCategory[];
+};
 export type BudgetStatus = "none" | "normal" | "warning" | "exceeded";
-export type BudgetItem = { category: string; amount: string | null; spent: string; remaining: string | null; usage_rate: string | null; status: BudgetStatus };
-export type BudgetOverview = { currency: string; period: string; total_budget: string | null; total_spent: string; total_remaining: string | null; usage_rate: string | null; status: BudgetStatus; total_limit_set: boolean; allocated: string; unallocated: string | null; items: BudgetItem[] };
+export type BudgetItem = {
+	category: string;
+	amount: string | null;
+	spent: string;
+	remaining: string | null;
+	usage_rate: string | null;
+	status: BudgetStatus;
+};
+export type BudgetOverview = {
+	currency: string;
+	period: string;
+	total_budget: string | null;
+	total_spent: string;
+	total_remaining: string | null;
+	usage_rate: string | null;
+	status: BudgetStatus;
+	total_limit_set: boolean;
+	allocated: string;
+	unallocated: string | null;
+	items: BudgetItem[];
+};
 
 export type MemberStats = {
-  user_id: string;
-  display_name: string;
-  alias: string | null;
-  role: "owner" | "member";
-  expense_total: string;
-  income_total: string;
-  transaction_count: number;
+	user_id: string;
+	display_name: string;
+	alias: string | null;
+	role: "owner" | "member";
+	expense_total: string;
+	income_total: string;
+	transaction_count: number;
 };
-export type OverviewBudget = { total_budget: string | null; total_spent: string; total_remaining: string | null; usage_rate: string | null; status: BudgetStatus };
-export type AccountBalanceSummary = { currency: string; total_assets: string; total_liabilities: string; net_assets: string; account_count: number };
+export type OverviewBudget = {
+	total_budget: string | null;
+	total_spent: string;
+	total_remaining: string | null;
+	usage_rate: string | null;
+	status: BudgetStatus;
+};
+export type AccountBalanceSummary = {
+	currency: string;
+	total_assets: string;
+	total_liabilities: string;
+	net_assets: string;
+	account_count: number;
+};
 export type UpcomingRecurringItem = {
-  rule_id: string;
-  transaction_type: "expense" | "income";
-  amount: string;
-  currency: string;
-  category: string;
-  description: string;
-  frequency: RecurringFrequency;
-  next_occurrence: string;
-  account_name: string | null;
+	rule_id: string;
+	transaction_type: "expense" | "income";
+	amount: string;
+	currency: string;
+	category: string;
+	description: string;
+	frequency: RecurringFrequency;
+	next_occurrence: string;
+	account_name: string | null;
 };
 export type HouseholdOverview = {
-  ledger_id: string;
-  ledger_name: string;
-  ledger_kind: "personal" | "household_shared" | "business";
-  period: string;
-  income_total: string;
-  expense_total: string;
-  net_total: string;
-  budget: OverviewBudget;
-  account_balance_summary: AccountBalanceSummary;
-  member_contributions: MemberStats[];
-  top_categories: Array<{ category: string; amount: string; ratio: string }>;
-  upcoming_recurring: UpcomingRecurringItem[];
-  recent_transactions: Entry[];
+	ledger_id: string;
+	ledger_name: string;
+	ledger_kind: "personal" | "household_shared" | "business";
+	period: string;
+	income_total: string;
+	expense_total: string;
+	net_total: string;
+	budget: OverviewBudget;
+	account_balance_summary: AccountBalanceSummary;
+	member_contributions: MemberStats[];
+	top_categories: Array<{ category: string; amount: string; ratio: string }>;
+	upcoming_recurring: UpcomingRecurringItem[];
+	recent_transactions: Entry[];
 };
-export type ReportData = { range_start: string; range_end: string; currency: string; income_total: string; expense_total: string; balance: string; entry_count: number; categories: Array<{ category: string; amount: string }>; trend: Array<{ period: string; amount: string }>; trend_granularity: "day" | "month" };
+export type ReportData = {
+	range_start: string;
+	range_end: string;
+	currency: string;
+	income_total: string;
+	expense_total: string;
+	balance: string;
+	entry_count: number;
+	categories: Array<{ category: string; amount: string }>;
+	trend: Array<{ period: string; amount: string }>;
+	trend_granularity: "day" | "month";
+};
 
 export type RecurringFrequency = "weekly" | "monthly" | "yearly";
 export type RecurringRule = {
-  id: string;
-  ledger_id: string;
-  transaction_type: "expense" | "income";
-  amount: string;
-  currency: string;
-  category: string;
-  description: string;
-  frequency: RecurringFrequency;
-  interval: number;
-  next_occurrence: string;
-  status: "active" | "paused" | "disabled";
-  account_id: string;
-  account_name: string | null;
-  pending_count: number;
-  created_at: string;
-  updated_at: string;
+	id: string;
+	ledger_id: string;
+	transaction_type: "expense" | "income";
+	amount: string;
+	currency: string;
+	category: string;
+	description: string;
+	frequency: RecurringFrequency;
+	interval: number;
+	next_occurrence: string;
+	status: "active" | "paused" | "disabled";
+	account_id: string;
+	account_name: string | null;
+	pending_count: number;
+	created_at: string;
+	updated_at: string;
 };
 export type RecurringRuleList = { items: RecurringRule[] };
 export type RecurringRuleCreateInput = {
-  transaction_type: "expense" | "income";
-  amount: string;
-  currency: string | null;
-  category: string;
-  description: string;
-  frequency: RecurringFrequency;
-  interval: number;
-  next_occurrence: string;
-  account_id: string;
+	transaction_type: "expense" | "income";
+	amount: string;
+	currency: string | null;
+	category: string;
+	description: string;
+	frequency: RecurringFrequency;
+	interval: number;
+	next_occurrence: string;
+	account_id: string;
 };
-export type RecurringRuleUpdateInput = Partial<Omit<RecurringRuleCreateInput, "transaction_type" | "interval">> & { transaction_type?: "expense" | "income"; interval?: number };
+export type RecurringRuleUpdateInput = Partial<
+	Omit<RecurringRuleCreateInput, "transaction_type" | "interval">
+> & { transaction_type?: "expense" | "income"; interval?: number };
 
-export type GoalAccountBindingItem = { account_id: string; account_name: string | null; currency: string };
+export type GoalAccountBindingItem = {
+	account_id: string;
+	account_name: string | null;
+	currency: string;
+};
 export type Goal = {
-  id: string;
-  ledger_id: string;
-  name: string;
-  description: string;
-  goal_type: "savings";
-  target_amount: string;
-  currency: string;
-  target_date: string | null;
-  status: "active" | "completed" | "archived";
-  created_by_user_id: string;
-  created_at: string;
-  updated_at: string;
-  account_bindings: GoalAccountBindingItem[];
-  current_amount: string;
-  remaining_amount: string | null;
-  progress_percent: string | null;
-  is_target_reached: boolean;
+	id: string;
+	ledger_id: string;
+	name: string;
+	description: string;
+	goal_type: "savings";
+	target_amount: string;
+	currency: string;
+	target_date: string | null;
+	status: "active" | "completed" | "archived";
+	created_by_user_id: string;
+	created_at: string;
+	updated_at: string;
+	account_bindings: GoalAccountBindingItem[];
+	current_amount: string;
+	remaining_amount: string | null;
+	progress_percent: string | null;
+	is_target_reached: boolean;
 };
 export type GoalList = { items: Goal[] };
 export type GoalCreateInput = {
-  name: string;
-  description?: string;
-  target_amount: string;
-  currency?: string | null;
-  target_date?: string | null;
-  account_ids: string[];
+	name: string;
+	description?: string;
+	target_amount: string;
+	currency?: string | null;
+	target_date?: string | null;
+	account_ids: string[];
 };
-export type GoalUpdateInput = Partial<GoalCreateInput> & { status?: "active" | "completed" | "archived" };
+export type GoalUpdateInput = Partial<GoalCreateInput> & {
+	status?: "active" | "completed" | "archived";
+};
 export type GoalProgress = {
-  goal_id: string;
-  name: string;
-  target_amount: string;
-  current_amount: string;
-  remaining_amount: string;
-  progress_ratio: string;
-  progress_percent: string;
-  currency: string;
-  target_date: string | null;
-  days_remaining: number | null;
-  is_target_reached: boolean;
-  monthly_saving_rate: string | null;
-  estimated_months_to_goal: string | null;
-  projected_shortfall_at_target_date: string | null;
+	goal_id: string;
+	name: string;
+	target_amount: string;
+	current_amount: string;
+	remaining_amount: string;
+	progress_ratio: string;
+	progress_percent: string;
+	currency: string;
+	target_date: string | null;
+	days_remaining: number | null;
+	is_target_reached: boolean;
+	monthly_saving_rate: string | null;
+	estimated_months_to_goal: string | null;
+	projected_shortfall_at_target_date: string | null;
 };
 export type InsightSeverity = "info" | "attention" | "warning";
 export type Insight = {
-  key: string;
-  type: string;
-  severity: InsightSeverity;
-  title: string;
-  summary: string;
-  metric: Record<string, string>;
-  period: string;
-  related_category: string | null;
-  related_goal: string | null;
-  related_goal_name: string | null;
-  related_account: string | null;
-  generated_at: string;
-  explanation: string | null;
+	key: string;
+	type: string;
+	severity: InsightSeverity;
+	title: string;
+	summary: string;
+	metric: Record<string, string>;
+	period: string;
+	related_category: string | null;
+	related_goal: string | null;
+	related_goal_name: string | null;
+	related_account: string | null;
+	generated_at: string;
+	explanation: string | null;
 };
 export type InsightList = { insights: Insight[] };
 
-export type ClientCredentialScope = "ledger:read" | "ledger:write" | "pending:write";
+export type ClientCredentialScope =
+	| "ledger:read"
+	| "ledger:write"
+	| "pending:write";
 export type ClientCredential = {
-  id: string;
-  name: string;
-  token_prefix: string;
-  scopes: string[];
-  created_at: string;
-  last_used_at: string | null;
-  expires_at: string | null;
-  revoked_at: string | null;
+	id: string;
+	name: string;
+	token_prefix: string;
+	scopes: string[];
+	created_at: string;
+	last_used_at: string | null;
+	expires_at: string | null;
+	revoked_at: string | null;
 };
 export type ClientCredentialCreated = ClientCredential & { token: string };
 export type ClientCredentialList = { items: ClientCredential[] };
 
 export const money = (value: string | number) =>
-  new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(Number(value));
+	new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
+		Number(value),
+	);
 
 export const localTime = (value: string) =>
-  new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+	new Intl.DateTimeFormat("zh-CN", {
+		dateStyle: "medium",
+		timeStyle: "short",
+	}).format(new Date(value));
 
 export class ApiError extends Error {
-  constructor(
-    public readonly status: number,
-    message: string,
-  ) {
-    super(message);
-  }
+	constructor(
+		public readonly status: number,
+		message: string,
+	) {
+		super(message);
+	}
 }
 
 function cookie(name: string): string {
-  const value = document.cookie
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${name}=`));
-  return value ? decodeURIComponent(value.slice(name.length + 1)) : "";
+	const value = document.cookie
+		.split(";")
+		.map((part) => part.trim())
+		.find((part) => part.startsWith(`${name}=`));
+	return value ? decodeURIComponent(value.slice(name.length + 1)) : "";
 }
 
 const statusMessages: Record<number, string> = {
-  401: "登录已失效，请重新登录",
-  403: "没有权限执行此操作",
-  404: "请求的内容不存在",
-  409: "状态已变化，请刷新后重试",
-  422: "输入内容有误，请检查后重试",
-  503: "系统暂不可用，请稍后重试",
+	401: "登录已失效，请重新登录",
+	403: "没有权限执行此操作",
+	404: "请求的内容不存在",
+	409: "状态已变化，请刷新后重试",
+	422: "输入内容有误，请检查后重试",
+	503: "系统暂不可用，请稍后重试",
 };
 
 async function responseError(response: Response): Promise<ApiError> {
-  const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
-  const detail = typeof payload?.detail === "string" && /[\u3400-\u9fff]/u.test(payload.detail)
-    ? payload.detail
-    : null;
-  if (response.status === 401) window.dispatchEvent(new Event("larkledger:auth-expired"));
-  return new ApiError(response.status, detail ?? statusMessages[response.status] ?? "请求失败，请稍后重试");
+	const payload = (await response.json().catch(() => null)) as {
+		detail?: unknown;
+	} | null;
+	const detail =
+		typeof payload?.detail === "string" &&
+		/[\u3400-\u9fff]/u.test(payload.detail)
+			? payload.detail
+			: null;
+	if (response.status === 401)
+		window.dispatchEvent(new Event("larkledger:auth-expired"));
+	return new ApiError(
+		response.status,
+		detail ?? statusMessages[response.status] ?? "请求失败，请稍后重试",
+	);
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const method = (init.method ?? "GET").toUpperCase();
-  const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
-    headers.set("X-CSRF-Token", cookie("lark_ledger_csrf"));
-  }
-  const response = await fetch(`/api/web/v1${path}`, {
-    ...init,
-    headers,
-    credentials: "same-origin",
-  });
-  if (!response.ok) {
-    throw await responseError(response);
-  }
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+	const method = (init.method ?? "GET").toUpperCase();
+	const headers = new Headers(init.headers);
+	if (init.body && !headers.has("Content-Type"))
+		headers.set("Content-Type", "application/json");
+	if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+		headers.set("X-CSRF-Token", cookie("lark_ledger_csrf"));
+	}
+	const response = await fetch(`/api/web/v1${path}`, {
+		...init,
+		headers,
+		credentials: "same-origin",
+	});
+	if (!response.ok) {
+		throw await responseError(response);
+	}
+	if (response.status === 204) return undefined as T;
+	return (await response.json()) as T;
 }
 
-export async function downloadExport(payload: unknown): Promise<{ blob: Blob; filename: string }> {
-  const response = await fetch("/api/web/v1/exports", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": cookie("lark_ledger_csrf") },
-    credentials: "same-origin",
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw await responseError(response);
-  }
-  const disposition = response.headers.get("Content-Disposition") ?? "";
-  const filename = disposition.match(/filename="([^"]+)"/)?.[1] ?? "larkledger-export.csv";
-  return { blob: await response.blob(), filename };
+export async function downloadExport(
+	payload: unknown,
+): Promise<{ blob: Blob; filename: string }> {
+	const response = await fetch("/api/web/v1/exports", {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"X-CSRF-Token": cookie("lark_ledger_csrf"),
+		},
+		credentials: "same-origin",
+		body: JSON.stringify(payload),
+	});
+	if (!response.ok) {
+		throw await responseError(response);
+	}
+	const disposition = response.headers.get("Content-Disposition") ?? "";
+	const filename =
+		disposition.match(/filename="([^"]+)"/)?.[1] ?? "larkledger-export.csv";
+	return { blob: await response.blob(), filename };
 }

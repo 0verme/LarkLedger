@@ -30,9 +30,7 @@ class CanonicalExpectation:
     paid_by_user_id: str | None = None
 
 
-async def entry_snapshot(
-    session: AsyncSession, source_message_id: str
-) -> dict[str, Any]:
+async def entry_snapshot(session: AsyncSession, source_message_id: str) -> dict[str, Any]:
     """Read a row's business facts (never transport metadata)."""
     row = await session.scalar(
         select(LedgerEntry).where(LedgerEntry.source_message_id == source_message_id)

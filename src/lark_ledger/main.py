@@ -52,8 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         not settings.lark_app_id or not settings.lark_app_secret
     ):
         raise RuntimeError(
-            "websocket mode requires LARK_LEDGER_LARK_APP_ID and "
-            "LARK_LEDGER_LARK_APP_SECRET"
+            "websocket mode requires LARK_LEDGER_LARK_APP_ID and LARK_LEDGER_LARK_APP_SECRET"
         )
     reply_wakeup = asyncio.Event()
     processor = MessageProcessor(
@@ -65,9 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         reply_worker_enabled=settings.reply_worker_enabled,
         wakeup=reply_wakeup.set,
     )
-    event_service = EventService(
-        SessionFactory, processor, worker_enabled=settings.worker_enabled
-    )
+    event_service = EventService(SessionFactory, processor, worker_enabled=settings.worker_enabled)
     app.state.processor = processor
     app.state.event_service = event_service
     card_action_service = CardActionService(
@@ -251,9 +248,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @application.exception_handler(RequestValidationError)
-    async def client_validation_error(
-        request: Request, exc: RequestValidationError
-    ) -> Response:
+    async def client_validation_error(request: Request, exc: RequestValidationError) -> Response:
         if not (
             request.url.path.startswith("/api/v1/")
             or request.url.path.startswith("/api/client/v1/")
@@ -289,6 +284,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 },
             )
         return JSONResponse(status_code=403, content={"detail": "permission denied"})
+
     if initial_settings.dashboard_enabled:
         application.include_router(web_router)
         application.add_middleware(
