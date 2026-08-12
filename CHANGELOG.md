@@ -2,8 +2,19 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
-## [Unreleased]
+## [0.10.0] - 2026-08-14
 
+### First-party Client / Unified AI Entry
+
+- **Human Session**：真人用户通过独立的 Web Session 登录，Session Secret 仅以 `HttpOnly` Cookie 传输，数据库只保存 digest，并支持多设备、撤销、CSRF 与 Cleanup Worker 生命周期管理。
+- **First-party Web Client**：Web 成为完整的独立记账入口，覆盖首页、账本选择、结构化记账、流水修改/删除/恢复、账户、家庭账本、周期账单、Goals、Overview 与 Insights；不依赖 `llv1_*` API Token。
+- **Unified AI Entry**：Feishu 与 Web AI 共用 `UnifiedAIEntryService`、统一 `ParsedCommand`、RiskRouter 与 `ClientApplicationService`，AI Interpreter 不访问 Repository、SQLAlchemy 或数据库。
+- **Cross-channel equivalence**：Feishu、First-party Web、Machine API 与 `/api/client/v1` compatibility alias 共享 Identity、RequestContext、Application、Authorization、Domain 与 Ledger 契约；`source_channel` 只保留来源元数据，不改变业务语义。
+- **Production hardening**：回归验证 architecture guards、AI structured output、prompt injection boundary、server-side private isolation、ledger isolation、CSRF、session/API credential separation、PostgreSQL exactly-once idempotency、event replay、confirmation atomicity、OpenAPI 与统一 error envelope。
+
+### Migration
+
+- 本版本不新增 migration；Alembic head 保持 `20260814_0027`。从 v0.9.0 升级时需先备份 PostgreSQL，再执行 `alembic upgrade head` 以部署 P37 Human Session schema。
 
 ### Added (P38 — First-party Web Client)
 

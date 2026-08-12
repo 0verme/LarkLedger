@@ -2,11 +2,11 @@
 
 > Documentation is Chinese-first. For an English project overview, see the [English README](../README.en.md).
 
-本文说明 LarkLedger v0.9.0 的运行组件、消息数据流、通道无关的 Application Layer、Web Dashboard 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
+本文说明 LarkLedger v0.10.0 的运行组件、消息数据流、通道无关的 Application Layer、First-party Web 与 Machine API 共享业务核心和安全边界。用户操作见[用户手册](help.md)，部署配置见[环境与部署指南](environment.md)。
 
-## 架构分层：飞书是 Adapter（v0.9.0）
+## 架构分层：飞书是 Adapter（v0.10.0）
 
-v0.9.0 正式确立**通道无关核心**：Feishu、Web、Client API 只是 Adapter，三者进入
+v0.10.0 通过 P40 release hardening 正式确立**通道无关核心**：Feishu、Web、Client API 只是 Adapter，三者进入
 **同一个 Application Layer**。依赖方向只有一种，并由 CI 的 AST 架构守护测试强制：
 
 ```text

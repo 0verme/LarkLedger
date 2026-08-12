@@ -2,15 +2,15 @@
 
 [English](README.en.md) | 简体中文
 
-> 自托管的飞书 / Lark AI 记账机器人。账本保存在你自己的 PostgreSQL 中；大模型只负责把消息变成经过严格校验的业务动作。
+> 自托管的多入口 AI Ledger Platform。Feishu 是其中一个 Adapter；First-party Web 与 Machine API 通过同一套 Identity、Application、Authorization、Domain 与 Ledger 共享账本。大模型只负责把输入变成经过严格校验的业务动作。
 
 [![CI](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-## 当前能力（v0.9.0 主线）
+## 当前能力（v0.10.0 主线）
 
-- **平台 / 通道无关 Core（v0.9.0）**：Feishu / Web / Client API 三套入口共享同一个 `ClientApplicationService` Application Layer——对于相同业务事实产生一致 Domain Result，Core 不依赖任何渠道 transport（架构守护见 `tests/architecture/`）。正式通道无关 Client API：**`/api/v1`**（`/api/client/v1` 为同一组 handler 的兼容别名）；Bearer API Token（`llv1_*`，明文只显示一次、DB 只存 SHA-256 digest、可 revoke / expiry、scope 只缩权），headless client 不需要 Feishu、浏览器 cookie 或 OAuth session 即可独立完成认证 / 选账本 / 记账 / 查询 / Overview / Goals / Insights；写请求强制 `Idempotency-Key`（同 key 重试 replay、不同 body 409、PostgreSQL 并发 exactly-once）；稳定 error envelope 与 OpenAPI 契约（见 [Client API 文档](docs/client-api.md)）
+- **平台 / 通道无关 Core（v0.10.0）**：Feishu / First-party Web / Machine API 三套入口共享同一个 `ClientApplicationService` Application Layer——对于相同业务事实产生一致 Domain Result，Core 不依赖任何渠道 transport（架构守护见 `tests/architecture/`）。正式通道无关 Client API：**`/api/v1`**（`/api/client/v1` 为同一组 handler 的兼容别名）；Bearer API Token（`llv1_*`，明文只显示一次、DB 只存 SHA-256 digest、可 revoke / expiry、scope 只缩权），headless client 不需要 Feishu、浏览器 cookie 或 OAuth session 即可独立完成认证 / 选账本 / 记账 / 查询 / Overview / Goals / Insights；写请求强制 `Idempotency-Key`（同 key 重试 replay、不同 body 409、PostgreSQL 并发 exactly-once）；稳定 error envelope 与 OpenAPI 契约（见 [Client API 文档](docs/client-api.md)）
 - **财务目标（Goals，v0.8.0）**：把“想存到多少钱”变成可跟踪的目标（`应急储备 60000`）；进度来自**真实账本**——目标绑定现金 / 资产账户，`current_amount` 始终等于绑定账户实时余额之和，目标不保存、不手工维护余额，记账 / 删账 / 恢复 / 转账变化会自动重算。支持目标日期与确定性 forecast；可见性继承绑定账户（引用任何私人账户的目标对他人完全不可见，防止通过目标显示泄漏私人余额）；目标不是虚拟账户 / 资金池，创建 / 修改 / 删除从不触碰账户、账目或转账。飞书 `我的目标 / 目标 / 查看目标` 与 Web `/goals` 同源
 - **确定性洞察（Insights，v0.8.0）**：从真实账本自动发现值得注意的事实——支出变化（本月 vs 近 3 个月平均）、预算风险（使用率快于时间进度）、未来 30 天周期支出（按币种分组）、目标进度 / 预计缺口。全部由确定性规则计算，AI 不参与计算、不访问数据库，只可选改写解释文案；AI 不可用时自动回退确定性摘要。私人数据不会通过任何洞察侧信道泄漏。飞书 `洞察 / 财务洞察 / 本月洞察` 与 Web `/insights` 同源。**洞察是财务数据解释与提醒，不是金融顾问**——不提供投资、股票、理财、贷款、税务建议，不做任何自动资金操作
 
@@ -32,7 +32,7 @@
 - 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
 - **可靠投递**：事件 / 回复后台 Worker、事务性回复 Outbox、PostgreSQL 租约与指数退避重试、readiness、终态清理与受控人工事件重放
 - **Web Dashboard**：飞书 OAuth、财务总览、账目与 revision、Pending、分析、预算、**财务目标（/goals，创建 / 编辑 / 进度 / 归档 / 删除）**、**洞察卡片（/overview「值得关注」）**、周期账单、报表、CSV 下载及管理员可靠性控制台
-- **通道无关 Client API（v0.9.0）**：正式契约 `/api/v1`（`/api/client/v1` 为兼容别名）为 CLI / 硬件 / 未来客户端提供结构化命令/查询边界；Bearer 个人令牌（`llv1_`，只保存 SHA-256 摘要、可撤销、可过期、scope 只缩权）与持久化 `Idempotency-Key`。飞书与 Web 只是 Adapter，与 API 共用同一个 `ClientApplicationService`，同一业务事实产生一致 Domain Result
+- **通道无关 Client API（v0.10.0）**：正式契约 `/api/v1`（`/api/client/v1` 为兼容别名）为 CLI / 硬件 / 未来客户端提供结构化命令/查询边界；Bearer 个人令牌（`llv1_`，只保存 SHA-256 摘要、可撤销、可过期、scope 只缩权）与持久化 `Idempotency-Key`。飞书与 Web 只是 Adapter，与 API 共用同一个 `ClientApplicationService`，同一业务事实产生一致 Domain Result
 - 自托管：FastAPI、React / TypeScript / Vite、PostgreSQL、Docker Compose
 
 完整消息示例见[用户手册](docs/help.md)。
@@ -250,9 +250,9 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 - **不是 AA / Splitwise**：没有分摊、结算、债务关系或人均拆账；**不是复式记账**：一人公司科目 / 凭证 / 借贷仍属远期领域，不把会计字段加入个人收支表；**不是企业财务**：无审计链路、审批流、多币种汇率结算或财务报告义务
 - JSON 导出**不是**正式能力（当前仅 CSV）
 
-后续路线不在本次发布承诺内；v0.9.0 不扩展为多租户财务 ERP / OAuth Authorization Server / SaaS API Gateway。
+后续路线不在本次发布承诺内；v0.10.0 不扩展为多租户财务 ERP / OAuth Authorization Server / SaaS API Gateway。
 
-镜像与版本：当前正式版本为 **v0.9.0**（Platform / Channel-Neutral Core）。预构建镜像：`ghcr.io/0verme/larkledger:0.9.0`（亦有 `0.9` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：当前正式版本为 **v0.10.0**（First-party Client / Unified AI Entry）。预构建镜像：`ghcr.io/0verme/larkledger:0.10.0`（亦有 `0.10` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
 
 ## 效果展示
 
@@ -329,8 +329,8 @@ pytest --cov
 ## 使用预构建镜像（可选）
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.9.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.9.0"
+export LARK_LEDGER_IMAGE_TAG=0.10.0
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.10.0"
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
@@ -347,7 +347,7 @@ curl http://127.0.0.1:8000/healthz
 - [Client API（`/api/v1`）](docs/client-api.md)
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
-- [变更日志](CHANGELOG.md) · [v0.9.0 发布说明](.github/release-notes/v0.9.0.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
+- [变更日志](CHANGELOG.md) · [v0.10.0 发布说明](.github/release-notes/v0.10.0.md) · [v0.9.0 发布说明](.github/release-notes/v0.9.0.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
 

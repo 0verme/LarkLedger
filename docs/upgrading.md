@@ -6,11 +6,11 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.9.0** |
-| 包版本 / `__version__` | `0.9.0` |
-| Git tag | `v0.9.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.9.0`（亦有 `0.9` / `latest` 由发布流水线写入） |
-| Alembic head | `20260813_0026` |
+| 最新正式版本 | **v0.10.0** |
+| 包版本 / `__version__` | `0.10.0` |
+| Git tag | `v0.10.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.10.0`（亦有 `0.10` / `latest` 由发布流水线写入） |
+| Alembic head | `20260814_0027` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
 ## 升级前
@@ -20,6 +20,14 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
+
+## 从 v0.9.0 升级到 v0.10.0（First-party Client / Unified AI Entry）
+
+v0.10.0 是 P40 release hardening：Feishu、First-party Web 与 Machine API 共享同一个 Identity、`RequestContext`、`ClientApplicationService`、Authorization、Domain 与 Ledger。Web AI 与 Feishu AI 共享 `UnifiedAIEntryService`，`source_channel` 只记录来源，不改变业务规则。
+
+本版本不新增 migration，但 v0.9.0 生产可能仍在 `20260813_0026`；P37 Human Session 需要升级到 `20260814_0027`。升级前创建并验证 PostgreSQL backup，固定 `v0.10.0` source/image，执行 `alembic upgrade head`，再核对 `alembic current` 与 `alembic heads` 均为 `20260814_0027`。
+
+生产回滚优先使用 pre-v0.10.0 PostgreSQL backup + v0.9.0 source/image；不要假设仅切换旧镜像就能安全处理已执行的 `0027` migration。
 
 ## 从 v0.8.0 升级到 v0.9.0（Platform / Channel-Neutral Core）
 
