@@ -26,6 +26,30 @@ Client Layer ───┼──────── Client API（/api/v1，Bearer 
                        Repository → PostgreSQL
 ```
 
+### 两类凭据（P37）：Machine vs Human
+
+认证机制彼此独立，最终都构造统一的 `RequestContext` 进入同一个 Application Layer：
+
+```text
+Feishu Identity ─┐
+User Session ────┼→ RequestContext（actor_kind="user"）→ Application
+API Token ───────┘                            （actor_kind="client"）
+```
+
+| 维度 | Machine Credential | Human Credential |
+| --- | --- | --- |
+| 凭据 | `ClientCredential` / `llv1_` Bearer | `DashboardSession` / `lls1_` Cookie |
+| 使用方 | CLI、硬件、第三方、自动化 | 浏览器、First-party Web、未来 PWA |
+| 明文 | 创建时一次性返回 | 仅写入 HttpOnly `Set-Cookie` |
+| 落库 | SHA-256 digest | SHA-256 digest（`token_hash`） |
+| 多会话 | 每凭据一个 | 每用户多设备并行 |
+| 撤销 | revoke 后立即失效 | revoke / logout 后立即失效 |
+| 过期 | 可选 expiry | 绝对 TTL（默认 8h） |
+
+`RequestContext.actor_kind` 只表达凭据家族（`user` / `client`）；`source_channel`
+（`feishu` / `web` / `client_api`）只表达传输来源，业务层永不按 channel 分支。
+Session 认证路径禁止依赖 Feishu 服务或 OAuth transport（架构守护强制）。
+
 - `tests/architecture/` 守护：Core/Application 不得 import `fastapi`、Feishu
   客户端、渠道路由或 token 传输；Domain 不得 import Application；`RequestContext`
   不携带渠道密钥；Domain/Application 错误不泄漏 `HTTPException`。

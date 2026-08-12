@@ -109,6 +109,11 @@ LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_admin_1,ou_admin_2
 LARK_LEDGER_DASHBOARD_SESSION_TTL_SECONDS=28800
 LARK_LEDGER_DASHBOARD_OAUTH_STATE_TTL_SECONDS=600
 LARK_LEDGER_DASHBOARD_COOKIE_SECURE=true
+# P37 — 可选，均有安全默认值；SameSite=none 时必须同时开启 Secure Cookie
+LARK_LEDGER_DASHBOARD_SESSION_COOKIE_NAME=lark_ledger_session
+LARK_LEDGER_DASHBOARD_CSRF_COOKIE_NAME=lark_ledger_csrf
+LARK_LEDGER_DASHBOARD_SESSION_SAMESITE=lax
+LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS=30
 ```
 
 在飞书开放平台为同一个企业自建应用配置：
@@ -119,6 +124,25 @@ LARK_LEDGER_DASHBOARD_COOKIE_SECURE=true
 4. 将需要运维权限的 `open_id` 以逗号分隔写入 `DASHBOARD_ADMIN_OPEN_IDS`；未列入者都是普通用户。
 
 `SESSION_SECRET` 需由密码学安全随机源生成，至少 32 个非平凡字符。Dashboard 开启但密钥弱、App ID/Secret 缺失、Base URL 非绝对 origin，或 Secure Cookie 搭配 HTTP 时，应用会拒绝启动。飞书 access token 不返回浏览器；浏览器仅保存 HttpOnly 会话 Cookie、HttpOnly OAuth state Cookie 与供双提交校验的 CSRF Cookie。会话可撤销、有明确 TTL，退出后立即失效。
+
+### 登录会话（Human Session，P37）
+
+真人浏览器登录态是一等公民的 **Human Session**，与机器凭据（`llv1_` API Token）明确分离：
+
+```text
+Feishu Identity ─┐
+User Session ────┼→ RequestContext → ClientApplicationService
+API Token ───────┘
+```
+
+- **Session Secret**：登录成功后生成 `lls1_` + 48 字节高熵随机值，只写入 `Set-Cookie`（`HttpOnly` + `SameSite`（默认 `lax`）+ 生产 `Secure`）；数据库 `dashboard_sessions.token_hash` 只存 SHA-256 digest，明文永不落库。每次登录都创建**全新** Session（防 Session Fixation），同一用户可多设备并存。
+- **TTL**：绝对过期，默认 8 小时（`SESSION_TTL_SECONDS`）；`last_seen_at` 每 5 分钟最多刷新一次，避免逐请求写数据库。
+- **注销 / 撤销**：`/api/web/v1/auth/logout` 先服务端 revoke 再清 Cookie；`/api/web/v1/auth/sessions` 可列出所有会话、`DELETE .../sessions/{id}` 撤销单设备、`POST .../sessions/revoke-others` 撤销其它全部设备。撤销立即生效（无缓存延迟）。
+- **保留清理**：软 revoke / 过期会话保留 `SESSION_RETENTION_DAYS`（默认 30）天后由 Cleanup Worker 物理删除，供会话 UI 与安全审计保留上下文。
+- **CSRF**：state-changing 请求必须通过 double-submit CSRF token（`X-CSRF-Token` 头 + CSRF Cookie）**且** Origin 与 `DASHBOARD_BASE_URL` 一致（存在 Origin 头时）；`SameSite` 提供第一道防线，两者语义不同、不可互相替代。
+- **审计**：`session.create` / `session.revoke` / `session.revoke_all_others` 写入 `client_security_audits`（`credential_id` 为空）；正常请求不写审计。
+- **权限**：Session 登录只回答「这个 User 是谁」。账本与私有账户访问仍由 `LedgerAuthorizationService` 统一裁决，与飞书、API Token 完全一致，Session 层不复制任何账本权限逻辑。
+- **Cookie 名称**：`SESSION_COOKIE_NAME` / `CSRF_COOKIE_NAME` 修改后需同步修改 Web 客户端中读取 CSRF Cookie 的常量（`web/src/api.ts`）。
 
 ### HTTPS 与可信代理
 

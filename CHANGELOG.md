@@ -2,6 +2,24 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [Unreleased]
+
+### Added (P37 — Human Client Authentication / Session Foundation)
+
+- **Human Session（真人登录会话地基）**：`dashboard_sessions` 演进为多设备一等公民会话——`lls1_` 前缀高熵 Session Secret 只写入 `HttpOnly` `Set-Cookie`（`SameSite` 可配置、生产默认 `Secure`），数据库只存 SHA-256 digest（`token_hash`）；每次登录创建全新 Session（防 Session Fixation），同一用户可并行多设备会话。新增字段 `user_agent`（有界）与 `created_ip_hash`（仅 IP 摘要），支撑会话 UI 与事件分析。Alembic migration `20260814_0027`。
+- **Session 生命周期 API**：`GET /api/web/v1/auth/session`（当前会话 / me）、`GET /api/web/v1/auth/sessions`（全部会话，含 `current` 标记）、`DELETE /api/web/v1/auth/sessions/{id}`（撤销单设备）、`POST /api/web/v1/auth/sessions/revoke-others`（注销其它设备）、`POST /api/web/v1/auth/logout`（服务端 revoke + 清 Cookie）。OpenAPI 响应 schema 不含任何 digest / secret。
+- **Web「登录会话」页面**（`/sessions`）：当前用户 / 设备列表（设备摘要 + UA）/ 当前会话标记 / 注销指定设备 / 注销其它所有设备 / 退出登录，保持现有 UI 风格。
+- **Session 安全策略**：绝对 TTL（默认 8h，`DASHBOARD_SESSION_TTL_SECONDS`）；`last_seen_at` 每 5 分钟最多写一次（无逐请求写放大）；CSRF 双保险（double-submit `X-CSRF-Token` + 同源 `Origin` 校验）；`session.create / revoke / revoke_all_others` 写入 `client_security_audits`（`credential_id` 为空），正常请求不写审计。
+- **Cleanup 会话保留**：软 revoke / 过期会话保留 `DASHBOARD_SESSION_RETENTION_DAYS`（默认 30）天后由 Cleanup Worker 物理删除，active 会话永不清理。
+- **RequestContext.actor_kind**：新增 `user` / `client` 凭据家族字段（`source_channel` 仍只表达传输来源），Client API 与 Human Session 都以相同 `RequestContext` 进入 `ClientApplicationService` 与 `LedgerAuthorizationService`（账本 / 私有账户隔离一致）。
+- **配置集中化**：`DASHBOARD_SESSION_COOKIE_NAME` / `DASHBOARD_CSRF_COOKIE_NAME` / `DASHBOARD_SESSION_SAMESITE`（`lax|strict|none`，`none` 强制 Secure）/ `DASHBOARD_SESSION_RETENTION_DAYS`。
+- **测试与守卫**：`test_session_service.py`（digest-only、过期、撤销、多设备、revoke-others、last_seen 限频、审计、IP 摘要、设备识别）、`test_session_api.py`（S01–S18：创建 / digest / HttpOnly Cookie / 401 语义 / logout / 列表 / 撤销 / 隔离 / CSRF / Origin / API Token 兼容）、`tests/integration/test_session_postgres.py`（真实 PostgreSQL：唯一 digest 约束、生命周期、清理、迁移 head）、`test_secret_leakage.py`（真实 Session Secret 与 `lls1_` 在日志 0 命中）、架构守卫（Session 传输不得 import Feishu、Application 层不得泄漏 cookie/oauth、`actor_kind` 只表达凭据家族）、OpenAPI 会话契约测试。
+
+### Changed
+
+- 认证边界：`/api/web/v1/*` 使用 Human Session，`/api/v1` 与 `/api/client/v1` 使用 `llv1_` Bearer——两种认证方式不混用、不互相降级；`llv1_*` 完全兼容（回归测试覆盖 valid / invalid / revoked / expired / scopes / 幂等）。
+- 文档：README / README.en / docs/architecture（两类凭据对比表）/ docs/environment（Human Session 配置与安全说明）/ CHANGELOG。
+
 ## [0.9.0] - 2026-08-12
 
 ### Added (P34 — Application Service Boundary; P35 — Channel-Neutral Client API; P36 — Adapter Contract)

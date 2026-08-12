@@ -51,6 +51,23 @@ LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_xxx,ou_yyy
 
 Register `https://ledger.example.com/api/web/v1/auth/callback` in the Feishu app and grant `auth:user.id:read`. Configure the reverse proxy to pass `X-Forwarded-Proto` and trust only its explicit address. When disabled, `/api/web/v1/*` and Dashboard static routes are absent, while the bot and workers remain unchanged. See the [Chinese deployment guide](docs/environment.md#web-dashboard可选).
 
+### Human sessions (P37)
+
+Browser login state is a first-class **Human Session**, fully separated from machine `llv1_` API tokens:
+
+```text
+Feishu Identity ─┐
+User Session ────┼→ RequestContext → ClientApplicationService → Ledger
+API Token ───────┘
+```
+
+- Every login creates a brand-new session (no session fixation); one user may hold multiple device sessions in parallel
+- The browser keeps only the `lls1_` session secret in an `HttpOnly` / `SameSite=Lax` / production-`Secure` cookie; **the database stores only its SHA-256 digest**
+- Absolute TTL (default 8 h, `LARK_LEDGER_DASHBOARD_SESSION_TTL_SECONDS`); `last_seen` is flushed at most every 5 minutes
+- Logout revokes server-side immediately; `/api/web/v1/auth/sessions` lists sessions, `DELETE .../sessions/{id}` revokes one device, `POST .../sessions/revoke-others` revokes all others; soft-revoked/expired rows are cleaned after `LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS`
+- State-changing requests require double-submit CSRF (`X-CSRF-Token`) **and** same-origin `Origin` validation
+- Session access to ledgers and private accounts flows through the same `LedgerAuthorizationService` as Feishu and API tokens
+
 ## Who it is for
 
 Technical self-hosters who use Feishu heavily and want a **private** ledger. The first-run goal is one successful **text-only** entry—not a full multi-modal production rollout.

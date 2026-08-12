@@ -70,6 +70,24 @@ LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_xxx,ou_yyy
 
 在飞书应用中登记回调地址 `https://ledger.example.com/api/web/v1/auth/callback`，并授予 `auth:user.id:read`。生产必须使用 HTTPS；反向代理需正确传递 `X-Forwarded-Proto`，应用服务器只应信任明确的代理地址。完整配置与安全说明见[环境与部署指南 · Web Dashboard](docs/environment.md#web-dashboard可选)。不开启时，Dashboard 页面与 `/api/web/v1/*` 均不暴露，机器人和 Worker 保持原行为。
 
+### 登录会话（Human Session，P37）
+
+真人用户在浏览器的登录态是独立的 **Human Session**，与机器人的 `llv1_` API Token 完全分离：
+
+```text
+Feishu Identity ─┐
+User Session ────┼→ RequestContext → ClientApplicationService → Ledger
+API Token ───────┘
+```
+
+- 登录成功后创建全新会话（**不**复用任何旧 Session，防 Session Fixation），同一用户可以同时持有多个设备会话
+- 浏览器 Cookie 只保存 `lls1_` 开头的随机 Session Secret（`HttpOnly` + `SameSite=Lax` + 生产 `Secure`），**数据库只存 SHA-256 digest**，明文永不落库、永不进日志
+- 会话默认 8 小时绝对过期（`LARK_LEDGER_DASHBOARD_SESSION_TTL_SECONDS`）；`last_seen` 每 5 分钟最多写一次，避免逐请求写放大
+- 注销在服务端立即 revoke（不能只删浏览器 Cookie）；软 revoke / 过期会话保留 `LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS` 天后由 Cleanup Worker 清理
+- 所有 state-changing 请求强制 **CSRF**：`SameSite` + Origin 校验 + double-submit CSRF token（`X-CSRF-Token`）
+- 「登录会话」页面（`/sessions`）可查看当前用户 / 设备列表 / 当前会话 / 注销指定设备 / 注销其他所有设备
+- Session 登录后的账本访问复用与飞书、API Token 完全相同的 `LedgerAuthorizationService`（账本隔离、私有账户隔离一致）
+
 ## 适合谁
 
 - 技术用户，能配置 Docker 与 PostgreSQL
