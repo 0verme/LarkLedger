@@ -18,7 +18,6 @@ from lark_ledger.config import Settings
 from lark_ledger.context import RequestContext
 from lark_ledger.entry_commands import (
     PendingDirective,
-    bind_entry_refs_from_message,
     try_parse_deterministic_entry_command,
     try_parse_pending_directive,
 )
@@ -73,6 +72,7 @@ from lark_ledger.schemas import (
 )
 from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.ai import AIInterpreter, CommandInterpretationError
+from lark_ledger.services.ai_entry import AIEntryParseError, UnifiedAIEntryService
 from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.exchange import ExchangeRateService, ExchangeRateUnavailableError
 from lark_ledger.services.feishu_client import FeishuClient, _media_fingerprint, logger
@@ -136,6 +136,16 @@ class MessageProcessor:
         self.outbox_store = outbox_store or ReplyOutboxStore(session_factory)
         self._risk_router = RiskRouter(session_factory, settings)
         self._pending_store = PendingCommandStore(session_factory, settings)
+        # P39: the channel-neutral AI command pipeline. Feishu keeps its outbox
+        # transaction shape and uses the granular parse / decide / execute /
+        # create_pending steps; the business semantics are identical to the Web
+        # adapter's submit path.
+        self._ai_entry = UnifiedAIEntryService(
+            settings,
+            session_factory,
+            interpreter=interpreter,
+            exchange_rates=self.exchange_rates,
+        )
         self._reply_worker_enabled = reply_worker_enabled
         self._wakeup = wakeup
         self._sync_owner = generate_owner_id()
@@ -388,12 +398,19 @@ class MessageProcessor:
                         await self._signal_or_deliver(outbox_rows)
                         return
             if command is None:
-                command = await self.interpreter.interpret(text, now=now, images=images)
-                bound = bind_entry_refs_from_message(command, text)
-                if isinstance(bound, str):
-                    await self.feishu.reply_text(message_id, bound)
+                # P39: the Feishu adapter feeds the neutral text into the shared
+                # Unified AI Entry (AIInterpreter → ParsedCommand → entry-ref
+                # binding). The parser never knows about Feishu transport.
+                try:
+                    command = await self._ai_entry.parse(
+                        text=text,
+                        now=now,
+                        images=images,
+                        source_message_ref=message_id,
+                    )
+                except AIEntryParseError as exc:
+                    await self.feishu.reply_text(message_id, str(exc))
                     return
-                command = bound
 
             # Risk routing (P07): high-risk writes (image / voice / batch /
             # likely duplicate) create a pending confirmation instead of hitting
@@ -412,7 +429,7 @@ class MessageProcessor:
                     if source_type == "audio"
                     else MediaKind.NONE
                 )
-                risk = await self._risk_router.route(
+                risk = await self._ai_entry.decide(
                     command=command,
                     source_type=source_type,
                     user_open_id=user_open_id,
@@ -612,14 +629,13 @@ class MessageProcessor:
                 channel="feishu",
                 external_subject_id=user_open_id,
             )
-            result = await ClientApplicationService(
-                session,
-                currency=self.settings.currency,
-                timezone=self.settings.timezone,
-                exchange_rates=self.exchange_rates,
-            ).execute_financial(
-                context,
-                command,
+            # P39: execution flows through the shared Unified AI Entry →
+            # ClientApplicationService (the exact boundary the Web adapter
+            # uses). ``commit_changes=False`` keeps business + outbox atomic.
+            result = await self._ai_entry.execute(
+                session=session,
+                context=context,
+                command=command,
                 source_type=source_type,
                 source_message_id=source_message_id,
                 commit_changes=False,
@@ -670,17 +686,22 @@ class MessageProcessor:
                 channel="feishu",
                 external_subject_id=user_open_id,
             )
-            pending = await self._pending_store.create_pending(
+            # P39: the pending row is created through the shared Unified AI
+            # Entry (frozen ParsedCommand + confirmation semantics identical to
+            # the Web adapter); only the preview card below is Feishu-specific
+            # presentation.
+            pending = await self._ai_entry.create_pending(
                 session=session,
-                event_id=event_id,
-                message_id=message_id,
-                source_fingerprint=source_fingerprint,
-                user_open_id=user_open_id,
-                command=command,
-                source_type=source_type,
-                risk=risk,
-                now=datetime.now(UTC),
                 context=context,
+                command=command,
+                risk=risk,
+                source_type=source_type,
+                source_message_id=message_id,
+                user_open_id=user_open_id,
+                transport="feishu",
+                source_event_id=event_id,
+                source_fingerprint=source_fingerprint,
+                now=datetime.now(UTC),
             )
             row = self._make_outbox_row(
                 event_id=event_id,

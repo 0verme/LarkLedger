@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -472,3 +472,93 @@ class ExecutionResult(BaseModel):
     # entry-creation path so callers (e.g. the P29 recurring confirmation hook)
     # can link the transaction without re-querying.
     entry_id: uuid.UUID | None = None
+
+
+# ---------------------------------------------------------------------------
+# P39 — Unified AI Entry: channel-neutral canonical contracts
+# ---------------------------------------------------------------------------
+
+
+class AIEntryStatus(StrEnum):
+    """Canonical outcome of one AI Entry submission (P39).
+
+    Presentation adapters must branch on this value, never on free-form
+    natural-language messages: ``executed`` / ``confirmation_required`` /
+    ``clarification_required`` / ``query_result`` / ``rejected`` / ``error``.
+    """
+
+    EXECUTED = "executed"
+    CONFIRMATION_REQUIRED = "confirmation_required"
+    CLARIFICATION_REQUIRED = "clarification_required"
+    QUERY_RESULT = "query_result"
+    REJECTED = "rejected"
+    ERROR = "error"
+
+
+class AIEntryResult(BaseModel):
+    """Canonical AI Entry outcome — presentation-independent (P39).
+
+    The same business fact entered through Feishu or the Web adapter must
+    produce the same ``status`` / ``operation`` / ``resource_id`` semantics;
+    only presentation (Feishu card vs Web dialog) may differ. The struct never
+    carries a transport object (no message_id, no card, no HTTP response).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: AIEntryStatus
+    message: str = Field(max_length=2000)
+    request_id: str = Field(min_length=1, max_length=128)
+    # True when the idempotency layer replayed a previously stored canonical
+    # response instead of re-running AI / business (P39 §25).
+    replayed: bool = False
+    # executed / query_result:
+    operation: str | None = None
+    resource_id: str | None = None
+    amount: str | None = None
+    direction: str | None = None
+    category: str | None = None
+    account: str | None = None
+    occurred_at: datetime | None = None
+    # confirmation_required:
+    pending_command_id: str | None = None
+    confirmation_code: str | None = None
+    risk: str | None = None
+    expires_at: datetime | None = None
+    preview: dict[str, Any] | None = None
+    # clarification_required:
+    missing_fields: list[str] = Field(default_factory=list)
+
+
+#: AI write actions (lead to a ledger mutation on execution).
+AI_WRITE_ACTIONS = frozenset(
+    {
+        Action.CREATE,
+        Action.CREATE_ENTRIES,
+        Action.BATCH,
+        Action.UPDATE_LAST,
+        Action.UNDO_LAST,
+        Action.UPDATE_ENTRY,
+        Action.DELETE_ENTRY,
+        Action.RESTORE_ENTRY,
+        Action.TRANSFER,
+        Action.SET_BUDGET,
+        Action.SET_BUDGETS,
+        Action.SET_TOTAL_BUDGET,
+        Action.DELETE_BUDGET,
+    }
+)
+
+#: AI query actions (read-only; the result is the reply itself).
+AI_QUERY_ACTIONS = frozenset(
+    {
+        Action.LIST_ENTRIES,
+        Action.GET_ENTRY,
+        Action.LIST_ACCOUNTS,
+        Action.ASSETS,
+        Action.SUMMARY,
+        Action.REPORT,
+        Action.LIST_BUDGETS,
+        Action.EXPORT_ENTRIES,
+    }
+)

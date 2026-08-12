@@ -415,10 +415,15 @@ class PendingCommandStore:
         risk: RiskAssessment,
         now: datetime,
         context: RequestContext | None = None,
+        transport: str = "feishu",
     ) -> PendingCommand:
         """Add a pending row to ``session`` (the caller commits it together with
         the preview outbox). Allocates a user-unique confirmation code via an
         in-session pre-check plus the unique constraint as the concurrency guard.
+
+        ``transport`` names the channel that created the pending (P39: the
+        Unified AI Entry creates ``web`` pendings from the browser client; the
+        historical default stays ``feishu``).
         """
         if context is None:
             context = await IdentityService(
@@ -510,7 +515,7 @@ class PendingCommandStore:
             source_event_id=event_id,
             source_message_id=message_id,
             source_fingerprint=source_fingerprint,
-            transport="feishu",
+            transport=transport,
             source_type=source_type,
             command_type=command.action.value,
             payload_version=1,

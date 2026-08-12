@@ -88,6 +88,10 @@ ADAPTER_MODULES = {
 #: The single transport-neutral application boundary shared by every adapter.
 APPLICATION_MODULES = {
     "lark_ledger.services.client_application",
+    # P39: the Unified AI Entry is the channel-neutral AI command pipeline; it
+    # orchestrates intent parsing + risk + the shared application boundary and
+    # must therefore never be imported by a domain service.
+    "lark_ledger.services.ai_entry",
 }
 
 #: Everything else under ``services/`` is a domain service.

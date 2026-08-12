@@ -21,6 +21,7 @@ from lark_ledger.models import (
 )
 from lark_ledger.services.accounts import AccountService, normalize_account_name
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
+from lark_ledger.services.privacy import PrivacyService
 
 
 class TransferError(ValueError):
@@ -87,17 +88,18 @@ class TransferService:
     async def resolve_account_hint(self, context: RequestContext, hint: str) -> Account:
         await self._authorization.get_accessible(context.actor_user_id, context.ledger_id)
         _, normalized = normalize_account_name(hint)
-        rows = list(
-            (
-                await self._session.scalars(
-                    select(Account).where(
-                        Account.ledger_id == context.ledger_id,
-                        Account.status == AccountStatus.ACTIVE.value,
-                        Account.normalized_name == normalized,
-                    )
-                )
-            ).all()
+        query = select(Account).where(
+            Account.ledger_id == context.ledger_id,
+            Account.status == AccountStatus.ACTIVE.value,
+            Account.normalized_name == normalized,
         )
+        # P39 §48/§49: account resolution must stay inside the actor's visible
+        # accounts. A private account owned by another household member must not
+        # resolve, and the ambiguous message must not reveal its existence.
+        privacy = PrivacyService(self._session)
+        if await privacy.privacy_enabled(context):
+            query = query.where(privacy.account_visibility_scope(context))
+        rows = list((await self._session.scalars(query)).all())
         if len(rows) != 1:
             raise AccountHintAmbiguousError("账户提示无法唯一解析，请确认准确的账户名称")
         return rows[0]

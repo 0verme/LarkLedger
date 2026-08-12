@@ -136,6 +136,8 @@ class RiskRouter:
         source_type: str,
         user_open_id: str,
         media: MediaKind = MediaKind.NONE,
+        context: RequestContext | None = None,
+        session: AsyncSession | None = None,
     ) -> RiskAssessment:
         """Decide write-through vs pending for a frozen command.
 
@@ -143,27 +145,35 @@ class RiskRouter:
         none); ``source_type`` is the stored event source type and is used as a
         fallback signal. Never rejects in ``risky_only`` — rejection stays with
         the existing schema / interpretation error channels.
+
+        ``context`` is the already-resolved channel-neutral RequestContext. When
+        omitted (the Feishu adapter legacy path) the router bootstraps the
+        Feishu identity exactly as before; adapters that already resolved an
+        identity (e.g. the Web AI entry) must pass it so no duplicate identity
+        resolution happens and no wrong channel is assumed (P39 §17).
         """
         if self._policy != "risky_only":
             return RiskAssessment(decision=RiskDecision.WRITE_THROUGH)
         if command.action not in _WRITE_ACTIONS:
             return RiskAssessment(decision=RiskDecision.WRITE_THROUGH)
 
-        async with self._factory() as session:
-            context = await IdentityService(
-                session,
-                currency=self._settings.currency,
-                timezone=self._settings.timezone,
-            ).resolve_or_bootstrap(
-                channel="feishu",
-                external_subject_id=user_open_id,
-            )
-            await session.commit()
+        if context is None:
+            async with self._factory() as bootstrap_session:
+                context = await IdentityService(
+                    bootstrap_session,
+                    currency=self._settings.currency,
+                    timezone=self._settings.timezone,
+                ).resolve_or_bootstrap(
+                    channel="feishu",
+                    external_subject_id=user_open_id,
+                )
+                await bootstrap_session.commit()
         hits = await self._find_duplicate_hits(
             context=context,
             user_open_id=user_open_id,
             command=command,
             source_type=source_type,
+            session=session,
         )
 
         if command.action is Action.TRANSFER:
@@ -216,6 +226,7 @@ class RiskRouter:
         user_open_id: str,
         command: ParsedCommand,
         source_type: str = "text",
+        session: AsyncSession | None = None,
     ) -> list[DuplicateHit]:
         """Locate existing entries each candidate likely duplicates."""
         candidates = self._candidates(command)
@@ -235,6 +246,7 @@ class RiskRouter:
                     note=candidate.note or "",
                     occurred_at=candidate.occurred_at,
                     source_type=source_type,
+                    session=session,
                 )
             )
         return hits
@@ -269,6 +281,7 @@ class RiskRouter:
         note: str,
         occurred_at: datetime | str | None,
         source_type: str,
+        session: AsyncSession | None = None,
     ) -> list[DuplicateHit]:
         if amount is None or direction is None or occurred_at is None:
             return []
@@ -286,9 +299,9 @@ class RiskRouter:
             category_conditions.append(LedgerEntry.category == category)
         category_conditions.append(LedgerEntry.source_type == source_type)
 
-        async with self._factory() as session:
-            rows = (
-                await session.execute(
+        async def _query() -> list[tuple[str, str | None]]:
+            if session is not None:
+                result = await session.execute(
                     select(LedgerEntry.short_id, LedgerEntry.note)
                     .where(
                         or_(
@@ -309,7 +322,32 @@ class RiskRouter:
                     .order_by(LedgerEntry.occurred_at.desc())
                     .limit(3)
                 )
-            ).all()
+                return [(short_id, note) for short_id, note in result.all()]
+            async with self._factory() as factory_session:
+                result = await factory_session.execute(
+                    select(LedgerEntry.short_id, LedgerEntry.note)
+                    .where(
+                        or_(
+                            LedgerEntry.ledger_id == context.ledger_id,
+                            and_(
+                                LedgerEntry.ledger_id.is_(None),
+                                LedgerEntry.user_open_id == user_open_id,
+                            ),
+                        ),
+                        LedgerEntry.deleted_at.is_(None),
+                        LedgerEntry.direction == resolved_direction,
+                        LedgerEntry.amount == amount,
+                        LedgerEntry.currency == resolved_currency,
+                        LedgerEntry.occurred_at >= occurred_at - window,
+                        LedgerEntry.occurred_at <= occurred_at + window,
+                        or_(*category_conditions),
+                    )
+                    .order_by(LedgerEntry.occurred_at.desc())
+                    .limit(3)
+                )
+                return [(short_id, note) for short_id, note in result.all()]
+
+        rows = await _query()
 
         hits: list[DuplicateHit] = []
         for short_id, existing_note in rows:
