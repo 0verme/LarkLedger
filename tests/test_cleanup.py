@@ -19,6 +19,7 @@ from lark_ledger.config import Settings
 from lark_ledger.event_payload import EventProcessStatus
 from lark_ledger.models import (
     Base,
+    DashboardSession,
     Direction,
     EventReplayAudit,
     LedgerEntry,
@@ -506,3 +507,49 @@ def test_pending_retention_rejects_unsafe_and_tracks_result() -> None:
     assert result.pending_expired == 2
     assert result.pending_deleted == 3
     assert result.total == 5
+
+
+async def test_cleanup_sweeps_only_retired_sessions() -> None:
+    """P37 §21: revoked or expired sessions are removed after retention;
+    active sessions are never touched."""
+    engine, factory = await database()
+    old = NOW - timedelta(days=400)
+    async with factory() as session:
+        live = DashboardSession(
+            token_hash="a" * 64,
+            csrf_hash="b" * 64,
+            user_open_id="ou_live",
+            expires_at=NOW + timedelta(days=1),
+            created_at=old,
+        )
+        revoked = DashboardSession(
+            token_hash="c" * 64,
+            csrf_hash="d" * 64,
+            user_open_id="ou_revoked",
+            expires_at=NOW + timedelta(days=1),
+            revoked_at=NOW - timedelta(days=31),
+            created_at=old,
+        )
+        expired = DashboardSession(
+            token_hash="e" * 64,
+            csrf_hash="f" * 64,
+            user_open_id="ou_expired",
+            expires_at=NOW - timedelta(seconds=1),
+            created_at=old,
+        )
+        session.add_all([live, revoked, expired])
+        await session.commit()
+
+    result = await CleanupService(
+        CleanupStore(factory), RetentionPolicy(session_retention_days=30)
+    ).run_once(now=NOW)
+    assert result.sessions_deleted == 2
+    async with factory() as session:
+        remaining = (await session.scalars(select(DashboardSession))).all()
+    assert [r.user_open_id for r in remaining] == ["ou_live"]
+    await engine.dispose()
+
+
+def test_session_retention_rejects_unsafe_window() -> None:
+    with pytest.raises(ValueError, match="at least one day"):
+        RetentionPolicy(session_retention_days=0)

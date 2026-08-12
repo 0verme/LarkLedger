@@ -135,3 +135,72 @@ def test_domain_error_model_has_no_http_exception() -> None:
         assert "HTTPException" not in source, (
             f"{module_of(path)} leaks an HTTPException into the core layer"
         )
+
+
+# ---------------------------------------------------------------------------
+# P37 — human session / credential-family guards
+# ---------------------------------------------------------------------------
+
+
+def test_core_and_application_never_import_human_session_transport() -> None:
+    """The human session adapter (``dashboard_auth``) is transport-only: core,
+    domain and the shared application boundary must never import it."""
+    session_modules = {"lark_ledger.services.dashboard_auth", "lark_ledger.web_api"}
+    problems: list[str] = []
+    for path in [p for p in _all_inner_files() if classify(p) != "adapter"]:
+        module = module_of(path)
+        for imported in imported_modules(path):
+            if starts_with_any(imported, session_modules):
+                problems.append(f"{module} imports human session transport {imported}")
+    assert problems == [], "\n".join(problems)
+
+
+def test_session_transport_never_imports_feishu() -> None:
+    """A browser session must never route through Feishu services — P37's
+    channel-neutral requirement: Session → RequestContext → Application."""
+    session_path = SERVICES_DIR / "dashboard_auth.py"
+    module = module_of(session_path)
+    for imported in imported_modules(session_path):
+        assert not imported.startswith("lark_ledger.services.feishu"), (
+            f"{module} imports Feishu transport {imported}"
+        )
+        assert imported not in {
+            "lark_ledger.services.message_processor",
+            "lark_ledger.services.websocket",
+            "lark_ledger.services.card_action",
+        }, f"{module} imports channel worker {imported}"
+
+
+def test_client_application_never_imports_cookie_or_oauth() -> None:
+    """The shared application boundary must stay free of cookie/OAuth
+    concepts — it only ever sees a RequestContext."""
+    boundary = SRC / "services" / "client_application.py"
+    source = boundary.read_text(encoding="utf-8")
+    banned = ("cookie", "oauth", "csrf", "set_cookie", "user_agent", "dashboard_session")
+    hits = [b for b in banned if b in source.lower()]
+    assert hits == [], f"application boundary leaks transport concepts: {hits}"
+
+
+def test_request_context_actor_kind_is_credential_family_only() -> None:
+    """actor_kind must distinguish credential families (user vs client), never
+    name a channel (feishu/web/api are source_channel values)."""
+    context_path = SRC / "context.py"
+    source = context_path.read_text(encoding="utf-8")
+    assert 'actor_kind: str = "user"' in source
+    for banned in ('"feishu"', '"web"', '"client_api"'):
+        assert banned not in source.split("actor_kind:", 1)[1], (
+            f"actor_kind default leaks a channel value: {banned}"
+        )
+
+
+def test_dashboard_auth_never_logs_credentials() -> None:
+    """No raw session secret / cookie / header may ever reach a logger in the
+    human-session adapter."""
+    session_path = SERVICES_DIR / "dashboard_auth.py"
+    source = session_path.read_text(encoding="utf-8")
+    lines = [
+        line.strip()
+        for line in source.splitlines()
+        if "logger." in line and ("token" in line or "cookie" in line or "secret" in line)
+    ]
+    assert lines == [], f"session adapter may log credentials: {lines}"
