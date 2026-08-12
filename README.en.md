@@ -38,7 +38,14 @@ Simple single text remains a direct write: `午饭32元` immediately creates the
 
 ## Web Dashboard
 
-v0.7.0 keeps the optional Chinese-first Dashboard and adds account, transfer, and recurring-rule management pages for ledger management, frozen pending confirmations, analytics, budgets, reports, constrained CSV downloads, and administrator-only delivery operations. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot.
+Since **P38** the Dashboard is a **First-party Web Client**: a real end user can complete the whole daily bookkeeping lifecycle without ever opening Feishu — login → home → quick bookkeeping → transaction list/detail → edit → delete/restore → switch ledger → account balances. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot, and never touches a repository or Feishu messaging directly.
+
+- **Home** shows the active ledger (personal / household), month income/expense/balance, budget usage, account-balance summary, recent transactions and a one-tap **记一笔** (quick entry) form
+- **Quick bookkeeping** (expense/income toggle, common-category chips, remembered last account, amount-first focus); every submit carries an `Idempotency-Key`, so double-clicks and network retries never double-book — the server replays the stored response
+- **Transactions** at `/entries` (aliases `/transactions`, `/transactions/:id`): server-side pagination, filters, search, detail drawer with revision timeline, soft delete and restore, edit
+- **Accounts**: list, create, rename, default, archive, per-account balance, total assets/liabilities/net; private accounts are 404 for non-owners
+- Transfers, recurring rules, pending confirmations, analytics, budgets, reports, constrained CSV downloads, and an administrator reliability console
+- All `/api/web/v1/*` responses carry an `X-Request-ID`; the UI shows safe Chinese error messages with the request id (never tracebacks/SQL/digests)
 
 The production image embeds the Vite build and serves it from FastAPI; Node.js is not needed at runtime. Enable it only behind HTTPS:
 

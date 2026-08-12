@@ -114,23 +114,27 @@ Event 与 Reply Outbox 中的外部标识承担接收、重放、审计和投递
 | `ReportRenderer` | 生成消费报告 PNG 和飞书消息卡片；失败时降级为文字卡片 |
 | PostgreSQL / Alembic | 保存账目、预算、告警阈值和已处理事件，管理 Schema 版本 |
 
-## Web Dashboard 与共享业务核心
+## Web Dashboard 与共享业务核心（P38 First-party Web Client）
+
+P38 起 Web Dashboard 是**面向终端用户的 First-party Web Client**：用户完全不打开飞书，也能完成登录 → 记账 → 查看 → 修改 → 删除/恢复 → 切账本 → 看余额的完整日常记账生命周期。
 
 ```text
-                    ┌──────────────┐
-Feishu ───────────→ │ Event Worker │
-                    └──────┬───────┘
-                           ↓
-                     Service Layer
-                           ↓
-                      PostgreSQL
-                           ↑
-                     Service Layer
-                           ↑
-Web Dashboard → Web API ───┘
+                 ┌──────── Feishu Adapter ────────┐
+                 │                                │
+Browser ─ UserSession ─┐                          │
+                       ├→ RequestContext          ├→ ClientApplicationService → Domain
+API Client ─ llv1_* ───┘                          │
+                 │                                │
+                 └────────────────────────────────┘
 ```
 
-Dashboard 是可选的 React/Vite 静态客户端，由同一 FastAPI 容器提供。`/api/web/v1/*` 从 PostgreSQL Session 取得已认证 `user_open_id`，请求 body/query 不能覆盖该身份。账目写操作继续进入 `LedgerService` 并产生 revision；确认/取消继续进入 `PendingCommandStore` 的锁与幂等路径；结果重发和事件重放继续使用现有 Replay Service 与安全预检。Web 不直接更新 ORM、不创建第二套确认状态机、Outbox、Worker 或任务队列。
+First-party Web 只是另一个客户端（走 `actor_kind="user"` 的 Human Session），不是新的业务核心：
+
+- `/api/web/v1/*` 从 PostgreSQL Session 取得已认证身份（P37），请求 body/query 不能覆盖身份；`actor_kind` 只区分 `user`（Human Session）与 `client`（`llv1_*` Machine Token）
+- **账本切换**：`POST /api/web/v1/ledgers/{id}/select` 把 `ledger_id` 持久化到 Session 行，刷新自动恢复；每次请求仍由 `LedgerAuthorizationService` 重新授权，无权限账本 404
+- **Web 幂等**（P38 §13）：`POST /api/web/v1/entries` 强制 `Idempotency-Key`（复用机器 API 同一张 `client_idempotency_records` 表），entry 与幂等记录同事务提交，双击 / 超时重试只入账一次
+- 账目写操作继续进入 `ClientApplicationService → LedgerService` 并产生 revision；确认/取消继续进入 `PendingCommandStore` 的锁与幂等路径；结果重发和事件重放继续使用现有 Replay Service 与安全预检
+- Web 不直接更新 ORM、不创建第二套确认状态机、Outbox、Worker 或任务队列，也不 import 任何飞书消息 / 卡片 / Command 能力
 
 普通用户只能读取和操作自己的账目、预算、报告、导出与 pending。环境变量中列出的管理员额外获得经过脱敏的 Event / Outbox、Dead / Replay、readiness 与只读安全配置；完整 payload、回复正文、blob、密钥和数据库连接信息不进入 Web 响应。
 

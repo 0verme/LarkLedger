@@ -4,6 +4,25 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ## [Unreleased]
 
+
+### Added (P38 — First-party Web Client)
+
+- **First-party Web Client**：Web Dashboard 升级为面向终端用户的独立客户端——用户不打开飞书即可完成 登录 → 首页 → 快速记账 → 流水列表/详情 → 修改 → 删除/恢复 → 切换账本 → 账户余额 的完整日常记账生命周期。
+- **首页 Dashboard**：当前账本（个人 / 家庭标识）、本月收支/结余/预算使用率、账户余额摘要、最近流水，以及一键「记一笔」入口；空状态改为 Web 内引导（「记下你的第一笔收支吧」），不再指引去飞书。
+- **快速记账**（`QuickEntryDialog`）：支出/收入切换、常用分类快捷 chips、记住最近账户（localStorage，仅 UX，授权仍由后端）、金额优先聚焦、默认今天；每次提交生成 `Idempotency-Key`，保存中按钮 disabled（前端防双击 + 后端幂等双重保证）。移动端任意页面底部浮动「记一笔」按钮，两次点击内完成记账。
+- **Web 幂等（P38 §13）**：`POST /api/web/v1/entries` 强制 `Idempotency-Key`（复用 `client_idempotency_records` 表与 `ClientIdempotencyService`），entry 与幂等记录同事务提交；同 key 重放返回原响应（201），ledger 仍只有 1 行；key 冲突返回 409、进行中返回 503。
+- **路由别名**：`/transactions`、`/transactions/:id` 作为 `/entries`、`/entries?entry=:id` 的稳定别名（刷新 / 书签保持可用）。
+- **request_id 透出**：`/api/web/v1/*` 响应统一携带 `X-Request-ID` header；前端 `ApiError` 记录 requestId，错误提示显示安全中文信息 + 请求编号（不暴露 traceback / SQL / digest）。
+- **删除/恢复确认 Dialog**：流水删除确认（含金额/分类）、API 令牌撤销、目标删除统一改用应用内确认对话框（移除 `window.confirm` / `window.prompt`）。
+- **方向契约修复**：前端收支枚举与后端 `Direction`（`expense`/`income`）对齐——此前前端用大写 `EXPENSE`/`INCOME` 导致 Web 创建账目 422 与收支方向展示颠倒，P38 修复并全链路测试。
+- **导航重排**：主导航精简为核心组（首页 / 流水 / 账户 / 转账 / 待确认）+ 家庭与规划 + 设置与开发者（登录会话、API 令牌、健康、配置、关于）；「登录会话」与「API 令牌」移入设置分组。
+- **测试**：`tests/test_web_first_party.py`（WEB01–15：session、ledger list/select、未授权 404、entry CRUD、幂等重放、private 隔离、household、invalid CSRF、invalid session、IDOR）；`tests/integration/test_web_first_party_postgres.py`（真实 PostgreSQL：create → replay → update → delete → restore、ledger 隔离、household + private 隔离）；`web/src/test/FirstPartyJourneys.test.tsx`（W01–W15 全旅程：登录、ledger selector、流水、创建支出/收入、双击不双账、修改、删除、恢复、账户、private、household、session expiry、CSRF、mobile FAB）；`tests/architecture/test_first_party_web_guards.py`（前端不 import Feishu/Lark SDK、无 `dangerouslySetInnerHTML`、无 `window.confirm`、金额保持字符串）。
+
+### Changed
+
+- 文档：README / docs/architecture（P38 架构图与 First-party Client 说明）/ CHANGELOG。
+- `tests/integration/conftest.py`：PostgreSQL 测试清理新增 `client_idempotency_records` 表。
+
 ### Added (P37 — Human Client Authentication / Session Foundation)
 
 - **Human Session（真人登录会话地基）**：`dashboard_sessions` 演进为多设备一等公民会话——`lls1_` 前缀高熵 Session Secret 只写入 `HttpOnly` `Set-Cookie`（`SameSite` 可配置、生产默认 `Secure`），数据库只存 SHA-256 digest（`token_hash`）；每次登录创建全新 Session（防 Session Fixation），同一用户可并行多设备会话。新增字段 `user_agent`（有界）与 `created_ip_hash`（仅 IP 摘要），支撑会话 UI 与事件分析。Alembic migration `20260814_0027`。

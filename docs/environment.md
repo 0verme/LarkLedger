@@ -144,6 +144,16 @@ API Token ───────┘
 - **权限**：Session 登录只回答「这个 User 是谁」。账本与私有账户访问仍由 `LedgerAuthorizationService` 统一裁决，与飞书、API Token 完全一致，Session 层不复制任何账本权限逻辑。
 - **Cookie 名称**：`SESSION_COOKIE_NAME` / `CSRF_COOKIE_NAME` 修改后需同步修改 Web 客户端中读取 CSRF Cookie 的常量（`web/src/api.ts`）。
 
+### First-party Web Client（P38）
+
+Web Dashboard 从管理后台升级为**面向终端用户的独立记账客户端**，日常记账不再需要打开飞书：
+
+- **首页与快速记账**：首页显示当前账本 / 本月收支 / 账户余额摘要 / 最近流水；「记一笔」表单支出收入切换、常用分类 chips、记住最近账户、金额优先聚焦；移动端任意页面有浮动「记一笔」按钮
+- **幂等记账**：`POST /api/web/v1/entries` 强制 `Idempotency-Key`（复用 `client_idempotency_records`），entry 与幂等记录同事务提交；浏览器重试 / 双击 / React 重复触发都不会重复入账；key 冲突 409、进行中 503
+- **路由**：`/entries`（兼容别名 `/transactions`、`/transactions/:id`）、`/accounts`、`/sessions`、`/api-tokens`；账本选择持久化在 Session 行，刷新自动恢复，无权限账本 404
+- **错误排障**：所有 `/api/web/v1/*` 响应带 `X-Request-ID` 响应头；前端统一显示安全中文错误 + 请求编号（不暴露 traceback / SQL / digest）
+- **架构约束**：前端不 import 任何飞书 / Lark SDK，不使用 `dangerouslySetInnerHTML` / `window.confirm`，金额以字符串传输（服务端 Decimal 计算）；Web 写路径只经 `ClientApplicationService`
+
 ### HTTPS 与可信代理
 
 生产必须在 HTTPS 反向代理后运行。代理应保留 `Host` 并发送 `X-Forwarded-Proto: https`。Uvicorn 只能信任实际代理 IP/CIDR，不要在互联网暴露的实例上使用无边界的 `--forwarded-allow-ips='*'`。代理不在 Uvicorn 默认信任的 `127.0.0.1` 时，可覆盖 Compose command，例如：

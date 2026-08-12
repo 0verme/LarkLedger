@@ -49,17 +49,19 @@
 
 ## Web Dashboard
 
-v0.7.0 提供可选的中文 Web Dashboard，生产镜像已内置前端静态资源，无需额外 Node.js 服务：
+v0.7.0 提供可选的中文 Web Dashboard；**P38 起它成为 First-party Web Client**：用户只打开飞账自己的页面即可完成日常记账，不依赖飞书 UI、不使用 `llv1_*` API Token。生产镜像已内置前端静态资源，无需额外 Node.js 服务：
 
-- 财务总览、服务端分页账目管理、revision 时间线、软删除与恢复；账目列表显示账户、创建/编辑时可选择账户
-- **账户管理**：列表、创建、改名、设默认、归档、单账户余额与总资产/负债/净资产
+- **首页**：当前账本、本月收支/结余/预算使用率、账户余额摘要、最近流水，以及一键「记一笔」
+- **快速记账**：支出/收入切换、常用分类快捷选择、记住最近账户、金额优先聚焦；每次提交自动生成 `Idempotency-Key`，双击/网络重试不会重复入账
+- **流水**（`/entries`，兼容别名 `/transactions`、`/transactions/:id`）：服务端分页、筛选、搜索、详情抽屉（revision 时间线）、软删除与恢复、修改
+- **账户管理**：列表、创建、改名、设默认、归档、单账户余额与总资产/负债/净资产，private 账户对非本人 404
 - **转账管理**：创建、详情（含操作记录）与撤销
 - **周期账单**：列表（名称 / 金额 / 账户 / 周期 / 下次日期 / 状态 / 待确认）、创建、修改、暂停、恢复、跳过与停用
 - 待确认查看、确认与取消（复用冻结预览，不重新调用 AI）
 - 趋势、分类、月度分析、预算、报告和受限 CSV 下载
 - 管理员 Event / Outbox / Dead / Replay、健康状态与只读脱敏配置
 
-Web 与飞书共享同一套 `LedgerService`、`PendingCommandService`、revision、Outbox 与 PostgreSQL 用户隔离。启用后访问 `https://你的域名/`，通过飞书 OAuth 登录：
+Web 与飞书共享同一套 `ClientApplicationService`、`LedgerService`、revision、Outbox 与 PostgreSQL 用户隔离；Web 页面从不直连 Repository 或 SQLAlchemy Session，也不携带任何飞书消息能力。启用后访问 `https://你的域名/`，通过飞书 OAuth 登录：
 
 ```dotenv
 LARK_LEDGER_DASHBOARD_ENABLED=true
@@ -87,6 +89,10 @@ API Token ───────┘
 - 所有 state-changing 请求强制 **CSRF**：`SameSite` + Origin 校验 + double-submit CSRF token（`X-CSRF-Token`）
 - 「登录会话」页面（`/sessions`）可查看当前用户 / 设备列表 / 当前会话 / 注销指定设备 / 注销其他所有设备
 - Session 登录后的账本访问复用与飞书、API Token 完全相同的 `LedgerAuthorizationService`（账本隔离、私有账户隔离一致）
+- **账本切换**（P38）：侧边栏选择个人 / 家庭 / 有权限的其他账本，选择持久化在 Session 行上，刷新自动恢复；无权限账本始终 404
+- **Web 幂等**（P38）：`POST /api/web/v1/entries` 强制 `Idempotency-Key`，超时重试 / 双击 / React 重复触发都只入账一次
+- **错误与排障**（P38）：所有 `/api/web/v1/*` 响应携带 `X-Request-ID`，前端统一显示安全中文错误信息 + 请求编号，绝不暴露 traceback / SQL / digest
+- **移动端**（P38）：375–430px 手机宽度可用，任意页面底部浮动「记一笔」按钮两次点击内完成记账
 
 ## 适合谁
 
