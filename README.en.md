@@ -170,12 +170,12 @@ Do **not** describe this as "never loses messages / never double-bookkeeps":
 - **Not AA / Splitwise**: no splitting, settlement, debt relations or per-person breakdown; **not double-entry**: the sole-proprietor chart-of-accounts / vouchers / debit-credit domain stays a future track and accounting fields never leak into personal income/expense; **not business finance**: no audit trails, approval flows, multi-currency settlement or financial-reporting duties
 - **JSON export is not a formal capability** (CSV only)
 
-Future roadmap themes are outside this release commitment; v0.8.0 does not expand into a multi-tenant finance ERP.
+Future roadmap themes are outside this release commitment; v0.9.0 does not expand into a multi-tenant finance ERP / OAuth Authorization Server / SaaS API Gateway.
 
-Current release: **v0.8.0** (financial goals & deterministic insights). Prebuilt image: `ghcr.io/0verme/larkledger:0.8.0` (also `0.8` / `latest`). You can also build from source with `docker compose ... --build`.
+Current release: **v0.9.0** (Platform / Channel-Neutral Core). Prebuilt image: `ghcr.io/0verme/larkledger:0.9.0` (also `0.9` / `latest`). You can also build from source with `docker compose ... --build`.
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.8.0
+export LARK_LEDGER_IMAGE_TAG=0.9.0
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d

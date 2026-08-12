@@ -2,7 +2,7 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
-## [0.9.0] - Unreleased
+## [0.9.0] - 2026-08-12
 
 ### Added (P34 — Application Service Boundary; P35 — Channel-Neutral Client API; P36 — Adapter Contract)
 

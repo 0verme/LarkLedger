@@ -6,10 +6,10 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 
 | 项 | 事实 |
 | --- | --- |
-| 最新正式版本 | **v0.8.0** |
-| 包版本 / `__version__` | `0.8.0` |
-| Git tag | `v0.8.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.8.0`（亦有 `0.8` / `latest` 由发布流水线写入） |
+| 最新正式版本 | **v0.9.0** |
+| 包版本 / `__version__` | `0.9.0` |
+| Git tag | `v0.9.0` |
+| GHCR | `ghcr.io/0verme/larkledger:0.9.0`（亦有 `0.9` / `latest` 由发布流水线写入） |
 | Alembic head | `20260813_0026` |
 | 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
 
@@ -20,6 +20,15 @@ LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受
 3. 记录当前 Git tag 或镜像标签。
 4. 使用当前版本完成健康检查，并确认没有正在处理的批量消息。
 5. 不要在升级过程中运行多个会同时执行迁移的应用副本。
+
+## 从 v0.8.0 升级到 v0.9.0（Platform / Channel-Neutral Core）
+
+v0.9.0 带来 **P34 Application Service Boundary**、**P35 Stable Client API**（`/api/v1` + API Token + Idempotency）与 **P36 Adapter Contract**（C01–C08）。**没有新增 migration**：Alembic head 保持 `20260813_0026`，schema 无意外结构变化。
+
+- `client_credentials` / `client_idempotency_records` / `client_security_audits` 自 v0.8.0 已存在（P35 不新增 migration）；升级不会 DROP / ALTER 任何业务表，无损且可降级（应用层面回滚到 v0.8.0 镜像即可）。
+- **行为变化**：`/api/v1` 写请求强制 `Idempotency-Key`；`ledger_entries.user_open_id` 标记 deprecated（新业务使用 `created_by_user_id` / `paid_by_user_id`）。
+- 升级后核对：`alembic current` 为 `20260813_0026`（single head）；`client_credentials` / `client_idempotency_records` 存在且无重复 token_digest、无重复 idempotency scope 记录。
+- 灾难回滚：保留 pre-v0.9.0 备份 + v0.8.0 镜像即可（schema 兼容，见上方表格）。
 
 ## 从 v0.7.0 升级到 v0.8.0（财务目标与洞察）
 
