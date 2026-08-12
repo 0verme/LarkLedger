@@ -21,9 +21,7 @@ def postgres_url() -> str:
         # Local fallback: read just TEST_POSTGRES_URL from the project .env
         # instead of exporting it, so Settings(_env_file=None) defaults in unit
         # tests are never polluted by other LARK_LEDGER_* variables.
-        url = dotenv_values(Path(__file__).resolve().parents[2] / ".env").get(
-            "TEST_POSTGRES_URL"
-        )
+        url = dotenv_values(Path(__file__).resolve().parents[2] / ".env").get("TEST_POSTGRES_URL")
     if not url:
         pytest.skip("TEST_POSTGRES_URL is not configured")
     return url
@@ -32,27 +30,18 @@ def postgres_url() -> str:
 @pytest_asyncio.fixture
 async def postgres_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(postgres_url, pool_pre_ping=True)
+    truncate = (
+        "TRUNCATE TABLE dashboard_sessions, event_replay_audits, "
+        "client_idempotency_records, budget_alerts, category_budgets, budgets, "
+        "recurring_occurrences, recurring_rules, ledger_entry_revisions, "
+        "ledger_entries, pending_commands, reply_outbox, processed_events, "
+        "channel_identities, ledgers, users CASCADE"
+    )
     async with engine.begin() as connection:
-        await connection.execute(
-            text(
-                "TRUNCATE TABLE dashboard_sessions, event_replay_audits, "
-                "budget_alerts, category_budgets, budgets, "
-                "recurring_occurrences, recurring_rules, "
-                "ledger_entry_revisions, ledger_entries, pending_commands, reply_outbox, "
-                "processed_events, channel_identities, ledgers, users CASCADE"
-            )
-        )
+        await connection.execute(text(truncate))
     yield engine
     async with engine.begin() as connection:
-        await connection.execute(
-            text(
-                "TRUNCATE TABLE dashboard_sessions, event_replay_audits, "
-                "budget_alerts, category_budgets, budgets, "
-                "recurring_occurrences, recurring_rules, "
-                "ledger_entry_revisions, ledger_entries, pending_commands, reply_outbox, "
-                "processed_events, channel_identities, ledgers, users CASCADE"
-            )
-        )
+        await connection.execute(text(truncate))
     await engine.dispose()
 
 

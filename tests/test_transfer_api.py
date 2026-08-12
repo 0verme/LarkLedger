@@ -210,18 +210,12 @@ async def test_web_account_transfer_and_client_credential_lifecycle(api_setup) -
         assert renamed.status_code == 200
         assert renamed.json()["name"] == "Web cash asset"
         assert (await client.get(f"/api/web/v1/accounts/{asset_id}")).status_code == 200
-        assert (
-            await client.post(f"/api/web/v1/accounts/{asset_id}/default")
-        ).status_code == 200
+        assert (await client.post(f"/api/web/v1/accounts/{asset_id}/default")).status_code == 200
         archived = await client.post(f"/api/web/v1/accounts/{original_default}/archive")
         assert archived.status_code == 200
         assert archived.json()["status"] == "archived"
-        assert (
-            await client.get("/api/web/v1/accounts?include_archived=true")
-        ).status_code == 200
-        assert (
-            await client.get(f"/api/web/v1/accounts/{asset_id}/balance")
-        ).status_code == 200
+        assert (await client.get("/api/web/v1/accounts?include_archived=true")).status_code == 200
+        assert (await client.get(f"/api/web/v1/accounts/{asset_id}/balance")).status_code == 200
         assets = await client.get("/api/web/v1/assets")
         assert assets.status_code == 200
         assert assets.json()["net_assets"] == "85.00"
@@ -238,25 +232,17 @@ async def test_web_account_transfer_and_client_credential_lifecycle(api_setup) -
         )
         assert transfer.status_code == 201
         transfer_id = transfer.json()["id"]
-        assert (
-            await client.get(f"/api/web/v1/transfers/{transfer_id}")
-        ).status_code == 200
-        reversed_transfer = await client.post(
-            f"/api/web/v1/transfers/{transfer_id}/reverse"
-        )
+        assert (await client.get(f"/api/web/v1/transfers/{transfer_id}")).status_code == 200
+        reversed_transfer = await client.post(f"/api/web/v1/transfers/{transfer_id}/reverse")
         assert reversed_transfer.status_code == 200
         assert reversed_transfer.json()["reversed_at"] is not None
 
         missing_account = uuid.uuid4()
-        assert (
-            await client.get(f"/api/web/v1/accounts/{missing_account}")
-        ).status_code == 404
+        assert (await client.get(f"/api/web/v1/accounts/{missing_account}")).status_code == 404
         assert (
             await client.get(f"/api/web/v1/accounts/{missing_account}/balance")
         ).status_code == 404
-        assert (
-            await client.get(f"/api/web/v1/transfers/{uuid.uuid4()}")
-        ).status_code == 404
+        assert (await client.get(f"/api/web/v1/transfers/{uuid.uuid4()}")).status_code == 404
 
         revoked = await client.delete(f"/api/web/v1/client-credentials/{credential_id}")
         assert revoked.status_code == 204
@@ -301,9 +287,7 @@ async def test_web_household_and_ledger_management_lifecycle(api_setup) -> None:
         )
         assert renamed_ledger.status_code == 200
         assert renamed_ledger.json()["name"] == "Web renamed ledger"
-        assert (
-            await client.post(f"/api/web/v1/ledgers/{ledger_id}/default")
-        ).status_code == 200
+        assert (await client.post(f"/api/web/v1/ledgers/{ledger_id}/default")).status_code == 200
 
         household = await client.post(
             "/api/web/v1/households", json={"name": "Web acceptance family"}
@@ -334,14 +318,10 @@ async def test_web_household_and_ledger_management_lifecycle(api_setup) -> None:
         invitations = await client.get("/api/web/v1/household-invitations")
         assert invitations.status_code == 200
         assert invitations.json()[0]["id"] == invitation_id
-        accepted = await client.post(
-            f"/api/web/v1/household-invitations/{invitation_id}/accept"
-        )
+        accepted = await client.post(f"/api/web/v1/household-invitations/{invitation_id}/accept")
         assert accepted.status_code == 200
         assert accepted.json()["status"] == "accepted"
-        assert (
-            await client.get(f"/api/web/v1/households/{household_id}")
-        ).status_code == 200
+        assert (await client.get(f"/api/web/v1/households/{household_id}")).status_code == 200
         assert (
             await client.post(f"/api/web/v1/households/{household_id}/leave")
         ).status_code == 204
@@ -351,13 +331,9 @@ async def test_web_household_and_ledger_management_lifecycle(api_setup) -> None:
         missing = uuid.uuid4()
         assert (await client.get(f"/api/web/v1/households/{missing}")).status_code == 404
         assert (
-            await client.patch(
-                f"/api/web/v1/households/{missing}", json={"name": "missing"}
-            )
+            await client.patch(f"/api/web/v1/households/{missing}", json={"name": "missing"})
         ).status_code == 404
-        assert (
-            await client.get(f"/api/web/v1/households/{missing}/members")
-        ).status_code == 404
+        assert (await client.get(f"/api/web/v1/households/{missing}/members")).status_code == 404
 
 
 async def test_web_create_entry_with_account_and_transfer_list_and_detail(
@@ -373,6 +349,7 @@ async def test_web_create_entry_with_account_and_transfer_list_and_detail(
         # Web create entry with an explicit account.
         created = await client.post(
             "/api/web/v1/entries",
+            headers={"Idempotency-Key": "transfer-web-create"},
             json={
                 "amount": "42.00",
                 "direction": "expense",
@@ -391,6 +368,7 @@ async def test_web_create_entry_with_account_and_transfer_list_and_detail(
         # Web create with an unknown account is rejected.
         bad = await client.post(
             "/api/web/v1/entries",
+            headers={"Idempotency-Key": "transfer-web-bad-account"},
             json={
                 "amount": "1.00",
                 "direction": "expense",

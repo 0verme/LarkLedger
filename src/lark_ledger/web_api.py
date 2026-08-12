@@ -35,6 +35,7 @@ from lark_ledger.confirmation_id import ConfirmationCodeError, normalize_confirm
 from lark_ledger.models import (
     Account,
     AccountVisibility,
+    ClientIdempotencyRecord,
     Direction,
     FinancialGoal,
     Household,
@@ -52,6 +53,11 @@ from lark_ledger.services.accounts import AccountConflictError, AccountError, Ac
 from lark_ledger.services.budget import parse_period
 from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.client_auth import ClientCredentialService
+from lark_ledger.services.client_idempotency import (
+    ClientIdempotencyService,
+    IdempotencyConflictError,
+    IdempotencyInProgressError,
+)
 from lark_ledger.services.dashboard_auth import (
     CSRF_HEADER,
     OAUTH_COOKIE,
@@ -913,9 +919,7 @@ async def list_web_transfers(
     async with factory() as session:
         rows, total = await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).list_transfers(
-            principal.request_context, page=page, page_size=page_size
-        )
+        ).list_transfers(principal.request_context, page=page, page_size=page_size)
     return TransferList(
         items=[_web_transfer(row) for row in rows],
         page=page,
@@ -1367,9 +1371,7 @@ async def dashboard(
     async with factory() as session:
         return await WebLedgerQueryService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).dashboard(
-            principal.request_context
-        )
+        ).dashboard(principal.request_context)
 
 
 @router.get("/overview", response_model=HouseholdOverview)
@@ -1432,12 +1434,28 @@ async def entries(
         )
 
 
-@router.post("/entries", response_model=EntryDetail, status_code=201)
+@router.post(
+    "/entries",
+    response_model=EntryDetail,
+    status_code=201,
+    responses={
+        409: {"description": "Idempotency-Key was already used with a different request"},
+        503: {"description": "The idempotent request is still in progress"},
+    },
+)
 async def create_web_entry(
     body: EntryCreateRequest,
     request: Request,
     principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> EntryDetail:
+    """Create one ledger entry from the First-party Web client.
+
+    Idempotency contract (mirrors the machine ``/api/v1`` family): a browser
+    retry after a timeout, double-click or React double-fire replays the same
+    ``Idempotency-Key`` and returns the stored response instead of creating a
+    second ledger row — the ledger entry is created exactly once (P38 §13).
+    """
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     source_id = f"web:{uuid.uuid4()}"
@@ -1445,7 +1463,8 @@ async def create_web_entry(
         app = ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
         )
-        try:
+
+        async def apply(_record: ClientIdempotencyRecord) -> dict[str, Any]:
             await app.execute_financial(
                 principal.request_context,
                 ParsedCommand(
@@ -1459,29 +1478,60 @@ async def create_web_entry(
                 ),
                 source_type="web",
                 source_message_id=source_id,
+                # The idempotency service owns the commit so the entry and its
+                # idempotency record land in the same transaction (P38 §13).
+                commit_changes=False,
                 account_id=body.account_id,
                 paid_by_user_id=body.paid_by_user_id,
             )
+            entry = await session.scalar(
+                select(LedgerEntry).where(
+                    LedgerEntry.ledger_id == principal.request_context.ledger_id,
+                    LedgerEntry.source_message_id == source_id,
+                )
+            )
+            if entry is None:
+                raise ValueError("账目保存后未能读取，请稍后重试")
+            detail = await WebLedgerQueryService(session, timezone=settings.timezone).entry_detail(
+                principal.request_context, entry.short_id
+            )
+            if detail is None:
+                raise ValueError("账目保存后未能读取，请稍后重试")
+            return detail.model_dump(mode="json")
+
+        try:
+            data, _replayed = await ClientIdempotencyService(session).execute(
+                principal.request_context,
+                operation="web.entry.create",
+                key=idempotency_key or "",
+                payload={
+                    "amount": str(body.amount),
+                    "direction": body.direction,
+                    "category": body.category,
+                    "note": body.note,
+                    "occurred_at": body.occurred_at.isoformat(),
+                    "currency": body.currency,
+                    "account_id": str(body.account_id) if body.account_id else None,
+                    "paid_by_user_id": (
+                        str(body.paid_by_user_id) if body.paid_by_user_id else None
+                    ),
+                },
+                callback=apply,
+                response_status=201,
+            )
+        except IdempotencyConflictError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except IdempotencyInProgressError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=503, detail="账目正在保存中，请稍后重试") from exc
         except AccountError as exc:
             await session.rollback()
             raise _account_http_error(exc) from exc
         except ValueError as exc:
             await session.rollback()
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        entry = await session.scalar(
-            select(LedgerEntry).where(
-                LedgerEntry.ledger_id == principal.request_context.ledger_id,
-                LedgerEntry.source_message_id == source_id,
-            )
-        )
-        if entry is None:
-            raise HTTPException(status_code=500, detail="账目保存后未能读取，请稍后重试")
-        detail = await WebLedgerQueryService(
-            session, timezone=settings.timezone
-        ).entry_detail(principal.request_context, entry.short_id)
-    if detail is None:
-        raise HTTPException(status_code=500, detail="账目保存后未能读取，请稍后重试")
-    return detail
+        return EntryDetail.model_validate(data)
 
 
 @router.get("/entries/{short_id}", response_model=EntryDetail)
@@ -2069,9 +2119,7 @@ async def delete_budget(
     async with factory() as session:
         await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).delete_budget(
-            principal.request_context, period=target, category=category
-        )
+        ).delete_budget(principal.request_context, period=target, category=category)
         await session.commit()
     return await _budget_overview(request, principal, target)
 
@@ -2469,9 +2517,7 @@ async def update_goal(
             session, currency=settings.currency, timezone=settings.timezone
         )
         try:
-            goal = await application.update_goal(
-                principal.request_context, goal_id, **updates
-            )
+            goal = await application.update_goal(principal.request_context, goal_id, **updates)
             await session.commit()
             await session.refresh(goal)
         except GoalError as exc:
@@ -2593,9 +2639,7 @@ async def insights(
         application = ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
         )
-        items = await application.insights(
-            principal.request_context, period=target, limit=limit
-        )
+        items = await application.insights(principal.request_context, period=target, limit=limit)
         if explain:
             explainer = InsightExplanationService(settings)
             for item in items:

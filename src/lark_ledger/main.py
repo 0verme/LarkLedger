@@ -183,8 +183,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.middleware("http")
     async def attach_request_id(request: Request, call_next: Any) -> Response:
-        if request.url.path.startswith("/api/v1/") or request.url.path.startswith(
-            "/api/client/v1/"
+        path = request.url.path
+        if (
+            path.startswith("/api/v1/")
+            or path.startswith("/api/client/v1/")
+            or path.startswith("/api/web/v1/")
         ):
             import uuid as _uuid
 
@@ -192,6 +195,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         else:
             request.state.request_id = ""
         response = await call_next(request)
+        # P38 §23/§54 — expose the request id to the First-party Web client on
+        # its response headers (never in the body) so the UI can show a safe
+        # "request id" while debugging, without leaking internals.
+        if path.startswith("/api/web/v1/") and request.state.request_id:
+            response.headers["X-Request-ID"] = request.state.request_id
         return cast(Response, response)
 
     application.include_router(router)
