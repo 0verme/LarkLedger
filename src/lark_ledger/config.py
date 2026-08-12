@@ -1,5 +1,6 @@
 from enum import StrEnum
 from functools import lru_cache
+from typing import Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -87,6 +88,13 @@ class Settings(BaseSettings):
     dashboard_session_ttl_seconds: int = Field(default=28800, ge=300, le=604800)
     dashboard_oauth_state_ttl_seconds: int = Field(default=600, ge=60, le=1800)
     dashboard_cookie_secure: bool = True
+    # P37: first-party browser session policy. Cookie names default to the
+    # pre-P37 values so existing browser cookies keep working; the web client
+    # reads the CSRF cookie by the documented default name.
+    dashboard_session_cookie_name: str = "lark_ledger_session"
+    dashboard_csrf_cookie_name: str = "lark_ledger_csrf"
+    dashboard_session_samesite: Literal["lax", "strict", "none"] = "lax"
+    dashboard_session_retention_days: int = Field(default=30, ge=1, le=3650)
     dashboard_oauth_authorize_url: str = "https://accounts.feishu.cn/open-apis/authen/v1/authorize"
 
     lark_app_id: str = ""
@@ -133,6 +141,16 @@ class Settings(BaseSettings):
             raise ValueError("currency must be a three-letter ISO 4217 code")
         return value
 
+    @field_validator("dashboard_session_samesite", mode="before")
+    @classmethod
+    def valid_samesite(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized not in {"lax", "strict", "none"}:
+                raise ValueError("dashboard_session_samesite must be lax, strict or none")
+            return normalized
+        return value
+
     @model_validator(mode="after")
     def valid_dashboard_security(self) -> "Settings":
         if not self.dashboard_enabled:
@@ -159,6 +177,8 @@ class Settings(BaseSettings):
             raise ValueError("secure dashboard cookies require an https dashboard_base_url")
         if parsed.path not in {"", "/"}:
             raise ValueError("dashboard_base_url must not contain a path")
+        if self.dashboard_session_samesite == "none" and not self.dashboard_cookie_secure:
+            raise ValueError("SameSite=none dashboard cookies require dashboard_cookie_secure=true")
         return self
 
     @property

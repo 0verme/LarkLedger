@@ -123,6 +123,7 @@ class ClientCredentialService:
                     ledger_id=ledger_id,
                     source_channel="client_api",
                     external_subject_id=external_subject_id,
+                    actor_kind="client",
                 ),
                 display_name=user.display_name,
                 scopes=frozenset(row.scopes.split()),

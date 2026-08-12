@@ -2027,3 +2027,140 @@ tbody tr:hover {
 .muted-text {
 	color: #a2aab4;
 }
+
+/* ---------------------------------------------------------------------------
+ * P37 — login session management
+ * ------------------------------------------------------------------------- */
+.session-summary {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	margin-bottom: 18px;
+	padding: 14px 16px;
+	background: linear-gradient(135deg, #eef4ff, #f8fbff);
+	border: 1px solid #dbe8fb;
+	border-radius: 14px;
+}
+.session-summary .avatar.large {
+	width: 46px;
+	height: 46px;
+	font-size: 18px;
+}
+.session-summary strong {
+	display: block;
+	font-size: 15px;
+}
+.session-summary span {
+	display: block;
+	color: #6b7683;
+	font-size: 12px;
+	margin-top: 2px;
+}
+.session-expiry {
+	color: #8a939f;
+	font-size: 12px;
+}
+.session-list {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+	padding: 0;
+	margin: 14px 0 0;
+	list-style: none;
+}
+.session-row {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 12px 14px;
+	background: #f7f8fa;
+	border: 1px solid #eef0f3;
+	border-radius: 12px;
+}
+.session-row.revoked {
+	opacity: 0.55;
+	background: #f3f4f6;
+}
+.session-device {
+	display: grid;
+	place-items: center;
+	width: 38px;
+	height: 38px;
+	flex-shrink: 0;
+	color: #1769e0;
+	background: #e3efff;
+	border-radius: 10px;
+}
+.session-meta {
+	flex: 1;
+	min-width: 0;
+}
+.session-meta strong {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	font-size: 13px;
+}
+.session-meta span {
+	display: block;
+	color: #6b7683;
+	font-size: 12px;
+	margin-top: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.tag {
+	display: inline-flex;
+	align-items: center;
+	padding: 1px 7px;
+	border-radius: 999px;
+	font-size: 11px;
+	font-weight: 600;
+}
+.tag.current {
+	color: #166534;
+	background: #dcfce7;
+}
+.tag.revoked {
+	color: #6b7280;
+	background: #e5e7eb;
+}
+.session-actions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+.muted-note {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: #8a939f;
+	font-size: 12px;
+}
+.count-badge {
+	display: inline-grid;
+	place-items: center;
+	min-width: 22px;
+	height: 22px;
+	padding: 0 6px;
+	color: #1769e0;
+	background: #e3efff;
+	border-radius: 999px;
+	font-size: 12px;
+}
+.danger-small {
+	color: #b14b4b;
+	border-color: #e2b9b9;
+	background: #fdf5f5;
+}
+.dialog-copy {
+	color: #5a6572;
+	font-size: 13px;
+	line-height: 1.6;
+}
+.page-actions {
+	display: flex;
+	gap: 9px;
+}

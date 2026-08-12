@@ -1196,13 +1196,22 @@ class PendingCommand(Base):
 
 
 class DashboardSession(Base):
-    """Revocable server-side session for the optional Web Dashboard."""
+    """Revocable server-side session for a human user (P37).
+
+    The browser only ever holds the raw ``lls1_`` session secret in an
+    HttpOnly cookie; the database stores only its SHA-256 digest in
+    ``token_hash`` — identical to how ``ClientCredential`` stores
+    ``llv1_`` tokens. Sessions are multi-device: one user may hold many
+    parallel sessions and revoke any of them (including "all others")
+    from the Web dashboard.
+    """
 
     __tablename__ = "dashboard_sessions"
     __table_args__ = (
         UniqueConstraint("token_hash", name="uq_dashboard_sessions_token_hash"),
         Index("ix_dashboard_sessions_expires", "expires_at"),
         Index("ix_dashboard_sessions_user", "user_open_id", "created_at"),
+        Index("ix_dashboard_sessions_revoked", "revoked_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -1225,6 +1234,10 @@ class DashboardSession(Base):
     last_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+    # P37: bounded device context for the session-management UI and incident
+    # analysis. The raw client IP is never stored — only its SHA-256 digest.
+    user_agent: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_ip_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class ClientCredential(Base):

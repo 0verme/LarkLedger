@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Annotated, Any, cast
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, status
@@ -52,10 +53,8 @@ from lark_ledger.services.budget import parse_period
 from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.client_auth import ClientCredentialService
 from lark_ledger.services.dashboard_auth import (
-    CSRF_COOKIE,
     CSRF_HEADER,
     OAUTH_COOKIE,
-    SESSION_COOKIE,
     DashboardAuthError,
     DashboardAuthService,
     DashboardPrincipal,
@@ -118,6 +117,7 @@ from lark_ledger.web_schemas import (
     AnalyticsTrendPoint,
     BudgetOverview,
     BudgetUpdateRequest,
+    CurrentSession,
     DashboardData,
     DeletedFilter,
     EntryCreateRequest,
@@ -151,6 +151,7 @@ from lark_ledger.web_schemas import (
     RecurringRuleUpdateRequest,
     ResultReplayResponse,
     SafeSystemConfig,
+    SessionList,
     SortOrder,
     TransferList,
     WebHousehold,
@@ -159,6 +160,7 @@ from lark_ledger.web_schemas import (
     WebLedger,
     WebRecurringRule,
     WebRevision,
+    WebSession,
     WebTransferDetail,
 )
 from lark_ledger.web_schemas import (
@@ -178,10 +180,36 @@ def _auth_error(exc: DashboardAuthError, code: int = 401) -> HTTPException:
     return HTTPException(status_code=code, detail=str(exc))
 
 
+def _client_ip(request: Request) -> str | None:
+    """Best-effort client IP; only its SHA-256 digest is ever persisted."""
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",", 1)[0].strip()
+    if request.client is not None:
+        return request.client.host
+    return None
+
+
+def _require_same_origin(request: Request) -> None:
+    """CSRF defence-in-depth: any Origin header on a state-changing request
+    must match the dashboard origin (SameSite alone is not enough). Requests
+    without an Origin header still must pass the double-submit CSRF check in
+    ``csrf_principal``."""
+    origin = request.headers.get("origin")
+    if not origin:
+        return
+    settings = cast(Settings, request.app.state.settings)
+    expected = urlsplit(settings.dashboard_base_url)
+    actual = urlsplit(origin)
+    if (actual.scheme, actual.netloc) != (expected.scheme, expected.netloc):
+        raise DashboardAuthError("跨站请求被拒绝")
+
+
 async def current_principal(
+    request: Request,
     service: Annotated[DashboardAuthService, Depends(_auth_service)],
-    session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) -> DashboardPrincipal:
+    session_token = request.cookies.get(service.session_cookie)
     try:
         return await service.authenticate(session_token)
     except DashboardAuthError as exc:
@@ -189,12 +217,14 @@ async def current_principal(
 
 
 async def csrf_principal(
+    request: Request,
     service: Annotated[DashboardAuthService, Depends(_auth_service)],
-    session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
-    csrf_cookie: Annotated[str | None, Cookie(alias=CSRF_COOKIE)] = None,
     csrf_header: Annotated[str | None, Header(alias=CSRF_HEADER)] = None,
 ) -> DashboardPrincipal:
     try:
+        _require_same_origin(request)
+        session_token = request.cookies.get(service.session_cookie)
+        csrf_cookie = request.cookies.get(service.csrf_cookie)
         return await service.verify_csrf(session_token, csrf_cookie, csrf_header)
     except DashboardAuthError as exc:
         raise _auth_error(exc, 403) from exc
@@ -226,7 +256,7 @@ async def login(
         max_age=settings.dashboard_oauth_state_ttl_seconds,
         httponly=True,
         secure=settings.dashboard_cookie_secure,
-        samesite="lax",
+        samesite=settings.dashboard_session_samesite,
         path="/api/web/v1/auth/callback",
     )
     return response
@@ -246,7 +276,13 @@ async def callback(
         if error:
             raise DashboardAuthError("飞书登录已取消")
         identity = await service.exchange_identity(code, verifier)
-        created = await service.create_session(identity)
+        # A successful login ALWAYS creates a brand-new session (P37 §14): an
+        # anonymous or pre-auth cookie is never upgraded in place.
+        created = await service.create_session(
+            identity,
+            user_agent=request.headers.get("user-agent"),
+            ip=_client_ip(request),
+        )
     except DashboardAuthError as exc:
         raise _auth_error(exc) from exc
     settings = cast(Settings, request.app.state.settings)
@@ -256,24 +292,24 @@ async def callback(
         path="/api/web/v1/auth/callback",
         secure=settings.dashboard_cookie_secure,
         httponly=True,
-        samesite="lax",
+        samesite=settings.dashboard_session_samesite,
     )
     response.set_cookie(
-        SESSION_COOKIE,
+        service.session_cookie,
         created.session_token,
         max_age=settings.dashboard_session_ttl_seconds,
         httponly=True,
         secure=settings.dashboard_cookie_secure,
-        samesite="lax",
+        samesite=settings.dashboard_session_samesite,
         path="/",
     )
     response.set_cookie(
-        CSRF_COOKIE,
+        service.csrf_cookie,
         created.csrf_token,
         max_age=settings.dashboard_session_ttl_seconds,
         httponly=False,
         secure=settings.dashboard_cookie_secure,
-        samesite="lax",
+        samesite=settings.dashboard_session_samesite,
         path="/",
     )
     return response
@@ -284,26 +320,94 @@ async def logout(
     request: Request,
     _: Annotated[DashboardPrincipal, Depends(csrf_principal)],
     service: Annotated[DashboardAuthService, Depends(_auth_service)],
-    session_token: Annotated[str | None, Cookie(alias=SESSION_COOKIE)] = None,
 ) -> Response:
+    # The session is revoked server-side BEFORE the cookie is cleared; deleting
+    # the cookie alone never counts as logout (P37 §7).
+    session_token = request.cookies.get(service.session_cookie)
     await service.revoke(session_token)
     settings = cast(Settings, request.app.state.settings)
     response = Response(status_code=204)
     response.delete_cookie(
-        SESSION_COOKIE,
+        service.session_cookie,
         path="/",
         secure=settings.dashboard_cookie_secure,
         httponly=True,
-        samesite="lax",
+        samesite=settings.dashboard_session_samesite,
     )
     response.delete_cookie(
-        CSRF_COOKIE,
+        service.csrf_cookie,
         path="/",
         secure=settings.dashboard_cookie_secure,
         httponly=False,
-        samesite="lax",
+        samesite=settings.dashboard_session_samesite,
     )
     return response
+
+
+@router.get("/auth/session", response_model=CurrentSession)
+async def current_session(
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> CurrentSession:
+    """Current session and identity (P37 §12). No credential material."""
+    return CurrentSession(
+        session_id=principal.session_id,
+        open_id=principal.user_open_id,
+        name=principal.display_name,
+        avatar_url=principal.avatar_url,
+        role=principal.role,
+        expires_at=principal.expires_at,
+    )
+
+
+@router.get("/auth/sessions", response_model=SessionList)
+async def list_sessions(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> SessionList:
+    service = _auth_service(request)
+    sessions = await service.list_sessions(
+        principal.user_id, current_session_id=principal.session_id
+    )
+    return SessionList(
+        items=[_web_session(view) for view in sessions],
+        current_session_id=principal.session_id,
+    )
+
+
+@router.delete("/auth/sessions/{session_id}", status_code=204)
+async def revoke_session(
+    request: Request,
+    session_id: uuid.UUID,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    service = _auth_service(request)
+    found = await service.revoke_session(principal.user_id, session_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return Response(status_code=204)
+
+
+@router.post("/auth/sessions/revoke-others", status_code=204)
+async def revoke_other_sessions(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    service = _auth_service(request)
+    await service.revoke_other_sessions(principal.user_id, principal.session_id)
+    return Response(status_code=204)
+
+
+def _web_session(view: Any) -> WebSession:
+    return WebSession(
+        id=view.session_id,
+        created_at=view.created_at,
+        last_seen_at=view.last_seen_at,
+        expires_at=view.expires_at,
+        revoked_at=view.revoked_at,
+        current=view.current,
+        device=view.device,
+        user_agent=view.user_agent,
+    )
 
 
 @router.get("/me")

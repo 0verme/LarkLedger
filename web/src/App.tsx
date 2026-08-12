@@ -18,6 +18,7 @@ import {
 	LogOut,
 	Menu,
 	MessageSquareReply,
+	MonitorSmartphone,
 	PiggyBank,
 	RotateCcw,
 	Settings,
@@ -57,6 +58,7 @@ import { OverviewPage } from "./pages/OverviewPage";
 import { RecurringRulesPage } from "./pages/RecurringRulesPage";
 import { AboutPage, ConfigPage } from "./pages/SystemPages";
 import { ApiTokensPage } from "./pages/ApiTokensPage";
+import { SessionsPage } from "./pages/SessionsPage";
 
 type NavItem = {
 	label: string;
@@ -111,6 +113,7 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
 				admin: true,
 			},
 			{ label: "配置", path: "/admin/config", icon: Settings, admin: true },
+			{ label: "登录会话", path: "/sessions", icon: MonitorSmartphone },
 			{ label: "API 令牌", path: "/api-tokens", icon: KeyRound },
 			{ label: "关于", path: "/about", icon: ShieldCheck },
 		],
@@ -170,6 +173,7 @@ function pageElement(item: NavItem) {
 	if (item.path === "/admin/dead") return <DeadPage />;
 	if (item.path === "/admin/health") return <HealthPage />;
 	if (item.path === "/admin/config") return <ConfigPage />;
+	if (item.path === "/sessions") return <SessionsPage />;
 	if (item.path === "/api-tokens") return <ApiTokensPage />;
 	return <AboutPage />;
 }

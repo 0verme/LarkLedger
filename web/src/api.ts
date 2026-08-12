@@ -549,6 +549,41 @@ export type ClientCredential = {
 export type ClientCredentialCreated = ClientCredential & { token: string };
 export type ClientCredentialList = { items: ClientCredential[] };
 
+// P37 — human session views. These deliberately carry no digest, cookie or
+// raw secret; the server never returns a session credential after creation.
+export type WebSession = {
+	id: string;
+	created_at: string;
+	last_seen_at: string;
+	expires_at: string;
+	revoked_at: string | null;
+	current: boolean;
+	device: string;
+	user_agent: string | null;
+};
+export type SessionList = {
+	items: WebSession[];
+	current_session_id: string;
+};
+export type CurrentSession = {
+	session_id: string;
+	open_id: string;
+	name: string;
+	avatar_url: string;
+	role: string;
+	expires_at: string;
+};
+
+export const sessionApi = {
+	me: () => api<CurrentSession>("/auth/session"),
+	list: () => api<SessionList>("/auth/sessions"),
+	revoke: (sessionId: string) =>
+		api<void>(`/auth/sessions/${sessionId}`, { method: "DELETE" }),
+	revokeOthers: () =>
+		api<void>("/auth/sessions/revoke-others", { method: "POST" }),
+	logout: () => api<void>("/auth/logout", { method: "POST" }),
+};
+
 export const money = (value: string | number) =>
 	new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
 		Number(value),

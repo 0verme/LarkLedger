@@ -714,3 +714,31 @@ AdminEventStatus = Literal[
 ]
 AdminOutboxStatus = Literal["pending", "sending", "failed", "sent", "dead"]
 AnalyticsPeriod = Literal["7d", "30d", "90d", "year", "custom"]
+
+
+# P37 — Human session management. These views deliberately expose no digest,
+# no cookie value and no raw secret: the server never returns a session
+# credential after creation.
+class WebSession(BaseModel):
+    id: str
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None = None
+    current: bool = False
+    device: str = "未知设备"
+    user_agent: str | None = None
+
+
+class SessionList(BaseModel):
+    items: list[WebSession]
+    current_session_id: str
+
+
+class CurrentSession(BaseModel):
+    session_id: str
+    open_id: str
+    name: str
+    avatar_url: str
+    role: str
+    expires_at: datetime

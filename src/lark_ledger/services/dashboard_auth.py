@@ -1,4 +1,21 @@
-"""Feishu OAuth and revocable PostgreSQL sessions for the Web Dashboard."""
+"""Feishu OAuth and revocable PostgreSQL human sessions (P37).
+
+This is the *human credential* path of LarkLedger, fully separated from the
+machine ``ClientCredential`` / ``llv1_`` API-token path:
+
+    Human User
+        → Feishu OAuth (first-party login)
+            → DashboardSession (browser session, digest-only)
+                → RequestContext (actor_kind="user")
+                    → ClientApplicationService
+                        → Ledger / Domain
+
+The browser only ever receives the raw session secret once, inside an HttpOnly
+cookie (``Set-Cookie``); the database stores only its SHA-256 digest, exactly
+like ``ClientCredential`` stores ``llv1_`` digests. Multi-device sessions are
+first-class: a user may hold several parallel sessions and revoke any of them,
+or all others, from the Web dashboard.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +23,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -20,15 +38,34 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from lark_ledger.config import Settings
 from lark_ledger.context import RequestContext
-from lark_ledger.models import DashboardSession
+from lark_ledger.models import ClientSecurityAudit, DashboardSession
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import LedgerManagementService
 
+logger = logging.getLogger(__name__)
+
+#: Defaults kept for backward compatibility with tests and existing cookies;
+#: the running names come from Settings (``dashboard_session_cookie_name`` /
+#: ``dashboard_csrf_cookie_name``).
 SESSION_COOKIE = "lark_ledger_session"
 CSRF_COOKIE = "lark_ledger_csrf"
 OAUTH_COOKIE = "lark_ledger_oauth"
 CSRF_HEADER = "X-CSRF-Token"
+
+#: Session secrets are always prefixed so they are instantly recognizable and
+#: grep-able in audits; only the SHA-256 digest is ever persisted.
+SESSION_SECRET_PREFIX = "lls1_"
+
+#: ``last_seen_at`` is refreshed at most once per window to avoid a database
+#: write on every authenticated request (P37 §8 — no write amplification).
+LAST_SEEN_REFRESH_SECONDS = 300
+
+#: Soft-revoked / expired sessions are physically removed by the Cleanup
+#: Worker after this retention window; until then they stay queryable for the
+#: session UI and incident analysis. Kept in sync with
+#: ``dashboard_session_retention_days``.
+SESSION_RETENTION_DAYS = 30
 
 
 class DashboardAuthError(ValueError):
@@ -53,6 +90,7 @@ class DashboardPrincipal:
             ledger_id=self.ledger_id,
             source_channel="web",
             external_subject_id=self.user_open_id,
+            actor_kind="user",
         )
 
 
@@ -69,8 +107,26 @@ class OAuthRequest:
     state_cookie: str
 
 
+@dataclass(frozen=True)
+class SessionView:
+    """Safe session projection: never carries a digest or raw secret."""
+
+    session_id: str
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    revoked_at: datetime | None
+    current: bool
+    device: str
+    user_agent: str | None
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _digest(value: str) -> str:
@@ -90,6 +146,38 @@ def safe_next_path(value: str | None) -> str:
     return candidate
 
 
+def device_label(user_agent: str | None) -> str:
+    """Short, human-readable device summary from a User-Agent string."""
+    if not user_agent:
+        return "未知设备"
+    ua = user_agent
+    os_name = "未知系统"
+    if "Windows" in ua:
+        os_name = "Windows"
+    elif "Android" in ua:
+        os_name = "Android"
+    elif "iPhone" in ua or "iPad" in ua or "iOS" in ua:
+        os_name = "iOS"
+    elif "Mac OS" in ua or "Macintosh" in ua:
+        os_name = "macOS"
+    elif "Linux" in ua:
+        os_name = "Linux"
+    browser = "浏览器"
+    if "Edg/" in ua:
+        browser = "Edge"
+    elif "Chrome" in ua and "Chromium" not in ua:
+        browser = "Chrome"
+    elif "Firefox" in ua:
+        browser = "Firefox"
+    elif "Safari" in ua:
+        browser = "Safari"
+    elif "MicroMessenger" in ua:
+        browser = "微信"
+    if "Mobile" in ua or "Android" in ua or "iPhone" in ua:
+        return f"{os_name} · {browser}（移动端）"
+    return f"{os_name} · {browser}"
+
+
 class DashboardAuthService:
     def __init__(
         self,
@@ -105,6 +193,16 @@ class DashboardAuthService:
             hashlib.sha256(settings.dashboard_session_secret.encode("utf-8")).digest()
         )
         self._fernet = Fernet(key)
+        self._session_cookie = settings.dashboard_session_cookie_name or SESSION_COOKIE
+        self._csrf_cookie = settings.dashboard_csrf_cookie_name or CSRF_COOKIE
+
+    @property
+    def session_cookie(self) -> str:
+        return self._session_cookie
+
+    @property
+    def csrf_cookie(self) -> str:
+        return self._csrf_cookie
 
     @property
     def callback_url(self) -> str:
@@ -214,10 +312,21 @@ class DashboardAuthService:
             "avatar_url": str(data.get("avatar_url") or data.get("picture") or "")[:1024],
         }
 
-    async def create_session(self, identity: dict[str, str]) -> CreatedSession:
+    async def create_session(
+        self,
+        identity: dict[str, str],
+        *,
+        user_agent: str | None = None,
+        ip: str | None = None,
+    ) -> CreatedSession:
+        """Create a brand-new session — never reuse an existing one, so an
+        already-valid session cookie is always rotated on login (P37 §14,
+        session fixation)."""
         now = _utcnow()
         expires_at = now + timedelta(seconds=self._settings.dashboard_session_ttl_seconds)
-        session_token = secrets.token_urlsafe(48)
+        # The raw secret is returned exactly once and only ever written to the
+        # Set-Cookie header; the database row stores its digest.
+        session_token = SESSION_SECRET_PREFIX + secrets.token_urlsafe(48)
         csrf_token = secrets.token_urlsafe(32)
         async with self._factory() as session:
             context = await IdentityService(
@@ -244,8 +353,18 @@ class DashboardAuthService:
                 avatar_url=identity.get("avatar_url", "")[:1024],
                 expires_at=expires_at,
                 last_seen_at=now,
+                user_agent=(user_agent or "")[:512] or None,
+                created_ip_hash=_digest(ip) if ip else None,
             )
             session.add(row)
+            await session.flush()
+            session.add(
+                ClientSecurityAudit(
+                    actor_user_id=context.actor_user_id,
+                    action="session.create",
+                    outcome="succeeded",
+                )
+            )
             await session.commit()
         return CreatedSession(
             principal=self._principal(row),
@@ -261,10 +380,18 @@ class DashboardAuthService:
             row = await session.scalar(
                 select(DashboardSession).where(DashboardSession.token_hash == _digest(token))
             )
-            if row is None or row.revoked_at is not None or _aware(row.expires_at) <= now:
+            if row is None:
+                logger.warning("session authenticate failed reason=not_found")
+                raise DashboardAuthError("登录会话已失效")
+            if row.revoked_at is not None:
+                logger.warning("session authenticate failed reason=revoked")
+                raise DashboardAuthError("登录会话已失效")
+            if _aware(row.expires_at) <= now:
+                logger.warning("session authenticate failed reason=expired")
                 raise DashboardAuthError("登录会话已失效")
             if row.user_id is None or row.ledger_id is None:
                 raise DashboardAuthError("登录会话缺少内部账本身份")
+            ledger_reassigned = False
             if not await LedgerAuthorizationService(session).can_access(row.user_id, row.ledger_id):
                 fallback = await LedgerManagementService(
                     session,
@@ -272,8 +399,15 @@ class DashboardAuthService:
                     timezone=self._settings.timezone,
                 ).get_default(row.user_id)
                 row.ledger_id = fallback.id
-            row.last_seen_at = now
-            await session.commit()
+                ledger_reassigned = True
+            # Bound last_seen writes (P37 §8): at most one write per window.
+            # Never rollback() here — that would expire the ORM row and force a
+            # lazy reload of the principal attributes outside a greenlet.
+            if (
+                now - _aware(row.last_seen_at) >= timedelta(seconds=LAST_SEEN_REFRESH_SECONDS)
+            ) or ledger_reassigned:
+                row.last_seen_at = now
+                await session.commit()
             return self._principal(row)
 
     async def verify_csrf(
@@ -289,6 +423,9 @@ class DashboardAuthService:
         return principal
 
     async def revoke(self, token: str | None) -> None:
+        """Log out the current session: server-side revoke + the route also
+        clears the cookies, so a deleted browser cookie alone never counts as
+        logout (P37 §7)."""
         if not token:
             return
         async with self._factory() as session:
@@ -297,7 +434,90 @@ class DashboardAuthService:
             )
             if row is not None and row.revoked_at is None:
                 row.revoked_at = _utcnow()
+                if row.user_id is not None:
+                    session.add(
+                        ClientSecurityAudit(
+                            actor_user_id=row.user_id,
+                            action="session.revoke",
+                            outcome="succeeded",
+                        )
+                    )
                 await session.commit()
+
+    async def list_sessions(self, user_id: uuid.UUID, current_session_id: str) -> list[SessionView]:
+        """All sessions for one user (including soft-revoked ones, which stay
+        visible until the Cleanup Worker removes them after the retention
+        window)."""
+        async with self._factory() as session:
+            rows = (
+                await session.scalars(
+                    select(DashboardSession)
+                    .where(DashboardSession.user_id == user_id)
+                    .order_by(DashboardSession.created_at.desc())
+                )
+            ).all()
+        return [self._session_view(row, current_session_id) for row in rows]
+
+    async def revoke_session(self, user_id: uuid.UUID, session_id: uuid.UUID) -> bool:
+        """Revoke one session by id. Returns False when the session does not
+        belong to the user (404-safe)."""
+        async with self._factory() as session:
+            row = await session.scalar(
+                select(DashboardSession).where(
+                    DashboardSession.id == session_id,
+                    DashboardSession.user_id == user_id,
+                )
+            )
+            if row is None:
+                return False
+            if row.revoked_at is None:
+                row.revoked_at = _utcnow()
+                session.add(
+                    ClientSecurityAudit(
+                        actor_user_id=user_id,
+                        action="session.revoke",
+                        outcome="succeeded",
+                    )
+                )
+                await session.commit()
+            return True
+
+    async def revoke_other_sessions(self, user_id: uuid.UUID, current_session_id: str) -> int:
+        """Revoke every session of the user except the current one."""
+        async with self._factory() as session:
+            rows = (
+                await session.scalars(
+                    select(DashboardSession).where(
+                        DashboardSession.user_id == user_id,
+                        DashboardSession.id != uuid.UUID(current_session_id),
+                        DashboardSession.revoked_at.is_(None),
+                    )
+                )
+            ).all()
+            for row in rows:
+                row.revoked_at = _utcnow()
+            if rows:
+                session.add(
+                    ClientSecurityAudit(
+                        actor_user_id=user_id,
+                        action="session.revoke_all_others",
+                        outcome="succeeded",
+                    )
+                )
+                await session.commit()
+            return len(rows)
+
+    def _session_view(self, row: DashboardSession, current_session_id: str) -> SessionView:
+        return SessionView(
+            session_id=str(row.id),
+            created_at=_aware(row.created_at),
+            last_seen_at=_aware(row.last_seen_at),
+            expires_at=_aware(row.expires_at),
+            revoked_at=_aware(row.revoked_at) if row.revoked_at is not None else None,
+            current=str(row.id) == current_session_id,
+            device=device_label(row.user_agent),
+            user_agent=row.user_agent,
+        )
 
     def _principal(self, row: DashboardSession) -> DashboardPrincipal:
         if row.user_id is None or row.ledger_id is None:
@@ -313,7 +533,3 @@ class DashboardAuthService:
             role=role,
             expires_at=_aware(row.expires_at),
         )
-
-
-def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)

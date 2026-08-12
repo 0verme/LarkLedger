@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from lark_ledger.event_payload import EventProcessStatus
 from lark_ledger.models import (
     ClientIdempotencyRecord,
+    DashboardSession,
     PendingCommand,
     PendingStatus,
     ProcessedEvent,
@@ -40,6 +41,10 @@ class RetentionPolicy:
     # Terminal pending confirmations (P07): executed / cancelled / expired /
     # failed rows are deleted after this many days.
     pending_retention_days: int = 7
+    # P37: soft-revoked / expired human sessions are physically removed after
+    # this many days. Until then they stay queryable for the session UI and
+    # incident analysis — never delete them immediately on revoke.
+    session_retention_days: int = 30
 
     def __post_init__(self) -> None:
         values = (
@@ -48,6 +53,7 @@ class RetentionPolicy:
             self.outbox_sent_days,
             self.outbox_dead_days,
             self.pending_retention_days,
+            self.session_retention_days,
         )
         if any(value < 1 for value in values):
             raise ValueError("retention windows must be at least one day")
@@ -63,6 +69,7 @@ class CleanupResult:
     pending_expired: int = 0
     pending_deleted: int = 0
     client_idempotency_deleted: int = 0
+    sessions_deleted: int = 0
 
     @property
     def total(self) -> int:
@@ -76,6 +83,7 @@ class CleanupResult:
                 self.pending_expired,
                 self.pending_deleted,
                 self.client_idempotency_deleted,
+                self.sessions_deleted,
             )
         )
 
@@ -278,6 +286,37 @@ class CleanupStore:
             await session.commit()
             return len(ids)
 
+    async def delete_session_batch(
+        self, *, cutoff: datetime, now: datetime, batch_size: int
+    ) -> int:
+        """Delete only revoked-or-expired human sessions past the retention
+        cutoff (P37 §21). Active sessions are never selected."""
+        async with self._factory() as session:
+            ids = list(
+                (
+                    await session.scalars(
+                        select(DashboardSession.id)
+                        .where(
+                            or_(
+                                DashboardSession.revoked_at.is_not(None),
+                                DashboardSession.expires_at <= now,
+                            ),
+                            DashboardSession.created_at <= cutoff,
+                        )
+                        .order_by(DashboardSession.created_at, DashboardSession.id)
+                        .limit(batch_size)
+                        .with_for_update(skip_locked=True)
+                    )
+                ).all()
+            )
+            if not ids:
+                return 0
+            await session.execute(
+                delete(DashboardSession).where(DashboardSession.id.in_(ids))
+            )
+            await session.commit()
+            return len(ids)
+
 
 class CleanupService:
     """Apply terminal retention in outbox-before-event order."""
@@ -307,6 +346,7 @@ class CleanupService:
             "pending_expired": current,
             "pending_deleted": current - timedelta(days=self._policy.pending_retention_days),
             "client_idempotency_deleted": current,
+            "sessions_deleted": current - timedelta(days=self._policy.session_retention_days),
         }
         counts: dict[str, int] = {}
         counts["outbox_sent"] = await self._timed_delete(
@@ -382,6 +422,15 @@ class CleanupService:
             cutoffs["client_idempotency_deleted"],
             self._store.delete_client_idempotency_batch(
                 cutoff=cutoffs["client_idempotency_deleted"],
+                batch_size=self._batch_size,
+            ),
+        )
+        counts["sessions_deleted"] = await self._timed_delete(
+            "sessions_deleted",
+            cutoffs["sessions_deleted"],
+            self._store.delete_session_batch(
+                cutoff=cutoffs["sessions_deleted"],
+                now=current,
                 batch_size=self._batch_size,
             ),
         )

@@ -125,6 +125,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                         outbox_sent_days=settings.outbox_sent_retention_days,
                         outbox_dead_days=settings.outbox_dead_retention_days,
                         pending_retention_days=settings.pending_retention_days,
+                        session_retention_days=settings.dashboard_session_retention_days,
                     ),
                     batch_size=settings.cleanup_batch_size,
                 ),
