@@ -215,6 +215,37 @@ export type PendingDetail = {
 	};
 };
 
+// P39 — Unified AI Entry: canonical outcome envelope from
+// POST /api/web/v1/ai/entries. The UI branches on `status`, never on the
+// free-form `message`.
+export type AIEntryStatus =
+	| "executed"
+	| "confirmation_required"
+	| "clarification_required"
+	| "query_result"
+	| "rejected"
+	| "error";
+
+export type AIEntryResult = {
+	status: AIEntryStatus;
+	message: string;
+	request_id: string;
+	replayed: boolean;
+	operation: string | null;
+	resource_id: string | null;
+	amount: string | null;
+	direction: "expense" | "income" | null;
+	category: string | null;
+	account: string | null;
+	occurred_at: string | null;
+	pending_command_id: string | null;
+	confirmation_code: string | null;
+	risk: string | null;
+	expires_at: string | null;
+	preview: Record<string, unknown> | null;
+	missing_fields: string[];
+};
+
 export type PendingActionResponse = { message: string; pending: PendingDetail };
 
 export type AdminEvent = {

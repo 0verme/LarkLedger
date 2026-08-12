@@ -21,6 +21,7 @@ import {
 	QuickEntryDialog,
 	type QuickEntryBody,
 } from "../components/QuickEntryDialog";
+import { AIEntryPanel } from "../components/AIEntryPanel";
 
 export function DashboardPage() {
 	const client = useQueryClient();
@@ -57,6 +58,13 @@ export function DashboardPage() {
 			window.setTimeout(() => setNotice(""), 2400);
 		},
 	});
+	const refreshLedger = async () => {
+		await Promise.all([
+			client.invalidateQueries({ queryKey: ["dashboard"] }),
+			client.invalidateQueries({ queryKey: ["assets"] }),
+			client.invalidateQueries({ queryKey: ["entries"] }),
+		]);
+	};
 	if (query.isLoading) return <div className="page-skeleton"><div /><div /><div /></div>;
 	if (query.isError) return <section className="state-panel"><h2>总览暂时不可用</h2><button onClick={() => query.refetch()}>重新加载</button></section>;
 	const data = query.data!;
@@ -107,6 +115,7 @@ export function DashboardPage() {
 				<section className="panel trend-panel"><div className="panel-title"><h3>近 30 天趋势</h3><span>收入 / 支出</span></div><div className="mini-chart" aria-label="近 30 天收支趋势">{data.trend.map((point) => <div className="chart-day" key={point.period} title={`${point.period} 收入 ${money(point.income)} 支出 ${money(point.expense)}`}><i className="income" style={{ height: `${Math.max(Number(point.income) / peak * 100, 2)}%` }} /><i className="expense" style={{ height: `${Math.max(Number(point.expense) / peak * 100, 2)}%` }} /></div>)}</div></section>
 				<section className="panel"><div className="panel-title"><h3>本月分类</h3><span>支出占比</span></div>{data.categories.length ? <div className="category-list">{data.categories.map((item) => <Link key={item.category} to={`/entries?category=${encodeURIComponent(item.category)}`}><span>{item.category}</span><b>{money(item.amount)}</b><em>{Number(item.ratio).toFixed(1)}%</em></Link>)}</div> : <p className="muted-empty">本月还没有支出</p>}</section>
 			</div>
+			<AIEntryPanel onDone={refreshLedger} />
 			<section className="panel recent-panel"><div className="panel-title"><h3>最近流水</h3><span>{data.recent_entries.length} 笔</span></div>{data.recent_entries.length ? <div className="recent-list">{data.recent_entries.map((entry) => <Link key={entry.id} to={`/entries?entry=${entry.short_id}`}><code>#{entry.short_id}</code><span><b>{entry.category}</b><small>{entry.note || "无备注"} · {localTime(entry.occurred_at)}</small></span><strong className={entry.direction === "income" ? "positive" : ""}>{entry.direction === "income" ? "+" : "-"}{money(entry.amount)}</strong></Link>)}</div> : <div className="empty-ledger"><h3>还没有账目</h3><p>记下你的第一笔收支吧。</p><button className="primary-small" onClick={() => setQuickOpen(true)}><BookPlus size={16} /> 记一笔</button></div>}</section>
 			{quickOpen && <QuickEntryDialog accounts={accountOptions} busy={createEntry.isPending} error={createError} onClose={() => setQuickOpen(false)} onSave={(body, key) => createEntry.mutate({ body, key })} />}
 		</div>

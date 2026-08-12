@@ -48,8 +48,9 @@ from lark_ledger.models import (
     User,
 )
 from lark_ledger.readiness import ReadinessService
-from lark_ledger.schemas import Action, ParsedCommand, ReportData
+from lark_ledger.schemas import Action, AIEntryResult, ParsedCommand, ReportData
 from lark_ledger.services.accounts import AccountConflictError, AccountError, AccountNotFoundError
+from lark_ledger.services.ai_entry import AIEntryRequest, UnifiedAIEntryService
 from lark_ledger.services.budget import parse_period
 from lark_ledger.services.client_application import ClientApplicationService
 from lark_ledger.services.client_auth import ClientCredentialService
@@ -160,6 +161,7 @@ from lark_ledger.web_schemas import (
     SessionList,
     SortOrder,
     TransferList,
+    WebAIEntryRequest,
     WebHousehold,
     WebHouseholdInvitation,
     WebHouseholdMember,
@@ -1532,6 +1534,93 @@ async def create_web_entry(
             await session.rollback()
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return EntryDetail.model_validate(data)
+
+
+def _ai_entry_service(
+    request: Request, settings: Settings, factory: async_sessionmaker[AsyncSession]
+) -> UnifiedAIEntryService:
+    """Return the app-wide Unified AI Entry (P39), falling back to a fresh
+    instance for tests that only mount the router."""
+    injected = getattr(request.app.state, "ai_entry_service", None)
+    if injected is not None:
+        return cast(UnifiedAIEntryService, injected)
+    processor = getattr(request.app.state, "processor", None)
+    interpreter = getattr(processor, "interpreter", None) if processor is not None else None
+    exchange_rates = getattr(processor, "exchange_rates", None) if processor is not None else None
+    return UnifiedAIEntryService(
+        settings, factory, interpreter=interpreter, exchange_rates=exchange_rates
+    )
+
+
+@router.post(
+    "/ai/entries",
+    response_model=AIEntryResult,
+    status_code=200,
+    responses={
+        400: {"description": "Invalid AI input"},
+        409: {"description": "Idempotency-Key was already used with a different request"},
+        503: {"description": "The idempotent request is still in progress"},
+    },
+)
+async def create_ai_entry(
+    body: WebAIEntryRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
+) -> AIEntryResult:
+    """Run one natural-language bookkeeping command through the Unified AI Entry (P39).
+
+    The actor / ledger / timezone come from the server-side session; the browser
+    never sends user ids, roles or ledger ids (P39 §37). The same intent parser,
+    risk rules and ``ClientApplicationService`` boundary the Feishu adapter uses
+    are shared here — ``source_channel=web`` only affects observability and
+    presentation, never business semantics (P39 §22).
+
+    Idempotency contract: a browser retry after a timeout replays the stored
+    canonical response instead of re-running the AI provider or creating a
+    second entry — the ledger mutation is exactly-once (P39 §23–§25).
+    """
+    settings = cast(Settings, request.app.state.settings)
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    request_id = f"ai:{uuid.uuid4()}"
+    ai_entry = _ai_entry_service(request, settings, factory)
+    async with factory() as session:
+
+        async def apply(_record: ClientIdempotencyRecord) -> dict[str, Any]:
+            outcome = await ai_entry.submit(
+                session=session,
+                request=AIEntryRequest(
+                    context=principal.request_context,
+                    text=body.text.strip(),
+                    request_id=request_id,
+                    source_message_ref=request_id,
+                ),
+                commit_changes=False,
+            )
+            return outcome.model_dump(mode="json")
+
+        try:
+            data, replayed = await ClientIdempotencyService(session).execute(
+                principal.request_context,
+                operation="web.ai.entry",
+                key=idempotency_key or "",
+                payload={"text": body.text.strip()},
+                callback=apply,
+                response_status=200,
+            )
+        except IdempotencyConflictError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except IdempotencyInProgressError as exc:
+            await session.rollback()
+            raise HTTPException(status_code=503, detail="正在处理中，请稍后重试") from exc
+        except ValueError as exc:
+            # Missing/oversized Idempotency-Key or an invalid request shape.
+            await session.rollback()
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if replayed:
+            data["replayed"] = True
+        return AIEntryResult.model_validate(data)
 
 
 @router.get("/entries/{short_id}", response_model=EntryDetail)

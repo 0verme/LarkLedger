@@ -293,6 +293,19 @@ class EntryCreateRequest(BaseModel):
     paid_by_user_id: uuid.UUID | None = None
 
 
+class WebAIEntryRequest(BaseModel):
+    """P39 — natural-language AI bookkeeping input from the Web dashboard.
+
+    The actor / ledger / timezone come from the server-side session, never from
+    the client (P39 §37). ``text`` is capped so an oversized prompt cannot
+    inflate logs or provider cost (P39 §42).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=500)
+
+
 class EntryVersionRequest(BaseModel):
     expected_updated_at: datetime
 
