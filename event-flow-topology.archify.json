@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "LarkLedger 事件流拓扑",
+    "subtitle": "飞书长连接、进程内队列、PostgreSQL 队列表、租约处理与 Outbox",
+    "output": "event-flow-topology.html",
+    "viewBox": [1280, 820],
+    "animation": "none",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase"
+  },
+  "stages": [
+    { "label": "生产者" },
+    { "label": "接入与事件通道" },
+    { "label": "队列与状态" },
+    { "label": "处理器" },
+    { "label": "消费与恢复" }
+  ],
+  "nodes": [
+    { "id": "feishu", "type": "external", "label": "飞书事件平台", "sublabel": "事件生产者", "stage": 0, "row": 0 },
+    { "id": "wsAdapter", "type": "backend", "label": "WebSocketService", "sublabel": "飞书长连接适配器", "stage": 1, "row": 0, "width": 132 },
+    { "id": "memoryQueue", "type": "messagebus", "label": "asyncio.Queue", "sublabel": "进程内通道；非 Topic", "stage": 1, "row": 1, "width": 132 },
+    { "id": "eventService", "type": "backend", "label": "EventService", "sublabel": "去重并持久化", "stage": 2, "row": 1 },
+    { "id": "processedEvents", "type": "database", "label": "processed_events", "sublabel": "PostgreSQL 队列与事件状态", "stage": 2, "row": 2 },
+    { "id": "eventWorker", "type": "backend", "label": "EventWorker", "sublabel": "有序认领；并发处理", "stage": 3, "row": 2, "tag": "数据库租约 worker 池" },
+    { "id": "stateStore", "type": "database", "label": "业务表 + reply_outbox", "sublabel": "同事务状态存储", "stage": 3, "row": 3, "width": 156 },
+    { "id": "replyWorker", "type": "backend", "label": "ReplyWorker", "sublabel": "同事件按 sequence 投递", "stage": 4, "row": 3, "width": 140, "tag": "严格顺序门控" },
+    { "id": "feishuApi", "type": "external", "label": "飞书消息 API", "sublabel": "回复消费者", "stage": 4, "row": 1 },
+    { "id": "deadRows", "type": "security", "label": "dead 状态行", "sublabel": "逻辑 DLQ（仍在原表）", "stage": 3, "row": 4 },
+    { "id": "adminReplay", "type": "frontend", "label": "管理端 / CLI", "sublabel": "受控重放入口", "stage": 2, "row": 4 }
+  ],
+  "flows": [
+    { "id": "receiveMessage", "from": "feishu", "to": "wsAdapter", "label": "im.message.receive_v1", "variant": "emphasis", "route": "auto", "labelAt": [208, 200] },
+    { "id": "enqueueEvent", "from": "wsAdapter", "to": "memoryQueue", "label": "event_id + event", "variant": "default", "route": "auto" },
+    { "id": "dispatchEvent", "from": "memoryQueue", "to": "eventService", "label": "消息事件", "variant": "emphasis", "route": "auto" },
+    { "id": "persistEvent", "from": "eventService", "to": "processedEvents", "label": "持久化 payload 与状态", "variant": "emphasis", "route": "auto" },
+    { "id": "claimEvent", "from": "processedEvents", "to": "eventWorker", "label": "租约认领", "classification": "SKIP LOCKED", "variant": "emphasis", "route": "straight", "labelAt": [638, 340] },
+    { "id": "commitState", "from": "eventWorker", "to": "stateStore", "label": "业务变更 + 回复意图", "classification": "单事务提交", "variant": "emphasis", "route": "auto" },
+    { "id": "claimReply", "from": "stateStore", "to": "replyWorker", "label": "按 sequence 认领", "classification": "SKIP LOCKED", "variant": "emphasis", "route": "straight", "labelAt": [857, 440] },
+    { "id": "sendReply", "from": "replyWorker", "to": "feishuApi", "label": "uuid 幂等回复", "classification": "1 小时窗口", "variant": "emphasis", "route": "auto" },
+    { "id": "eventDead", "from": "processedEvents", "to": "deadRows", "label": "事件 → dead", "variant": "security", "fromSide": "right", "toSide": "bottom", "via": [[650, 385], [650, 668], [745, 668]], "labelAt": [620, 440] },
+    { "id": "replyDead", "from": "stateStore", "to": "deadRows", "label": "回复 dead", "variant": "security", "route": "auto" },
+    { "id": "replayEvent", "from": "adminReplay", "to": "processedEvents", "label": "事件重放 → received", "variant": "dashed", "route": "straight", "labelAt": [440, 490] },
+    { "id": "replayReply", "from": "adminReplay", "to": "stateStore", "label": "结果重放 → pending", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[530, 700], [840, 700], [840, 499]], "labelAt": [850, 550] }
+  ],
+  "cards": [
+    { "dot": "amber", "title": "Topic 与消费组", "items": ["未实现 Kafka / RabbitMQ Topic", "asyncio.Queue 是进程内通道", "EventWorker 由数据库租约协调；没有命名消费组"] },
+    { "dot": "emerald", "title": "有序性与投递", "items": ["事件按 received_at、event_id 有序认领；并发下不等于全局严格处理顺序", "ReplyWorker 对同一事件按 sequence 严格门控", "飞书 uuid 在 1 小时内幂等；不标注端到端 exactly-once"] },
+    { "dot": "rose", "title": "DLQ 与重放", "items": ["dead 是 processed_events / reply_outbox 原表终态，不是独立 Topic", "事件重放重新执行业务且有安全预检", "结果重放只重发已持久化 Outbox 载荷"] }
+  ]
+}
