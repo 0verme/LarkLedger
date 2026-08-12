@@ -2164,3 +2164,99 @@ tbody tr:hover {
 	display: flex;
 	gap: 9px;
 }
+
+/* P38 — First-party Web Client */
+.quick-add-fab {
+	position: fixed;
+	z-index: 30;
+	right: 18px;
+	bottom: 22px;
+	display: none;
+	width: 56px;
+	height: 56px;
+	place-items: center;
+	border: 0;
+	border-radius: 50%;
+	color: #fff;
+	background: #1769e0;
+	box-shadow: 0 10px 26px rgba(23, 105, 224, 0.38);
+	font-size: 26px;
+	line-height: 1;
+	cursor: pointer;
+}
+.quick-add-fab:active {
+	transform: scale(0.94);
+}
+@media (max-width: 800px) {
+	.quick-add-fab {
+		display: grid;
+	}
+}
+.direction-toggle {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 8px;
+	margin: 4px 0 14px;
+}
+.direction-toggle button {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 6px;
+	padding: 10px 0;
+	border: 1px solid #dfe3e8;
+	border-radius: 10px;
+	background: #fff;
+	color: #4a5563;
+	cursor: pointer;
+}
+.direction-toggle button.expense.active {
+	color: #c64c4c;
+	border-color: #e2b9b9;
+	background: #fdf5f5;
+}
+.direction-toggle button.income.active {
+	color: #177a4d;
+	border-color: #b7dfc8;
+	background: #f2faf5;
+}
+.amount-input {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 6px;
+	padding: 0 10px;
+	border: 1px solid #dfe3e8;
+	border-radius: 9px;
+	background: #fff;
+}
+.amount-input input {
+	flex: 1;
+	margin-top: 0 !important;
+	border: 0 !important;
+	background: transparent;
+}
+.category-chips {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 7px;
+	margin: -4px 0 2px;
+}
+.category-chips button {
+	padding: 5px 11px;
+	border: 1px solid #dfe3e8;
+	border-radius: 999px;
+	background: #fff;
+	color: #4a5563;
+	font-size: 12px;
+	cursor: pointer;
+}
+.category-chips button.active {
+	color: #1769e0;
+	border-color: #1769e0;
+	background: #eef5ff;
+}
+.quick-entry {
+	max-height: 90vh;
+	overflow-y: auto;
+}

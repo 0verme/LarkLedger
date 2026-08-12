@@ -84,7 +84,7 @@ export function RecurringRulesPage() {
         <button className="primary-small" onClick={() => setEditing({ ruleId: null, form: emptyForm(items, accountsById) })}><Plus size={16} /> 创建周期账单</button>
       </div>
       {items.length === 0 ? (
-        <div className="empty-ledger"><CalendarClock size={30} /><h3>还没有周期账单</h3><p>在飞书对飞账说：“每月8号房租3500”，或在这里创建。</p><button className="primary-small" onClick={() => setEditing({ ruleId: null, form: emptyForm(items, accountsById) })}><Plus size={15} /> 创建周期账单</button></div>
+        <div className="empty-ledger"><CalendarClock size={30} /><h3>还没有周期账单</h3><p>在飞书里说“每月8号房租3500”，或直接在这里创建。</p><button className="primary-small" onClick={() => setEditing({ ruleId: null, form: emptyForm(items, accountsById) })}><Plus size={15} /> 创建周期账单</button></div>
       ) : (
         <section className="table-panel">
           <div className="table-scroll"><table><thead><tr><th>名称</th><th>类型</th><th>金额</th><th>账户</th><th>周期</th><th>下次日期</th><th>状态</th><th>操作</th></tr></thead><tbody>

@@ -30,6 +30,7 @@ type GoalForm = {
 export function GoalsPage() {
   const client = useQueryClient();
   const [editing, setEditing] = useState<{ goalId: string | null; form: GoalForm } | null>(null);
+  const [deleting, setDeleting] = useState<Goal | null>(null);
   const [notice, setNotice] = useState("");
   const goals = useQuery({ queryKey: ["goals"], queryFn: () => api<GoalList>("/goals") });
   const accounts = useQuery({
@@ -92,7 +93,7 @@ export function GoalsPage() {
                         <button aria-label={`归档 ${goal.name}`} disabled={action.isPending} onClick={() => action.mutate({ path: `/goals/${goal.id}/archive`, method: "POST" })}><Archive size={15} /></button>
                       </>
                     )}
-                    <button className="danger" aria-label={`删除 ${goal.name}`} disabled={action.isPending} onClick={() => { if (window.confirm(`删除目标「${goal.name}」？不会影响任何账户或账目。`)) action.mutate({ path: `/goals/${goal.id}`, method: "DELETE" }); }}><Trash2 size={15} /></button>
+                    <button className="danger" aria-label={`删除 ${goal.name}`} disabled={action.isPending} onClick={() => setDeleting(goal)}><Trash2 size={15} /></button>
                   </div>
                 </div>
                 {goal.description && <p className="goal-desc">{goal.description}</p>}
@@ -131,6 +132,18 @@ export function GoalsPage() {
         </details>
       )}
       {editing && <GoalDialog form={editing.form} accounts={accountOptions} busy={action.isPending} error={action.error?.message} isEdit={editing.goalId !== null} onClose={() => setEditing(null)} onSave={save} />}
+      {deleting && (
+        <div className="modal-layer">
+          <div className="confirm-dialog">
+            <h3>删除目标「{deleting.name}」？</h3>
+            <p>不会影响任何账户或账目。</p>
+            <div>
+              <button onClick={() => setDeleting(null)} disabled={action.isPending}>取消</button>
+              <button className="danger-solid" disabled={action.isPending} onClick={() => { action.mutate({ path: `/goals/${deleting.id}`, method: "DELETE" }); setDeleting(null); }}>确认删除</button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

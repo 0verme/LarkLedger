@@ -164,6 +164,7 @@ export function ApiTokensPage() {
 	const queryClient = useQueryClient();
 	const [creating, setCreating] = useState(false);
 	const [notice, setNotice] = useState<string | null>(null);
+	const [revoking, setRevoking] = useState<ClientCredential | null>(null);
 	const tokens = useQuery({
 		queryKey: ["client-credentials"],
 		queryFn: () => api<ClientCredentialList>("/client-credentials"),
@@ -273,14 +274,7 @@ export function ApiTokensPage() {
 													<button
 														className="danger"
 														disabled={revoke.isPending}
-														onClick={() => {
-															if (
-																window.confirm(
-																	`撤销令牌「${row.name}」？撤销后立即失效。`,
-																)
-															)
-																revoke.mutate(row.id);
-														}}
+														onClick={() => setRevoking(row)}
 													>
 														<Trash2 size={15} /> 撤销
 													</button>
@@ -295,6 +289,29 @@ export function ApiTokensPage() {
 				</section>
 			)}
 			{creating && <CreateTokenDialog onClose={() => setCreating(false)} />}
+			{revoking && (
+				<div className="modal-layer">
+					<div className="confirm-dialog">
+						<h3>撤销令牌「{revoking.name}」？</h3>
+						<p>撤销后立即失效，使用该令牌的程序将无法再访问账本。</p>
+						<div>
+							<button onClick={() => setRevoking(null)} disabled={revoke.isPending}>
+								取消
+							</button>
+							<button
+								className="danger-solid"
+								disabled={revoke.isPending}
+								onClick={() => {
+									revoke.mutate(revoking.id);
+									setRevoking(null);
+								}}
+							>
+								确认撤销
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
 			<div className="tokens-tip">
 				<CalendarClock size={15} /> 令牌仅用于 <code>/api/v1</code> 与{" "}
 				<code>/api/client/v1</code>；Web 会话（Cookie + CSRF）不受影响。

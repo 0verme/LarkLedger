@@ -97,7 +97,7 @@ export function OverviewPage() {
 
       <section className="panel recent-panel">
         <div className="panel-title"><h3>最近交易</h3><span>{data.recent_transactions.length} 笔</span></div>
-        {data.recent_transactions.length ? <div className="recent-list">{data.recent_transactions.map((entry) => <Link key={entry.id} to={`/entries?entry=${entry.short_id}`}><code>#{entry.short_id}</code><span><b>{entry.category}{entry.payer_name ? ` · ${entry.payer_name}` : ""}</b><small>{entry.note || "无备注"} · {localTime(entry.occurred_at)}</small></span><strong className={entry.direction === "INCOME" ? "positive" : ""}>{entry.direction === "INCOME" ? "+" : "-"}{money(entry.amount)}</strong></Link>)}</div> : <div className="empty-ledger"><h3>还没有账目</h3><p>去飞书对飞账说：“午饭32元”</p></div>}
+        {data.recent_transactions.length ? <div className="recent-list">{data.recent_transactions.map((entry) => <Link key={entry.id} to={`/entries?entry=${entry.short_id}`}><code>#{entry.short_id}</code><span><b>{entry.category}{entry.payer_name ? ` · ${entry.payer_name}` : ""}</b><small>{entry.note || "无备注"} · {localTime(entry.occurred_at)}</small></span><strong className={entry.direction === "income" ? "positive" : ""}>{entry.direction === "income" ? "+" : "-"}{money(entry.amount)}</strong></Link>)}</div> : <div className="empty-ledger"><h3>还没有账目</h3><p>记下你的第一笔收支吧。</p><Link className="primary-small" to="/entries">查看流水</Link></div>}
       </section>
     </div>
   );

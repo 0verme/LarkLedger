@@ -11,7 +11,7 @@ export type Entry = {
 	short_id: string;
 	amount: string;
 	currency: string;
-	direction: "EXPENSE" | "INCOME";
+	direction: "expense" | "income";
 	category: string;
 	note: string;
 	occurred_at: string;
@@ -599,9 +599,22 @@ export class ApiError extends Error {
 	constructor(
 		public readonly status: number,
 		message: string,
+		public readonly requestId: string | null = null,
 	) {
 		super(message);
 	}
+}
+
+/**
+ * P38 §13 — one explicit submit = one Idempotency-Key. The backend replays
+ * the same key instead of creating a second ledger row, so browser retries,
+ * double-clicks and React double-fires never double-book.
+ */
+export function newIdempotencyKey(): string {
+	if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+		return crypto.randomUUID();
+	}
+	return `web-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 function cookie(name: string): string {
@@ -635,7 +648,19 @@ async function responseError(response: Response): Promise<ApiError> {
 	return new ApiError(
 		response.status,
 		detail ?? statusMessages[response.status] ?? "请求失败，请稍后重试",
+		response.headers.get("X-Request-ID"),
 	);
+}
+
+export function errorText(error: unknown): string {
+	// Safe user-facing error text: a Chinese backend message when present, the
+	// generic fallback otherwise, plus the request id for support (P38 §23).
+	if (error instanceof ApiError) {
+		return error.requestId
+			? `${error.message}（请求编号：${error.requestId}）`
+			: error.message;
+	}
+	return error instanceof Error ? error.message : "操作失败，请重试";
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {

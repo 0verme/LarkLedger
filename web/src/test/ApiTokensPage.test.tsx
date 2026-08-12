@@ -122,11 +122,15 @@ describe("api tokens page", () => {
 		expect(screen.getByText(/明文只会显示这一次/)).toBeInTheDocument();
 	});
 
-	it("revokes a token", async () => {
-		vi.spyOn(window, "confirm").mockReturnValue(true);
+	it("revokes a token with an explicit confirmation dialog", async () => {
 		renderApp("/api-tokens", defaultFetch);
 		const revoke = await screen.findByRole("button", { name: /撤销/ });
 		fireEvent.click(revoke);
+		// The confirmation dialog is shown before the destructive call.
+		expect(
+			await screen.findByRole("heading", { name: /撤销令牌/ }),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "确认撤销" }));
 		expect(
 			await screen.findByText("令牌已撤销，立即失效。"),
 		).toBeInTheDocument();

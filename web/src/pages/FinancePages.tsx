@@ -7,7 +7,7 @@ import { api, downloadExport, money, type AnalyticsMonthlyPoint, type AnalyticsO
 const periodOptions = [{ value: "7d", label: "7 天" }, { value: "30d", label: "30 天" }, { value: "90d", label: "90 天" }, { value: "year", label: "本年" }, { value: "custom", label: "自定义" }] as const;
 
 function EmptyFinance({ title }: { title: string }) {
-  return <div className="empty-ledger"><FileBarChart size={30} /><h3>{title}</h3><p>去飞书对飞账说：“午饭32元”</p></div>;
+  return <div className="empty-ledger"><FileBarChart size={30} /><h3>{title}</h3><p>在这里创建第一笔记录，或直接在飞书里说。</p></div>;
 }
 
 export function AnalyticsPage() {

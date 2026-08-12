@@ -33,6 +33,8 @@ import {
 	Route,
 	Routes,
 	useLocation,
+	useNavigate,
+	useParams,
 } from "react-router-dom";
 import { ApiError, api, type Ledger, type LedgerList, type Me } from "./api";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -70,12 +72,17 @@ type NavItem = {
 const groups: Array<{ label?: string; items: NavItem[] }> = [
 	{
 		items: [
-			{ label: "总览", path: "/", icon: BarChart3 },
-			{ label: "家庭总览", path: "/overview", icon: Home },
-			{ label: "账目", path: "/entries", icon: BookOpen },
+			{ label: "首页", path: "/", icon: Home },
+			{ label: "流水", path: "/entries", icon: BookOpen },
 			{ label: "账户", path: "/accounts", icon: Landmark },
 			{ label: "转账", path: "/transfers", icon: ArrowLeftRight },
 			{ label: "待确认", path: "/pending", icon: Clock3 },
+		],
+	},
+	{
+		label: "家庭与规划",
+		items: [
+			{ label: "家庭总览", path: "/overview", icon: BarChart3 },
 			{ label: "家庭", path: "/households", icon: Users },
 			{ label: "预算", path: "/budgets", icon: PiggyBank },
 			{ label: "目标", path: "/goals", icon: Target },
@@ -104,17 +111,12 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
 		],
 	},
 	{
-		label: "系统",
+		label: "设置与开发者",
 		items: [
-			{
-				label: "健康状态",
-				path: "/admin/health",
-				icon: HeartPulse,
-				admin: true,
-			},
-			{ label: "配置", path: "/admin/config", icon: Settings, admin: true },
 			{ label: "登录会话", path: "/sessions", icon: MonitorSmartphone },
 			{ label: "API 令牌", path: "/api-tokens", icon: KeyRound },
+			{ label: "健康状态", path: "/admin/health", icon: HeartPulse, admin: true },
+			{ label: "配置", path: "/admin/config", icon: Settings, admin: true },
 			{ label: "关于", path: "/about", icon: ShieldCheck },
 		],
 	},
@@ -178,9 +180,69 @@ function pageElement(item: NavItem) {
 	return <AboutPage />;
 }
 
+function TransactionsRedirect() {
+	// P38 §65 — /transactions and /transactions/:id are stable aliases of the
+	// first-party ledger pages; the canonical route stays /entries so bookmarks
+	// and refresh keep working.
+	const { id } = useParams();
+	return (
+		<Navigate
+			to={id ? `/entries?entry=${encodeURIComponent(id)}` : "/entries"}
+			replace
+		/>
+	);
+}
+
+function LedgerNameDialog({
+	busy,
+	onClose,
+	onCreate,
+}: {
+	busy: boolean;
+	onClose: () => void;
+	onCreate: (name: string) => void;
+}) {
+	const [name, setName] = useState("");
+	return (
+		<div className="modal-layer">
+			<form
+				className="edit-dialog"
+				onSubmit={(event) => {
+					event.preventDefault();
+					onCreate(name.trim());
+				}}
+			>
+				<h3>创建账本</h3>
+				<label>
+					账本名称
+					<input
+						autoFocus
+						maxLength={64}
+						value={name}
+						onChange={(event) => setName(event.target.value)}
+						placeholder="例如：家庭日常"
+					/>
+				</label>
+				<div>
+					<button type="button" onClick={onClose} disabled={busy}>
+						取消
+					</button>
+					<button
+						className="primary-small"
+						disabled={busy || !name.trim()}
+					>
+						创建
+					</button>
+				</div>
+			</form>
+		</div>
+	);
+}
+
 function Shell({ me }: { me: Me }) {
 	const [mobileOpen, setMobileOpen] = useState(false);
 	const location = useLocation();
+	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const logout = useMutation({
 		mutationFn: () => api<void>("/auth/logout", { method: "POST" }),
@@ -208,10 +270,8 @@ function Shell({ me }: { me: Me }) {
 			selectLedger.mutate(created.id);
 		},
 	});
-	const askCreateLedger = () => {
-		const name = window.prompt("新账本名称");
-		if (name?.trim()) createLedger.mutate(name);
-	};
+	const askCreateLedger = () => setLedgerDialogOpen(true);
+	const [ledgerDialogOpen, setLedgerDialogOpen] = useState(false);
 	const visibleGroups = groups.map((group) => ({
 		...group,
 		items: group.items.filter((item) => !item.admin || me.role === "ADMIN"),
@@ -279,6 +339,16 @@ function Shell({ me }: { me: Me }) {
 						selectLedger.isError ||
 						createLedger.isError) && <small>账本操作失败，请重试</small>}
 				</div>
+				{ledgerDialogOpen && (
+					<LedgerNameDialog
+						busy={createLedger.isPending}
+						onClose={() => setLedgerDialogOpen(false)}
+						onCreate={(name) => {
+							setLedgerDialogOpen(false);
+							if (name) createLedger.mutate(name);
+						}}
+					/>
+				)}
 				<nav aria-label="主导航">
 					{visibleGroups.map((group, groupIndex) => (
 						<div className="nav-group" key={group.label ?? groupIndex}>
@@ -315,20 +385,29 @@ function Shell({ me }: { me: Me }) {
 						<strong>{pageNames.get(location.pathname) ?? "页面"}</strong>
 					</div>
 				</header>
-				<main className="content">
-					<Routes>
-						{visibleGroups
-							.flatMap((group) => group.items)
-							.map((item) => (
-								<Route
-									key={item.path}
-									path={item.path}
-									element={pageElement(item)}
-								/>
-							))}
-						<Route path="*" element={<Navigate to="/" replace />} />
-					</Routes>
-				</main>
+			<main className="content">
+				<Routes>
+					{visibleGroups
+						.flatMap((group) => group.items)
+						.map((item) => (
+							<Route
+								key={item.path}
+								path={item.path}
+								element={pageElement(item)}
+							/>
+						))}
+					<Route path="/transactions" element={<TransactionsRedirect />} />
+					<Route path="/transactions/:id" element={<TransactionsRedirect />} />
+					<Route path="*" element={<Navigate to="/" replace />} />
+				</Routes>
+			</main>
+			<button
+				className="quick-add-fab"
+				aria-label="记一笔"
+				onClick={() => navigate("/entries?new=1")}
+			>
+				+
+			</button>
 			</div>
 		</div>
 	);
