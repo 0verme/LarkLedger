@@ -138,6 +138,74 @@ First-party Web 只是另一个客户端（走 `actor_kind="user"` 的 Human Ses
 
 普通用户只能读取和操作自己的账目、预算、报告、导出与 pending。环境变量中列出的管理员额外获得经过脱敏的 Event / Outbox、Dead / Replay、readiness 与只读安全配置；完整 payload、回复正文、blob、密钥和数据库连接信息不进入 Web 响应。
 
+## 统一 AI 入口（P39 Unified AI Entry）
+
+P39 把自然语言 / AI 记账从「飞书机器人的能力」抽离为 **LarkLedger 平台本身的
+能力**：飞书、First-party Web（以及未来微信 / 硬件）都通过同一个
+Channel-Neutral 的 AI Entry 进入同一套业务链路。
+
+```text
+              ┌─ Feishu Adapter ─────┐
+              │                       │
+User Input ───┼─ Web Adapter ─────────┼→ UnifiedAIEntryService
+              │                       │            ↓
+              └─ Future Adapter ──────┘     Intent Parser（AIInterpreter）
+                                                     ↓
+                                            ParsedCommand（Canonical Intent）
+                                                     ↓
+                                      RiskRouter（只决策，不写入）
+                                                     ↓
+                              ClientApplicationService → Domain / Ledger
+```
+
+核心实现 `UnifiedAIEntryService`（`services/ai_entry.py`）是 Application 层的
+channel-neutral 编排：
+
+- **Canonical Input**：`AIEntryRequest`（context / text / attachments /
+  request_id / source_message_ref）。`source_channel` 只在
+  `RequestContext` 内作为可观测元数据，**不改变业务语义、权限或 Domain 行为**；
+  Feishu 事件对象、message_id、卡片、HTTP 对象一律不进入 Application/Core，
+  只替换为中性引用（如 `source_message_ref`）。
+- **Canonical Attachment**：`AttachmentInput(kind, mime_type, content,
+  storage_ref, filename)`。AI Core 不调用任何渠道 API 下载附件；下载 /
+  规范化是 Adapter 的职责。
+- **Canonical Intent**：沿用既有 `ParsedCommand`（create / transfer /
+  update_last / delete / restore / query / budget / recurring / goal…），无
+  Feishu 专属字段。
+- **Canonical Result**：`AIEntryResult`，`status ∈ {executed,
+  confirmation_required, clarification_required, query_result, rejected,
+  error}`。展示端（Feishu 卡片 / Web Dialog）只按 status 与结构化字段渲染，
+  绝不根据自然语言猜测状态。
+- **风险确认**：`RiskRouter` 只做决策；`PendingCommandStore` 冻结
+  `ParsedCommand` + actor/ledger，确认在行锁内 exactly-once。Feishu 与 Web
+  对同一高风险输入（如转账、批量）都返回 `confirmation_required`，不会一边
+  确认一边直写。
+- **幂等**：Web 每次提交生成 `Idempotency-Key`，复用
+  `ClientIdempotencyService`（`web.ai.entry` operation），解析与执行在同一
+  事务内；同 key 重试直接重放第一次的 Canonical Response（`replayed=true`），
+  **不重新调用模型、不产生第二笔**。
+- **澄清**：`clarification_required` 返回问题与缺失字段；Web 在输入框内
+  补充后重新发送（无状态、无对话数据库）。
+- **AI 不触库**：AI 只输出结构化 Intent；数据库访问全部由
+  `ClientApplicationService` / Domain 完成，`AIEntryResult` 永不携带 SQL。
+- **错误映射**：provider 超时 / 解析失败 / 业务冲突 / 无权限统一映射为安全
+  中文 + `request_id`，不向用户暴露 Pydantic / SQLAlchemy / Provider 原始异常。
+
+架构守护（`tests/architecture/test_unified_ai_entry_guards.py`）：AI Core
+（`services/ai.py` + `services/ai_entry.py`）禁止 import Feishu / FastAPI /
+Web / token transport；`ParsedCommand` / `AIEntryResult` / `AttachmentInput`
+不携带渠道字段；Web AI route 只经 `UnifiedAIEntryService`，不直接查询
+repository；Feishu 的 AI 写路径（parse / decide / execute / create_pending）
+全部经过统一入口；`source_channel` 永不参与业务分支。同一 Canonical Intent
+在 `source_channel=web / feishu` 下结果一致（`tests/test_ai_entry.py`
+C01–C08 + `tests/integration/test_ai_entry_postgres.py`）。
+
+Web 入口：`POST /api/web/v1/ai/entries`（CSRF + Idempotency-Key，actor /
+ledger / timezone 全部来自服务端 Session）。首页「直接说一句」面板保留结构化
+「记一笔」（QuickEntryDialog）；输入上限 500 字符，Enter 发送、Shift+Enter
+换行，executed / confirmation_required / clarification_required / error 分别
+渲染成功、确认 Dialog、补充提示和错误（含 request_id）。
+
 ## 消息处理链路
 
 ```text

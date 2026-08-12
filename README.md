@@ -91,6 +91,7 @@ API Token ───────┘
 - Session 登录后的账本访问复用与飞书、API Token 完全相同的 `LedgerAuthorizationService`（账本隔离、私有账户隔离一致）
 - **账本切换**（P38）：侧边栏选择个人 / 家庭 / 有权限的其他账本，选择持久化在 Session 行上，刷新自动恢复；无权限账本始终 404
 - **Web 幂等**（P38）：`POST /api/web/v1/entries` 强制 `Idempotency-Key`，超时重试 / 双击 / React 重复触发都只入账一次
+- **自然语言 AI 记账**（P39）：首页「直接说一句」输入「午饭28」「工资18000」「昨天打车35」等自然语言即可记账，与飞书共用同一个 Channel-Neutral 的 `UnifiedAIEntryService`（同一 Intent Parser、同一风险确认、同一 `ClientApplicationService` 边界）；高风险操作（转账、批量、疑似重复）返回确认卡片，解析不清返回补充提示，每次提交携带 `Idempotency-Key` 保证 exactly-once，结构化「记一笔」仍然保留
 - **错误与排障**（P38）：所有 `/api/web/v1/*` 响应携带 `X-Request-ID`，前端统一显示安全中文错误信息 + 请求编号，绝不暴露 traceback / SQL / digest
 - **移动端**（P38）：375–430px 手机宽度可用，任意页面底部浮动「记一笔」按钮两次点击内完成记账
 
