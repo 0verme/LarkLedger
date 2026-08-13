@@ -1,4 +1,4 @@
-name: Release image
+name: Release
 
 on:
   push:
@@ -6,11 +6,40 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: read
+  # Minimum required:
+  #   contents  -> create GitHub Release (gh release create)
+  #   packages  -> push image to GHCR
+  # No actions/issues/pull-requests/id-token write access is granted.
+  contents: write
   packages: write
 
+concurrency:
+  # Serialize re-runs for the same tag; never cancel an in-flight image publish.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  validate:
+    name: Validate tag / version / notes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history + tags so the annotated tag object is present locally.
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Annotated tag guard
+        run: bash scripts/release/verify-annotated-tag.sh "$GITHUB_REF_NAME"
+      - name: Tag ↔ version consistency guard
+        run: python scripts/release/verify-version.py "$GITHUB_REF_NAME"
+      - name: CHANGELOG / release notes guard
+        run: python scripts/release/extract-release-notes.py "$GITHUB_REF_NAME" --check-only
+
   image:
+    name: Build and push GHCR image
+    needs: validate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -38,3 +67,69 @@ jobs:
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    name: Create / verify GitHub Release
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Generate release notes
+        run: |
+          python scripts/release/extract-release-notes.py "$GITHUB_REF_NAME" \
+            --output "$RUNNER_TEMP/release-notes.md" \
+            --title-output "$RUNNER_TEMP/release-title.txt"
+      - name: Create or verify GitHub Release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES_FILE: ${{ runner.temp }}/release-notes.md
+          TITLE_FILE: ${{ runner.temp }}/release-title.txt
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          TITLE="$(cat "$TITLE_FILE")"
+          if gh release view "$TAG" --json tagName,draft,isPrerelease >/dev/null 2>&1; then
+            echo "Release '${TAG}' already exists; verifying it is a formal release"
+            VIEWED_TAG="$(gh release view "$TAG" --json tagName --jq '.tagName')"
+            if [ "$VIEWED_TAG" != "$TAG" ]; then
+              echo "::error::existing release tag_name mismatch (viewed '${VIEWED_TAG}')" >&2
+              exit 1
+            fi
+            DRAFT="$(gh release view "$TAG" --json draft --jq '.draft')"
+            PRE="$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease')"
+            if [ "$DRAFT" = "true" ] || [ "$PRE" = "true" ]; then
+              echo "::error::existing release '${TAG}' is draft=${DRAFT} prerelease=${PRE}; refusing to auto-modify a non-formal release" >&2
+              exit 1
+            fi
+            echo "status=verified-existing" >> "$GITHUB_OUTPUT"
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "$TITLE" \
+              --notes-file "$NOTES_FILE"
+            echo "status=created" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish release summary
+        if: always() && steps.release.conclusion != 'skipped'
+        env:
+          RELEASE_STATUS: ${{ steps.release.outputs.status }}
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          VERSION="${TAG#v}"
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Release summary
+
+          | Item | Value |
+          | --- | --- |
+          | Tag | \`${TAG}\` |
+          | Version | \`${VERSION}\` |
+          | GHCR image | \`ghcr.io/0verme/larkledger:${VERSION}\` |
+          | GitHub Release | [${TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}) |
+          | Status | ${RELEASE_STATUS:-unknown} |
+          EOF
