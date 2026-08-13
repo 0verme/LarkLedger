@@ -2,6 +2,27 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [0.11.0] - 2026-08-14
+
+### Production Observability / Ops Hardening
+
+- **Runtime build identity**：`GET /version` 返回 `version` / `git_sha` / `build_time`，由 release pipeline 在镜像构建时通过 `LARK_LEDGER_VERSION` / `GIT_SHA` / `BUILD_TIME` 注入，运行时不调用 git；不存在镜像内 `.git` 目录时也能回答「当前跑的是哪个 build」。
+- **硬化 readiness**：`/healthz` 保持纯进程存活探测（不访问 DB / 外部网络，Docker HEALTHCHECK 继续基于它）；`/readyz` 检查 application / database / migration / event_worker / reply_worker / cleanup_worker / recurring_worker / receiver，语义为 `alive → ready → degraded (200 + degraded=true) → not_ready (503)`。DB 不可达与 migration revision mismatch 才返回 503；backlog / dead-letter / worker stale 只降级为 degraded，不引发容器重启循环；readiness 从不自动执行 migration。
+- **Worker heartbeat**：5 类 worker / receiver 进程内心跳 `last_sweep_at` / `last_success_at` / `last_error_at` / `sweeps` / `processed`，stale 阈值由 `LARK_LEDGER_READINESS_STALE_AFTER_SECONDS` 控制（默认 30s）。
+- **Backlog 聚合**：`GET /ops/status` 返回 build identity + worker heartbeat + events / outbox / pending_commands 的 pending / retry / dead 聚合计数，响应经过脱敏（无 payload、无 owner/user/ledger id、无 hostname、无凭证），探测失败时降级为 `unavailable` 而非 500。
+- **Request correlation**：所有请求（含 healthz/readyz/webhook/API）支持 `X-Request-ID`——合法值服务端复用并回显，非法值由服务端生成新 id；日志经 contextvar 注入 `request_id=`，并做敏感信息脱敏。
+- **Graceful shutdown**：worker / receiver / DB engine 按序停止，容器可干净退出。
+- **运维 SOP**：新增 [docs/operations.md](docs/operations.md)、[docs/backup-restore.md](docs/backup-restore.md)（pg_dump custom format + sha256 + retention + restore drill）与 [docs/release-sop.md](docs/release-sop.md)（含 code-only / schema-changing 两种 rollback 路径，明确 image rollback ≠ DB rollback）。
+
+### Migration
+
+- 本版本不新增 migration；Alembic head 保持不变（`20260814_0027`）。升级前仍需按 backup-restore SOP 备份 PostgreSQL。
+
+### Changed
+
+- `.github/workflows/release.yml`：镜像构建注入的 `LARK_LEDGER_VERSION` 使用去 `v` 前缀的裸 semver（tag `v0.11.0` → `0.11.0`），`LARK_LEDGER_BUILD_TIME` 在构建步骤内生成（tag push 事件下 `head_commit` 为 null，不能从事件 payload 读取）。
+- 文档：README / docs（architecture / environment / operations / backup-restore / release-sop）。
+
 ## [0.10.0] - 2026-08-14
 
 ### First-party Client / Unified AI Entry
