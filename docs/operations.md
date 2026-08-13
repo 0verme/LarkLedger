@@ -67,7 +67,10 @@ cleanup_worker / recurring_worker / receiver
   **readiness 从不自动执行 migration**。
 - worker stale：worker 任务存活但循环心跳（`last_sweep_at`）超过
   `LARK_LEDGER_READINESS_STALE_AFTER_SECONDS`（默认 30s）未推进 → `warning`
-  + `reason: "worker_stale"`（degraded，不是 503）。
+  + `reason: "worker_stale"`（degraded，不是 503）。事件/reply worker
+  高频轮询（1s），直接使用该阈值；低频 worker（recurring 300s、
+  cleanup 3600s）的 stale 窗口按自身 sweep 周期缩放（至少两倍周期），
+  避免健康低频 worker 被永久误报。
 
 ## `/version`（运行身份）
 

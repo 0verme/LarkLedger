@@ -222,3 +222,74 @@ async def test_readyz_keeps_fresh_worker_ok() -> None:
 
     assert body["checks"]["event_worker"]["status"] == "ok"
     assert body["degraded"] is False
+
+
+class LowFrequencyWorker(StaleWorker):
+    """A healthy low-frequency worker whose sweep period exceeds the generic
+    stale window (recurring polls every 300s, cleanup every 3600s)."""
+
+    def health_snapshot(self) -> dict[str, Any]:
+        snapshot = super().health_snapshot()
+        # Swept two minutes ago: stale for a 1s event worker, perfectly
+        # healthy for a 300s recurring or 3600s cleanup worker.
+        snapshot["last_sweep_at"] = (
+            datetime.now(UTC) - timedelta(minutes=2)
+        ).isoformat()
+        return snapshot
+
+
+async def _low_frequency_app(worker: Any, enabled: bool) -> FastAPI:
+    from sqlalchemy import text as _text
+    from sqlalchemy.ext.asyncio import (
+        async_sessionmaker,
+        create_async_engine,
+    )
+
+    engine = create_async_engine("sqlite+aiosqlite://")
+    async with engine.begin() as connection:
+        await connection.execute(
+            _text("CREATE TABLE alembic_version (version_num TEXT)")
+        )
+        await connection.execute(
+            _text("INSERT INTO alembic_version VALUES ('20260814_0027')")
+        )
+
+    app = FastAPI()
+    app.include_router(router)
+    settings = Settings(
+        _env_file=None,
+        event_mode="webhook",
+        worker_enabled=False,
+        reply_worker_enabled=False,
+        cleanup_enabled=enabled,
+        recurring_enabled=enabled,
+        readiness_stale_after_seconds=30.0,
+    )
+    app.state.settings = settings
+    app.state.shutting_down = False
+    app.state.cleanup_worker = worker
+    app.state.recurring_worker = worker
+    app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    app.state.readiness = ReadinessService(
+        settings,
+        app.state.session_factory,
+        expected_revision="20260814_0027",
+    )
+    return app
+
+
+async def test_readyz_does_not_misreport_low_frequency_workers_as_stale() -> None:
+    # Regression guard: recurring (300s) and cleanup (3600s) workers sweep far
+    # less often than the generic stale window (default 30s). Readiness must
+    # scale the stale window to the worker's own sweep period instead of
+    # permanently degrading a healthy low-frequency loop.
+    app = await _low_frequency_app(LowFrequencyWorker(), enabled=True)
+
+    response = await _get(app, "/readyz")
+    body = response.json()
+
+    assert body["status"] == "ready"
+    assert body["degraded"] is False
+    for component in ("cleanup_worker", "recurring_worker"):
+        assert body["checks"][component]["status"] == "ok", component
+        assert body["checks"][component].get("reason") is None, component

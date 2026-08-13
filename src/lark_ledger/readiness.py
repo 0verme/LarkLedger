@@ -91,7 +91,10 @@ class ReadinessService:
             attribute="recurring_worker",
             enabled=self._settings.recurring_enabled,
             now=now,
-            stale_after_seconds=self._settings.readiness_stale_after_seconds,
+            stale_after_seconds=max(
+                self._settings.readiness_stale_after_seconds,
+                self._settings.recurring_poll_interval_seconds * 2,
+            ),
         )
         receiver = self._receiver_check(state)
         checks = {
@@ -299,7 +302,14 @@ class ReadinessService:
             attribute="cleanup_worker",
             enabled=self._settings.cleanup_enabled,
             now=now,
-            stale_after_seconds=self._settings.readiness_stale_after_seconds,
+            # The cleanup loop sleeps cleanup_interval_seconds (default 1h)
+            # between sweeps, so the generic stale window would permanently
+            # misreport a healthy low-frequency worker as stale. Use at least
+            # two full sweep periods.
+            stale_after_seconds=max(
+                self._settings.readiness_stale_after_seconds,
+                self._settings.cleanup_interval_seconds * 2,
+            ),
         )
         if result["status"] == "error":
             result["status"] = "warning"
