@@ -498,6 +498,7 @@ async def test_i03_mixed_currency_never_summed(session: AsyncSession) -> None:
     await session.commit()
     service = RecurringService(session, currency="CNY", timezone=TZ)
     today = datetime(2026, 8, 8, 4, tzinfo=UTC).date()
+    fixed_now = datetime(2026, 8, 8, 4, tzinfo=UTC)
     await service.create(
         context,
         transaction_type=Direction.EXPENSE,
@@ -509,6 +510,7 @@ async def test_i03_mixed_currency_never_summed(session: AsyncSession) -> None:
         interval=1,
         next_occurrence=today + timedelta(days=5),
         account_id=cny.id,
+        now=fixed_now,
     )
     await service.create(
         context,
@@ -521,6 +523,7 @@ async def test_i03_mixed_currency_never_summed(session: AsyncSession) -> None:
         interval=1,
         next_occurrence=today + timedelta(days=6),
         account_id=usd.id,
+        now=fixed_now,
     )
     await session.commit()
     insights = await _insights(session, context, now=datetime(2026, 8, 8, tzinfo=UTC))
