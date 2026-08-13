@@ -83,6 +83,7 @@ ADAPTER_MODULES = {
     "lark_ledger.services.client_auth",
     "lark_ledger.services.client_idempotency",
     "lark_ledger.readiness",
+    "lark_ledger.system_status",
 }
 
 #: The single transport-neutral application boundary shared by every adapter.

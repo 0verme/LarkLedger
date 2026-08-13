@@ -25,6 +25,19 @@ class Settings(BaseSettings):
     currency: str = "CNY"
     event_mode: EventMode = EventMode.WEBHOOK
 
+    # Runtime build identity (P42). Injected at image build time by the release
+    # pipeline (Docker ARG -> ENV); empty values fall back to the in-repo
+    # package version and stable sentinels (see ``lark_ledger.buildinfo``).
+    version: str = ""
+    git_sha: str = ""
+    build_time: str = ""
+
+    # Readiness (P42): a running worker whose loop heartbeat is older than this
+    # window is reported ``stale`` (degraded, never a 503 by itself). Bounded to
+    # sane operator values so a misconfiguration cannot mask a dead worker
+    # forever or flap readiness on a slow poll.
+    readiness_stale_after_seconds: float = Field(default=30.0, ge=1, le=86400)
+
     # Event worker (P05b): background PostgreSQL-driven worker with lease, retry,
     # and dead-letter handling. When enabled, entry points only claim events and
     # the worker processes them; when disabled, the legacy synchronous path runs.
