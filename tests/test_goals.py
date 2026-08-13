@@ -24,6 +24,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -205,7 +206,7 @@ async def test_create_list_get_goal(session: AsyncSession) -> None:
     assert progress.progress_ratio == Decimal("0.5")
     assert progress.progress_percent == Decimal("50.00")
     assert progress.is_target_reached is False
-    local_today = datetime.now(UTC).astimezone().date()
+    local_today = datetime.now(ZoneInfo(TZ)).date()
     assert progress.days_remaining == (date(2027, 3, 31) - local_today).days
 
 
@@ -439,7 +440,7 @@ async def test_target_date_boundaries(session: AsyncSession) -> None:
     p = await _progress(session, context, past.id)  # type: ignore[union-attr]
     assert p.days_remaining is not None and p.days_remaining < 0
     # target_date today (local timezone)
-    local_today = datetime.now(UTC).astimezone().date()
+    local_today = datetime.now(ZoneInfo(TZ)).date()
     today_goal = await _goal(session, context, name="今天", target="5000",
                              account_ids=[account.id], target_date=local_today)
     tp = await _progress(session, context, today_goal.id)  # type: ignore[union-attr]
