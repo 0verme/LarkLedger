@@ -58,6 +58,16 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
+      - name: Resolve build identity
+        id: identity
+        # P42 build identity: bake version / commit / build time into the image
+        # so the running instance can answer "which build am I?".
+        # - version is the bare semver (strip the v prefix from the tag)
+        # - github.event.head_commit is null on tag pushes, so derive the build
+        #   timestamp here instead of reading it from the event payload
+        run: |
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v7
         with:
           context: .
@@ -65,12 +75,10 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
-          # P42 build identity: bake the tag / commit / build time into the
-          # image so the running instance can answer "which build am I?".
           build-args: |
-            LARK_LEDGER_VERSION=${{ github.ref_name }}
+            LARK_LEDGER_VERSION=${{ steps.identity.outputs.version }}
             LARK_LEDGER_GIT_SHA=${{ github.sha }}
-            LARK_LEDGER_BUILD_TIME=${{ github.event.head_commit.timestamp }}
+            LARK_LEDGER_BUILD_TIME=${{ steps.identity.outputs.build_time }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

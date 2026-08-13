@@ -85,6 +85,26 @@ class TestReleaseWorkflowConcurrency:
         assert "cancel-in-progress: false" in RELEASE_YML
 
 
+class TestReleaseWorkflowBuildIdentity:
+    def test_version_arg_is_bare_semver_not_tag_name(self) -> None:
+        # github.ref_name keeps the v prefix (v0.11.0) but the runtime build
+        # identity contract expects a bare semver (0.11.0). Regression guard:
+        # the image job must resolve a stripped version and must not pass the
+        # raw ref_name through to the Docker build arg.
+        assert "LARK_LEDGER_VERSION=${{ steps.identity.outputs.version }}" in RELEASE_YML
+        assert "LARK_LEDGER_VERSION=${{ github.ref_name }}" not in RELEASE_YML
+        assert "${GITHUB_REF_NAME#v}" in RELEASE_YML
+
+    def test_build_time_does_not_depend_on_nullable_event_field(self) -> None:
+        # github.event.head_commit is null on tag pushes, so the build time
+        # must be derived in a step instead of read from the event payload.
+        assert "LARK_LEDGER_BUILD_TIME=${{ steps.identity.outputs.build_time }}" in RELEASE_YML
+        assert "github.event.head_commit.timestamp" not in RELEASE_YML
+
+    def test_git_sha_baked_from_github_sha(self) -> None:
+        assert "LARK_LEDGER_GIT_SHA=${{ github.sha }}" in RELEASE_YML
+
+
 class TestCIWorkflow:
     def test_actionlint_job_present_and_pinned(self) -> None:
         assert "workflow:" in CI_YML
