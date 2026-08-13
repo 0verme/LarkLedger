@@ -243,6 +243,10 @@ services:
 | 数据库迁移 | 源码 Compose：`alembic upgrade head` 再 uvicorn | — | 自动 |
 | healthz | `GET /healthz` | — | 验收 |
 | readyz | `GET /readyz` | — | 数据库、migration 与后台任务验收 |
+| version | `GET /version` | — | 构建身份（version / git_sha / build_time） |
+| ops/status | `GET /ops/status` | — | backlog 计数 + worker 心跳（P42） |
+| Worker 心跳冻结阈值 `READINESS_STALE_AFTER_SECONDS` | `30.0` | `30.0` | 1～86400；running 但心跳过旧 → degraded 非 503 |
+| 构建身份 `VERSION` / `GIT_SHA` / `BUILD_TIME` | 空 → 回退包版本 / `unknown` | 注释（由镜像构建注入） | 生产勿手写，避免漂移 |
 
 Compose 默认读取 `.env`；可用 `LARK_LEDGER_ENV_FILE` 指定其他文件。生产**不得**直接把 `.env.example` 当运行配置。
 
@@ -451,6 +455,9 @@ PostgreSQL 不可用也仍返回 200。`/readyz` 是 readiness，会执行 `SELE
 revision 与代码唯一 Alembic head，并读取已启用 Event / Reply Worker 和 WebSocket receiver
 的任务状态。Webhook 模式不要求 receiver，显式关闭的 Worker 是合法兼容模式。未就绪返回
 HTTP 503；探针不会自动迁移数据库，也不会访问飞书、AI、DNS 或其他外部网络。
+
+P42 起还提供 `/version`（构建身份）与 `/ops/status`（backlog 计数 + worker 心跳），
+每个响应都带 `X-Request-ID`；完整契约见 [operations.md](operations.md)。
 
 Cleanup Worker 默认每小时执行终态小批量清理。成功 Event / sent Outbox 默认保留 30 天，
 dead Event / dead Outbox 默认保留 90 天；非终态、有有效 lease、仍有关联 Outbox 的 Event

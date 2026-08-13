@@ -47,6 +47,51 @@
 - **执行顺序**：`validate → image → release`。镜像构建/推送失败时不会创建 GitHub Release，避免「Release 已发布但镜像缺失」的半发布状态。
 - **并发**：同一 tag 的重复触发会串行化（`concurrency`），不会取消正在进行的镜像发布。
 
+## Rollback（回滚）
+
+### A. Code-only rollback（数据库 schema 未发生不兼容变化）
+
+适用：新版本代码有问题，但数据库 schema 没有不兼容变更（通常是 bugfix 或
+功能回退，migration 仍是同一 head）。
+
+```bash
+# 1. 确认当前库 revision 与目标旧镜像兼容（两版本 head 相同即 code-only）
+LARK_LEDGER_DATABASE_URL='postgresql+asyncpg://...' alembic current
+
+# 2. 切换到 previous GHCR image
+docker compose -f compose.image.yaml down
+LARK_LEDGER_IMAGE_TAG=<上一版本，如 0.10.0> docker compose -f compose.image.yaml up -d
+
+# 3. 健康检查与 smoke test
+curl -f http://127.0.0.1:8000/healthz
+curl -f http://127.0.0.1:8000/readyz      # 必须 200，且 migration current
+# smoke test：一笔账可写可查、/ops/status 正常
+```
+
+### B. Schema-changing rollback（数据库 schema 已变化）
+
+> **镜像 rollback 和数据库 rollback 是两个不同操作。** `docker pull old image`
+> 不能安全回滚数据库——旧镜像通常无法理解新 schema。
+
+1. **判断 migration backward compatibility**：
+   - 先确认当前 head 与回滚目标的 head。若回滚目标的代码版本**不认识**
+     当前 schema 的新列/新表（例如旧的 `SELECT` 引用不存在的列），必须先回滚数据库。
+   - 查看 `alembic/versions/` 中新增迁移是否提供了 `downgrade()`。
+2. **Backup restore（推荐路径）**：按 [backup-restore.md](backup-restore.md) 的
+   Restore 流程恢复到发布前的备份，再启动旧镜像。恢复前必须「备份现状」。
+3. **Alembic downgrade 的适用边界**：
+   - `alembic downgrade <旧head>` 只适用于**提供完整可逆 `downgrade()`** 的迁移
+     （例如新增可空列、新索引、可删除的表）；
+   - **destructive migration（删表 / 删列 / 改约束）没有安全的自动 downgrade**，
+     此时唯一的恢复路径是 backup restore；
+   - 升级后用户已写入的新数据在 downgrade 中**可能丢失**——回滚前先备份，
+     并明确告知用户影响范围。
+4. **验收**：恢复/降级后执行 启动 → `/healthz` → `/readyz`（migration current）
+   → 关键业务 smoke test → 观察 `/ops/status` 无异常积压。
+
+> 本仓库不宣传「自动无损 rollback」。任何 schema 变更都应在发布前做
+> restore drill（见 backup-restore.md）验证可回退路径。
+
 ## Emergency Fallback（仅在自动化故障时）
 
 正常情况下不需要人工干预。若 workflow 因平台故障无法创建 Release，可按以下命令手工兜底：

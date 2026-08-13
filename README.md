@@ -209,8 +209,21 @@ curl -f http://127.0.0.1:8000/readyz
 `connecting` / `reconnecting` 表示尚未就绪或正在重连。
 
 `/healthz` 只表示 HTTP 进程存活，不访问数据库。`/readyz` 还会轻量检查
-PostgreSQL、当前 Alembic revision、已启用的 Event / Reply Worker，以及 WebSocket
-模式下的接收器；不具备承接条件时返回 HTTP 503，且不会探测飞书或 AI。
+PostgreSQL、当前 Alembic revision、已启用的 Event / Reply / Cleanup / Recurring
+Worker，以及 WebSocket 模式下的接收器；不具备承接条件时返回 HTTP 503，且不会
+探测飞书或 AI。`/readyz` 的响应带有 `degraded` 字段：业务积压（如 dead-letter）
+属于 degraded（200），不会让容器进入重启循环。
+
+生产可观测性（P42）还提供：
+
+```bash
+curl -s http://127.0.0.1:8000/version     # 当前版本 / git_sha / build_time
+curl -s http://127.0.0.1:8000/ops/status  # backlog 计数 + worker 心跳 + build 身份
+```
+
+每个请求（含以上三个端点）都会在响应头返回 `X-Request-ID`，并在日志中携带
+`request_id=` 用于关联定位。详见 [运维与可观测性](docs/operations.md)、
+[备份/恢复 SOP](docs/backup-restore.md)。
 
 ### 6. 第一笔账验收
 
@@ -345,9 +358,11 @@ curl http://127.0.0.1:8000/healthz
 - [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
 - [架构说明](docs/architecture.md)
 - [Client API（`/api/v1`）](docs/client-api.md)
+- [运维与可观测性](docs/operations.md)：healthz / readyz / version / 日志关联 / 故障定位
+- [备份 / 恢复 SOP](docs/backup-restore.md)：pg_dump、校验、retention、restore drill
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
-- [发布 SOP](docs/release-sop.md)
+- [发布 SOP（含回滚）](docs/release-sop.md)
 - [变更日志](CHANGELOG.md) · [v0.10.0 发布说明](.github/release-notes/v0.10.0.md) · [v0.9.0 发布说明](.github/release-notes/v0.9.0.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)

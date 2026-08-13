@@ -313,6 +313,14 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 - `GET /readyz` 对 PostgreSQL 执行轻量 `SELECT 1`，从 Alembic 配置解析代码唯一 head 并与数据库 `alembic_version` 比对，再读取应用 shutdown、Event Worker、Reply Worker 和 WebSocket receiver 的只读任务快照。Webhook 模式不要求 receiver；显式关闭 Worker 是合法兼容模式。
 - Worker / receiver task 的完成回调会主动取回异常，只保留异常类型作为安全错误码，避免 `Task exception was never retrieved`。异常退出、未启动、迁移不一致或 shutdown 都返回 HTTP 503；探针不执行 migration、不扫描业务表、不返回数据库 URL、凭据、用户标识、payload、回复内容或完整 nonce。
 
+### 可观测性（v0.11.0 / P42）
+
+- `GET /version` 返回构建身份 `version` / `git_sha` / `build_time`，由 release pipeline 以 Docker build args 注入（`LARK_LEDGER_VERSION` / `LARK_LEDGER_GIT_SHA` / `LARK_LEDGER_BUILD_TIME`），运行时绝不调用 git；version 回退包内 `__version__`，git_sha 回退 `unknown`。
+- `GET /ops/status` 返回受限聚合视图：backlog 计数（`processed_events` / `reply_outbox` / `pending_commands` 按 status `GROUP BY`，只数非终态、走索引，不把行读进 Python）+ worker 循环心跳（`last_sweep_at` / `last_success_at` / `last_error_at`，不含 owner id / 主机名）+ build 身份。observability 查询失败降级为 `unavailable`，不会产生 HTTP 500。
+- 全部 Worker 暴露进程内心跳：`last_sweep_at` 每轮推进（含空轮），`last_success_at` / `last_error_at` 记录最近结果，restart 时重置。readiness 据此把「任务存活但心跳冻结」判为 `warning`（degraded，200），避免重启循环。
+- 请求关联：所有入口（含 healthz / readyz / webhook）生成或复用合法 `X-Request-ID`，响应头回显，并以 `contextvars` 注入日志（`request_id=` 字段），日志不记录 headers / cookies / authorization。
+- 状态语义分层：`alive`（healthz 200）→ `ready`（readyz 200）→ `degraded`（readyz 200 + `degraded:true`）→ `not ready`（readyz 503）；业务积压永远只是 degraded。计数均无 user/ledger/request 维度，保持未来 Prometheus label 基数有界。
+
 ### 终态保留与 Cleanup Worker（v0.2.1 / P06d）
 
 - 只清理 `processed_events` 的 `succeeded` / `legacy_succeeded` / `dead` 和 `reply_outbox` 的 `sent` / `dead`。`received` / `processing` / `failed` Event、`pending` / `sending` / `failed` Outbox、有效 lease，以及全部账本 / revision 永不进入清理选择集。
