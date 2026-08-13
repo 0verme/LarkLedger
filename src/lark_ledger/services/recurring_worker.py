@@ -56,7 +56,7 @@ from lark_ledger.services.pending import (
     build_pending_preview_card,
 )
 from lark_ledger.services.recurring import local_business_date, next_occurrence_after
-from lark_ledger.services.worker import safe_owner_id
+from lark_ledger.services.worker import iso_datetime, safe_owner_id
 
 logger = logging.getLogger(__name__)
 
@@ -283,12 +283,19 @@ class RecurringWorker:
         self._started = False
         self._task_done = False
         self._task_exception_code: str | None = None
+        # P42 worker observability: in-process loop heartbeat (same contract as
+        # ``EventWorker``) so readiness and /ops/status can report staleness.
+        self._last_sweep_at: datetime | None = None
+        self._last_success_at: datetime | None = None
+        self._last_error_at: datetime | None = None
+        self._sweeps = 0
+        self._processed = 0
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def health_snapshot(self) -> dict[str, bool | str | None]:
+    def health_snapshot(self) -> dict[str, bool | str | int | None]:
         """Return a redacted, read-only task state for readiness."""
         return {
             "started": self._started,
@@ -297,6 +304,11 @@ class RecurringWorker:
             "task_done": self._task_done,
             "task_exception": self._task_exception_code is not None,
             "last_error_code": self._task_exception_code,
+            "last_sweep_at": iso_datetime(self._last_sweep_at),
+            "last_success_at": iso_datetime(self._last_success_at),
+            "last_error_at": iso_datetime(self._last_error_at),
+            "sweeps": self._sweeps,
+            "processed": self._processed,
         }
 
     def start(self) -> None:
@@ -306,6 +318,13 @@ class RecurringWorker:
         self._started = True
         self._task_done = False
         self._task_exception_code = None
+        # Restart resets the heartbeat so stale timestamps from a previous run
+        # can never make the new run look wedged.
+        self._last_sweep_at = None
+        self._last_success_at = None
+        self._last_error_at = None
+        self._sweeps = 0
+        self._processed = 0
         self._task = asyncio.create_task(
             self._run_loop(), name=RECURRING_WORKER_TASK_NAME
         )
@@ -319,6 +338,7 @@ class RecurringWorker:
             task.result()
         except Exception as exc:
             self._task_exception_code = type(exc).__name__
+            self._last_error_at = self._clock()
             logger.error(
                 "recurring worker task exited unexpectedly error_code=%s owner=%s",
                 self._task_exception_code,
@@ -355,7 +375,10 @@ class RecurringWorker:
                     raise
                 except Exception:
                     # Connection-level failures must not kill the worker loop.
+                    self._last_error_at = self._clock()
                     logger.exception("recurring worker sweep failed; will retry")
+                self._last_sweep_at = self._clock()
+                self._sweeps += 1
                 if self._stop.is_set():
                     break
                 await self._sleeper(self._poll_interval_seconds)
@@ -374,4 +397,7 @@ class RecurringWorker:
         )
         if rows and self._deliverer is not None:
             await self._deliverer(rows)
+        if generated:
+            self._last_success_at = current
+            self._processed += generated
         return len(generated)

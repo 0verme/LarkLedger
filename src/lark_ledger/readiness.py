@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -59,24 +60,38 @@ class ReadinessService:
         self._expected_revision_error = expected_revision_error
 
     async def check(self, state: State) -> dict[str, Any]:
-        """Return independent component checks and the aggregate state."""
+        """Return independent component checks and the aggregate state.
+
+        Status semantics (P42): ``ok`` = fully serving; ``warning`` = degraded
+        but serving (readiness stays 200); ``error`` = not ready (503);
+        ``disabled`` = component intentionally off. ``degraded`` is True when
+        any component reports warning, so operators can alert on it without
+        restarting a healthy application.
+        """
+        now = datetime.now(UTC)
         database, migration = await self._check_database_and_migration()
         application = self._application_check(state)
         event_worker = self._worker_check(
             state,
             attribute="event_worker",
             enabled=self._settings.worker_enabled,
+            now=now,
+            stale_after_seconds=self._settings.readiness_stale_after_seconds,
         )
         reply_worker = self._worker_check(
             state,
             attribute="reply_worker",
             enabled=self._settings.reply_worker_enabled,
+            now=now,
+            stale_after_seconds=self._settings.readiness_stale_after_seconds,
         )
-        cleanup_worker = self._cleanup_worker_check(state)
+        cleanup_worker = self._cleanup_worker_check(state, now=now)
         recurring_worker = self._worker_check(
             state,
             attribute="recurring_worker",
             enabled=self._settings.recurring_enabled,
+            now=now,
+            stale_after_seconds=self._settings.readiness_stale_after_seconds,
         )
         receiver = self._receiver_check(state)
         checks = {
@@ -93,7 +108,12 @@ class ReadinessService:
             check["status"] in {"ok", "disabled", "warning"}
             for check in checks.values()
         )
-        return {"status": "ready" if ready else "not_ready", "checks": checks}
+        degraded = any(check["status"] == "warning" for check in checks.values())
+        return {
+            "status": "ready" if ready else "not_ready",
+            "degraded": degraded,
+            "checks": checks,
+        }
 
     async def _check_database_and_migration(self) -> tuple[Check, Check]:
         database: Check = {"status": "error", "reason": "database_unavailable"}
@@ -152,7 +172,14 @@ class ReadinessService:
         return {"status": "ok"}
 
     @staticmethod
-    def _worker_check(state: State, *, attribute: str, enabled: bool) -> Check:
+    def _worker_check(
+        state: State,
+        *,
+        attribute: str,
+        enabled: bool,
+        now: datetime | None = None,
+        stale_after_seconds: float | None = None,
+    ) -> Check:
         if not enabled:
             return {
                 "status": "disabled",
@@ -195,6 +222,24 @@ class ReadinessService:
         result.update(snapshot)
         if not healthy:
             result["reason"] = "task_unhealthy"
+            return result
+        # P42 stale detection: the loop task is alive but has not advanced its
+        # heartbeat within the configured window → degraded, not 503 (a wedged
+        # loop must not trigger a restart loop). None / unparseable heartbeat
+        # keeps the worker ``ok`` for legacy tasks without the field.
+        last_sweep = snapshot.get("last_sweep_at")
+        if isinstance(last_sweep, str):
+            try:
+                sweep_time = datetime.fromisoformat(last_sweep)
+            except ValueError:
+                result["status"] = "warning"
+                result["reason"] = "worker_stale"
+                return result
+            if now is not None and sweep_time < now - timedelta(
+                seconds=stale_after_seconds or 30.0
+            ):
+                result["status"] = "warning"
+                result["reason"] = "worker_stale"
         return result
 
     def _receiver_check(self, state: State) -> Check:
@@ -248,11 +293,13 @@ class ReadinessService:
             result["reason"] = "receiver_unhealthy"
         return result
 
-    def _cleanup_worker_check(self, state: State) -> Check:
+    def _cleanup_worker_check(self, state: State, *, now: datetime | None = None) -> Check:
         result = self._worker_check(
             state,
             attribute="cleanup_worker",
             enabled=self._settings.cleanup_enabled,
+            now=now,
+            stale_after_seconds=self._settings.readiness_stale_after_seconds,
         )
         if result["status"] == "error":
             result["status"] = "warning"

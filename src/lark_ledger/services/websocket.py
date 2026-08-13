@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from importlib import import_module
 from typing import Any
 
@@ -104,6 +105,10 @@ class LongConnectionReceiver:
         self._started_once = False
         self._consumer_task_done = False
         self._consumer_task_exception_code: str | None = None
+        # P42 receiver observability: last accepted event / card action and last
+        # error let operators tell "connected but idle" from "silently dead".
+        self._last_event_at: datetime | None = None
+        self._last_error_at: datetime | None = None
 
     @property
     def status(self) -> str:
@@ -131,6 +136,12 @@ class LongConnectionReceiver:
             or self._status == "error",
             "connection_status": self._status,
             "last_error_code": self._consumer_task_exception_code,
+            "last_event_at": self._last_event_at.isoformat()
+            if self._last_event_at is not None
+            else None,
+            "last_error_at": self._last_error_at.isoformat()
+            if self._last_error_at is not None
+            else None,
         }
 
     async def start(self) -> None:
@@ -169,6 +180,7 @@ class LongConnectionReceiver:
             task.result()
         except Exception as exc:
             self._consumer_task_exception_code = type(exc).__name__
+            self._last_error_at = datetime.now(UTC)
             self._status = "error"
             logger.error(
                 "Feishu event consumer exited unexpectedly error_code=%s",
@@ -321,6 +333,7 @@ class LongConnectionReceiver:
         assert self._queue is not None
         while True:
             event_id, event = await self._queue.get()
+            self._last_event_at = datetime.now(UTC)
             task = asyncio.create_task(
                 self._event_service.handle_safely(
                     event_id,
@@ -337,6 +350,7 @@ class LongConnectionReceiver:
         assert self._card_action_service is not None
         while True:
             event_id, action_event = await self._card_queue.get()
+            self._last_event_at = datetime.now(UTC)
             task = asyncio.create_task(
                 self._card_action_service.handle_action(event_id, action_event),
                 name=f"feishu-card-action-{event_id}",

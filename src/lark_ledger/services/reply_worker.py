@@ -57,6 +57,7 @@ from lark_ledger.services.errors import is_permanent_error
 from lark_ledger.services.outbox import ClaimedReply, ReplyOutboxStore
 from lark_ledger.services.worker import (
     failure_status,
+    iso_datetime,
     safe_owner_id,
     schedule_next_attempt,
 )
@@ -449,12 +450,19 @@ class ReplyWorker:
         self._started = False
         self._task_done = False
         self._task_exception_code: str | None = None
+        # P42 worker observability: in-process loop heartbeat (same contract as
+        # ``EventWorker``) so readiness and /ops/status can report staleness.
+        self._last_sweep_at: datetime | None = None
+        self._last_success_at: datetime | None = None
+        self._last_error_at: datetime | None = None
+        self._sweeps = 0
+        self._processed = 0
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def health_snapshot(self) -> dict[str, bool | str | None]:
+    def health_snapshot(self) -> dict[str, bool | str | int | None]:
         """Return a redacted, read-only task state for readiness."""
         return {
             "started": self._started,
@@ -463,6 +471,11 @@ class ReplyWorker:
             "task_done": self._task_done,
             "task_exception": self._task_exception_code is not None,
             "last_error_code": self._task_exception_code,
+            "last_sweep_at": iso_datetime(self._last_sweep_at),
+            "last_success_at": iso_datetime(self._last_success_at),
+            "last_error_at": iso_datetime(self._last_error_at),
+            "sweeps": self._sweeps,
+            "processed": self._processed,
         }
 
     def wakeup(self) -> None:
@@ -478,6 +491,13 @@ class ReplyWorker:
         self._started = True
         self._task_done = False
         self._task_exception_code = None
+        # Restart resets the heartbeat so stale timestamps from a previous run
+        # can never make the new run look wedged.
+        self._last_sweep_at = None
+        self._last_success_at = None
+        self._last_error_at = None
+        self._sweeps = 0
+        self._processed = 0
         self._task = asyncio.create_task(self._run_loop(), name=WORKER_TASK_NAME)
         self._task.add_done_callback(self._consume_task_result)
 
@@ -489,6 +509,7 @@ class ReplyWorker:
             task.result()
         except Exception as exc:
             self._task_exception_code = type(exc).__name__
+            self._last_error_at = self._clock()
             logger.error(
                 "reply worker task exited unexpectedly error_code=%s owner=%s",
                 self._task_exception_code,
@@ -530,7 +551,10 @@ class ReplyWorker:
                     raise
                 except Exception:
                     # Connection-level failures must not kill the worker loop.
+                    self._last_error_at = self._clock()
                     logger.exception("reply worker sweep failed; will retry")
+                self._last_sweep_at = self._clock()
+                self._sweeps += 1
                 if self._stop.is_set():
                     break
                 await self._sleep_until_next_poll()
@@ -562,4 +586,6 @@ class ReplyWorker:
             if self._stop.is_set():
                 break
             await self._deliverer.process_item(item, current)
+            self._last_success_at = current
+            self._processed += 1
         return len(claimed)

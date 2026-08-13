@@ -479,12 +479,18 @@ class CleanupWorker:
         self._started = False
         self._task_done = False
         self._task_exception_code: str | None = None
+        # P42 worker observability: in-process loop heartbeat (same contract as
+        # ``EventWorker``) so readiness and /ops/status can report staleness.
+        self._last_sweep_at: datetime | None = None
+        self._last_success_at: datetime | None = None
+        self._last_error_at: datetime | None = None
+        self._sweeps = 0
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def health_snapshot(self) -> dict[str, bool | str | None]:
+    def health_snapshot(self) -> dict[str, bool | str | int | None]:
         return {
             "started": self._started,
             "running": self.running,
@@ -492,6 +498,16 @@ class CleanupWorker:
             "task_done": self._task_done,
             "task_exception": self._task_exception_code is not None,
             "last_error_code": self._task_exception_code,
+            "last_sweep_at": self._last_sweep_at.isoformat()
+            if self._last_sweep_at is not None
+            else None,
+            "last_success_at": self._last_success_at.isoformat()
+            if self._last_success_at is not None
+            else None,
+            "last_error_at": self._last_error_at.isoformat()
+            if self._last_error_at is not None
+            else None,
+            "sweeps": self._sweeps,
         }
 
     def start(self) -> None:
@@ -501,6 +517,12 @@ class CleanupWorker:
         self._started = True
         self._task_done = False
         self._task_exception_code = None
+        # Restart resets the heartbeat so stale timestamps from a previous run
+        # can never make the new run look wedged.
+        self._last_sweep_at = None
+        self._last_success_at = None
+        self._last_error_at = None
+        self._sweeps = 0
         self._task = asyncio.create_task(self._run_loop(), name=CLEANUP_TASK_NAME)
         self._task.add_done_callback(self._consume_task_result)
 
@@ -512,6 +534,7 @@ class CleanupWorker:
             task.result()
         except Exception as exc:
             self._task_exception_code = type(exc).__name__
+            self._last_error_at = self._clock()
             logger.error(
                 "cleanup worker task exited unexpectedly error_code=%s",
                 self._task_exception_code,
@@ -544,7 +567,10 @@ class CleanupWorker:
                 except asyncio.CancelledError:
                     raise
                 except Exception:
+                    self._last_error_at = self._clock()
                     logger.warning("cleanup worker sweep failed; will retry")
+                self._last_sweep_at = self._clock()
+                self._sweeps += 1
                 if self._stop.is_set():
                     break
                 await self._sleeper(self._interval_seconds)
@@ -554,4 +580,6 @@ class CleanupWorker:
     async def run_once(self, *, now: datetime | None = None) -> CleanupResult:
         if self._stop.is_set():
             return CleanupResult()
-        return await self._service.run_once(now=now or self._clock())
+        result = await self._service.run_once(now=now or self._clock())
+        self._last_success_at = self._clock()
+        return result

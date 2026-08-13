@@ -81,6 +81,11 @@ def safe_owner_id(owner_id: str) -> str:
     return owner_id[:20]
 
 
+def iso_datetime(value: datetime | None) -> str | None:
+    """Serialize a worker heartbeat timestamp (None stays None)."""
+    return value.isoformat() if value is not None else None
+
+
 def compute_retry_delay_seconds(
     attempt_count: int, *, base_seconds: float, max_seconds: float
 ) -> float:
@@ -333,12 +338,21 @@ class EventWorker:
         self._started = False
         self._task_done = False
         self._task_exception_code: str | None = None
+        # P42 worker observability: in-process loop heartbeat. ``last_sweep_at``
+        # advances on every sweep (including empty ones) and is what readiness
+        # uses to detect a wedged loop; ``last_success_at`` / ``last_error_at``
+        # record the most recent outcome for operators. Counters stay bounded.
+        self._last_sweep_at: datetime | None = None
+        self._last_success_at: datetime | None = None
+        self._last_error_at: datetime | None = None
+        self._sweeps = 0
+        self._processed = 0
 
     @property
     def running(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def health_snapshot(self) -> dict[str, bool | str | None]:
+    def health_snapshot(self) -> dict[str, bool | str | int | None]:
         """Return a redacted, read-only task state for readiness."""
         return {
             "started": self._started,
@@ -347,6 +361,11 @@ class EventWorker:
             "task_done": self._task_done,
             "task_exception": self._task_exception_code is not None,
             "last_error_code": self._task_exception_code,
+            "last_sweep_at": iso_datetime(self._last_sweep_at),
+            "last_success_at": iso_datetime(self._last_success_at),
+            "last_error_at": iso_datetime(self._last_error_at),
+            "sweeps": self._sweeps,
+            "processed": self._processed,
         }
 
     def start(self) -> None:
@@ -356,6 +375,13 @@ class EventWorker:
         self._started = True
         self._task_done = False
         self._task_exception_code = None
+        # Restart resets the heartbeat so stale timestamps from a previous run
+        # can never make the new run look wedged.
+        self._last_sweep_at = None
+        self._last_success_at = None
+        self._last_error_at = None
+        self._sweeps = 0
+        self._processed = 0
         self._task = asyncio.create_task(self._run_loop(), name="lark-ledger-event-worker")
         self._task.add_done_callback(self._consume_task_result)
 
@@ -367,6 +393,7 @@ class EventWorker:
             task.result()
         except Exception as exc:
             self._task_exception_code = type(exc).__name__
+            self._last_error_at = self._clock()
             logger.error(
                 "event worker task exited unexpectedly error_code=%s owner=%s",
                 self._task_exception_code,
@@ -408,7 +435,10 @@ class EventWorker:
                     raise
                 except Exception:
                     # Connection-level failures must not kill the worker loop.
+                    self._last_error_at = self._clock()
                     logger.exception("event worker sweep failed; will retry")
+                self._last_sweep_at = self._clock()
+                self._sweeps += 1
                 if self._stop.is_set():
                     break
                 await self._sleeper(self._poll_interval_seconds)
@@ -444,6 +474,8 @@ class EventWorker:
             return
         recorded = await self._store.complete(event_id, self._owner_id, now)
         if recorded:
+            self._last_success_at = now
+            self._processed += 1
             logger.info("event succeeded event_id=%s attempt=%d", event_id, attempt)
         else:
             logger.warning(
@@ -467,6 +499,7 @@ class EventWorker:
                 jitter=self._jitter,
             )
         error_code = type(exc).__name__
+        self._last_error_at = now
         recorded = await self._store.record_failure(
             event_id,
             self._owner_id,
