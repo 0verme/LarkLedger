@@ -66,7 +66,7 @@ class TestReleaseWorkflowReleaseJob:
     def test_existing_release_verification(self) -> None:
         release = _job_block(RELEASE_YML, "release")
         assert ".tagName" in release
-        assert ".draft" in release
+        assert ".isDraft" in release
         assert ".isPrerelease" in release
 
     def test_no_shell_trace_or_secret_leak(self) -> None:
