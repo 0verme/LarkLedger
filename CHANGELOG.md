@@ -20,7 +20,7 @@ All notable changes to LarkLedger are documented in this file. The project follo
 
 ### Changed
 
-- `.github/workflows/release.yml`：镜像构建注入的 `LARK_LEDGER_VERSION` 使用去 `v` 前缀的裸 semver（tag `v0.11.0` → `0.11.0`），`LARK_LEDGER_BUILD_TIME` 在构建步骤内生成（tag push 事件下 `head_commit` 为 null，不能从事件 payload 读取）。
+- `.github/workflows/release.yml`：镜像构建注入的 `LARK_LEDGER_VERSION` 使用去 `v` 前缀的裸 semver（tag `v0.11.0` → `0.11.0`），`LARK_LEDGER_BUILD_TIME` 在构建步骤内生成（tag push 事件下 `head_commit` 为 null，不能从事件 payload 读取）；Release 幂等校验使用 gh 合法 JSON 字段 `isDraft`（此前 `draft` 非法导致重跑时误判 Release 不存在）。
 - 文档：README / docs（architecture / environment / operations / backup-restore / release-sop）。
 
 ## [0.10.0] - 2026-08-14

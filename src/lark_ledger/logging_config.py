@@ -44,11 +44,32 @@ _GENERATED_REQUEST_ID_LENGTH = 16
 
 
 class RequestIdFilter(logging.Filter):
-    """Attach the in-flight ``request_id`` to every log record."""
+    """Attach the in-flight ``request_id`` to every log record.
+
+    Only reliable when installed on the logger that actually emits the
+    record (or on a handler): Python logging runs logger filters in
+    ``Logger.handle``, so a filter on the root logger is bypassed by
+    records propagated up from child loggers. ``RequestIdFormatter`` is
+    the robust path used by ``setup_logging``.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
         record.request_id = request_id_var.get() or "-"
         return True
+
+
+class RequestIdFormatter(logging.Formatter):
+    """Formatter that injects ``request_id`` before rendering.
+
+    Runs for every record the handler receives, regardless of which logger
+    emitted it (child loggers propagate straight to the handler's format
+    call without passing through the root logger's ``handle``), so the
+    ``request_id=`` field in ``_LOG_FORMAT`` is always populated.
+    """
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.request_id = request_id_var.get() or "-"
+        return super().format(record)
 
 
 def normalize_request_id(value: str | None) -> str | None:
@@ -108,15 +129,28 @@ def redact_sensitive(text: str) -> str:
 
 
 def setup_logging() -> None:
-    """Idempotently install the console handler, level, and request-id filter."""
+    """Idempotently install the console handler, level, and request-id format.
+
+    ``RequestIdFormatter`` (not a root-level filter) is used because Python
+    only applies logger filters in ``Logger.handle`` — child loggers such as
+    ``lark_ledger.services.*`` propagate to the root handler's formatter
+    without ever visiting the root logger's filter, which would crash the
+    ``%(request_id)s`` format with ``KeyError``.
+    """
     root = logging.getLogger()
     has_handler = any(
         isinstance(handler, logging.StreamHandler) for handler in root.handlers
     )
     if not has_handler:
         handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+        handler.setFormatter(RequestIdFormatter(_LOG_FORMAT))
         root.addHandler(handler)
+    else:
+        for existing in root.handlers:
+            if isinstance(existing, logging.StreamHandler) and not isinstance(
+                existing.formatter, RequestIdFormatter
+            ):
+                existing.setFormatter(RequestIdFormatter(_LOG_FORMAT))
     if root.level == logging.NOTSET or root.level > logging.INFO:
         root.setLevel(logging.INFO)
     if not any(isinstance(f, RequestIdFilter) for f in root.filters):

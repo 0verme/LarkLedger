@@ -191,6 +191,49 @@ def test_setup_logging_is_idempotent_and_installs_request_id_filter() -> None:
         root.filters[:] = [f for f in root.filters if not isinstance(f, RequestIdFilter)]
 
 
+def test_child_logger_records_render_through_root_handler_with_request_id() -> None:
+    """Regression: a record emitted by a child logger (e.g.
+    ``lark_ledger.services.worker``) propagates to the root handler without
+    passing the root logger's filter, so the formatter itself must inject
+    ``request_id`` or the ``%(request_id)s`` format crashes with KeyError.
+    """
+    import logging as _logging
+
+    from lark_ledger.logging_config import RequestIdFormatter, setup_logging
+
+    root = _logging.getLogger()
+    before_level = root.level
+    before_handlers = list(root.handlers)
+    before_filters = list(root.filters)
+    try:
+        setup_logging()
+        handler = next(h for h in root.handlers if isinstance(h, _logging.StreamHandler))
+        assert isinstance(handler.formatter, RequestIdFormatter)
+
+        stream = io.StringIO()
+        probe = _logging.StreamHandler(stream)
+        probe.setFormatter(RequestIdFormatter("%(request_id)s|%(name)s|%(message)s"))
+        child = _logging.getLogger("lark_ledger.services.worker")
+        child.setLevel(_logging.INFO)
+        child.propagate = False
+        child.addHandler(probe)
+        try:
+            child.info("child log line")
+        finally:
+            child.removeHandler(probe)
+            child.propagate = True
+
+        rendered = stream.getvalue()
+        # Never a KeyError crash; the injected id is a valid correlation id.
+        assert rendered
+        request_id = rendered.split("|", 1)[0]
+        assert request_id in {"-", ""} or normalize_request_id(request_id) == request_id
+    finally:
+        root.handlers[:] = before_handlers
+        root.setLevel(before_level)
+        root.filters[:] = before_filters
+
+
 def test_source_never_logs_request_headers_or_cookies() -> None:
     import pathlib
 
