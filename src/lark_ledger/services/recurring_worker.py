@@ -399,5 +399,5 @@ class RecurringWorker:
             await self._deliverer(rows)
         if generated:
             self._last_success_at = current
-            self._processed += generated
+            self._processed += len(generated)
         return len(generated)
