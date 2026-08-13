@@ -347,6 +347,7 @@ curl http://127.0.0.1:8000/healthz
 - [Client API（`/api/v1`）](docs/client-api.md)
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
+- [发布 SOP](docs/release-sop.md)
 - [变更日志](CHANGELOG.md) · [v0.10.0 发布说明](.github/release-notes/v0.10.0.md) · [v0.9.0 发布说明](.github/release-notes/v0.9.0.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)

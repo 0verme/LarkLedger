@@ -224,6 +224,7 @@ PostgreSQL-specific tests run in CI. See [CONTRIBUTING.en.md](CONTRIBUTING.en.md
 - [Chinese environment and deployment guide](docs/environment.md)
 - [Chinese architecture](docs/architecture.md)
 - [Upgrade guide](docs/upgrading.md)
+- [Release SOP](docs/release-sop.md)
 - [Changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md)
 
