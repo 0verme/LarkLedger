@@ -20,6 +20,13 @@ from lark_ledger.client_api import router as client_router
 from lark_ledger.config import EventMode, Settings, get_settings
 from lark_ledger.dashboard_static import DashboardSecurityHeaders, DashboardStaticFiles
 from lark_ledger.db import SessionFactory, engine
+from lark_ledger.logging_config import (
+    generate_request_id,
+    normalize_request_id,
+    reset_request_id,
+    set_request_id,
+    setup_logging,
+)
 from lark_ledger.readiness import ReadinessService
 from lark_ledger.services.ai import AIInterpreter
 from lark_ledger.services.card_action import CardActionService
@@ -43,6 +50,7 @@ from lark_ledger.web_api import router as web_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    setup_logging()
     settings = get_settings()
     app.state.settings = settings
     app.state.session_factory = SessionFactory
@@ -183,23 +191,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @application.middleware("http")
     async def attach_request_id(request: Request, call_next: Any) -> Response:
-        path = request.url.path
-        if (
-            path.startswith("/api/v1/")
-            or path.startswith("/api/client/v1/")
-            or path.startswith("/api/web/v1/")
-        ):
-            import uuid as _uuid
-
-            request.state.request_id = _uuid.uuid4().hex[:16]
-        else:
-            request.state.request_id = ""
-        response = await call_next(request)
-        # P38 §23/§54 — expose the request id to the First-party Web client on
-        # its response headers (never in the body) so the UI can show a safe
-        # "request id" while debugging, without leaking internals.
-        if path.startswith("/api/web/v1/") and request.state.request_id:
-            response.headers["X-Request-ID"] = request.state.request_id
+        # P42 request correlation: every request (healthz/readyz/webhook/API)
+        # gets a request_id — either a validated client-supplied X-Request-ID or
+        # a fresh server id — echoed back on the response header and bound to
+        # the async context so all logs emitted while handling this request
+        # carry the same correlation id.
+        incoming = request.headers.get("x-request-id")
+        request_id = normalize_request_id(incoming) or generate_request_id()
+        request.state.request_id = request_id
+        token = set_request_id(request_id)
+        try:
+            response = await call_next(request)
+        finally:
+            reset_request_id(token)
+        response.headers["X-Request-ID"] = request_id
         return cast(Response, response)
 
     application.include_router(router)
