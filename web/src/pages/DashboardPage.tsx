@@ -80,7 +80,7 @@ export function DashboardPage() {
 	return (
 		<div className="dashboard-page">
 			{notice && <div className="toast">{notice}</div>}
-			<div className="page-heading">
+			<div className="dash-hero">
 				<div>
 					<p className="eyebrow">
 						{currentLedger
@@ -88,8 +88,9 @@ export function DashboardPage() {
 							: "财务总览"}
 					</p>
 					<h2>本月，保持清晰。</h2>
+					<p className="dash-hero-copy">记下每一笔，余下的交给时间。</p>
 				</div>
-				<div className="heading-actions">
+				<div className="hero-cta">
 					<button className="primary-small" onClick={() => setQuickOpen(true)}>
 						<BookPlus size={16} /> 记一笔
 					</button>
