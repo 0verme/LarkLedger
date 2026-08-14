@@ -62,7 +62,7 @@ async def test_goals_migration_upgrade_downgrade_single_head(
             assert tables == {"financial_goals", "goal_account_bindings"}
             # Single head.
             head = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-            assert head == "20260814_0027"
+            assert head == "20260814_0028"
 
         # Downgrade one step drops both tables.
         await asyncio.to_thread(command.downgrade, config, "20260812_0025")

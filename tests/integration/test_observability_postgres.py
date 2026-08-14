@@ -79,7 +79,7 @@ async def _get(app: FastAPI, path: str) -> httpx.Response:
 async def test_readyz_200_when_database_and_migration_are_current(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    app = _app(postgres_session_factory, expected_revision="20260814_0027")
+    app = _app(postgres_session_factory, expected_revision="20260814_0028")
 
     response = await _get(app, "/readyz")
     body = response.json()
@@ -88,15 +88,15 @@ async def test_readyz_200_when_database_and_migration_are_current(
     assert body["status"] == "ready"
     assert body["checks"]["database"] == {"status": "ok"}
     assert body["checks"]["migration"]["status"] == "ok"
-    assert body["checks"]["migration"]["current"] == "20260814_0027"
-    assert body["checks"]["migration"]["expected"] == "20260814_0027"
+    assert body["checks"]["migration"]["current"] == "20260814_0028"
+    assert body["checks"]["migration"]["expected"] == "20260814_0028"
     assert body["degraded"] is False
 
 
 async def test_readyz_503_when_migration_is_behind(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # The real database is at head 20260814_0027; a deployment whose code
+    # The real database is at head 20260814_0028; a deployment whose code
     # expects a newer head must not serve traffic until upgraded.
     app = _app(postgres_session_factory, expected_revision="20990101_9999")
 
@@ -108,7 +108,7 @@ async def test_readyz_503_when_migration_is_behind(
     assert body["checks"]["database"]["status"] == "ok"
     assert body["checks"]["migration"]["status"] == "error"
     assert body["checks"]["migration"]["reason"] == "migration_revision_mismatch"
-    assert body["checks"]["migration"]["current"] == "20260814_0027"
+    assert body["checks"]["migration"]["current"] == "20260814_0028"
 
 
 async def test_readyz_503_when_database_is_unreachable(
@@ -121,7 +121,7 @@ async def test_readyz_503_when_database_is_unreachable(
     engine = create_async_engine(unreachable, pool_pre_ping=True)
     try:
         factory = async_sessionmaker(engine, expire_on_commit=False)
-        app = _app(factory, expected_revision="20260814_0027")
+        app = _app(factory, expected_revision="20260814_0028")
 
         response = await _get(app, "/readyz")
         body = response.json()
@@ -160,7 +160,7 @@ async def test_ops_status_aggregates_real_rows(
 
     app = _app(
         postgres_session_factory,
-        expected_revision="20260814_0027",
+        expected_revision="20260814_0028",
         settings=_settings(version="0.11.0", git_sha="pgsha123", build_time="t"),
     )
     response = await _get(app, "/ops/status")
@@ -188,7 +188,7 @@ async def test_version_endpoint_on_real_app(
 ) -> None:
     app = _app(
         postgres_session_factory,
-        expected_revision="20260814_0027",
+        expected_revision="20260814_0028",
         settings=_settings(version="0.11.0", git_sha="abc123"),
     )
 

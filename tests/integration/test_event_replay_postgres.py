@@ -199,7 +199,7 @@ async def test_guarded_replay_migration_upgrade_downgrade_roundtrip(
                     "WHERE event_id = 'evt-existing-outbox'"
                 )
             )
-            assert revision == "20260814_0027"
+            assert revision == "20260814_0028"
             assert replay_columns == {
                 "manual_replay_count",
                 "replay_safety_version",

@@ -31,7 +31,7 @@ def postgres_url() -> str:
 async def postgres_engine(postgres_url: str) -> AsyncIterator[AsyncEngine]:
     engine = create_async_engine(postgres_url, pool_pre_ping=True)
     truncate = (
-        "TRUNCATE TABLE dashboard_sessions, event_replay_audits, "
+        "TRUNCATE TABLE dashboard_sessions, event_replay_audits, dead_letter_actions, "
         "client_idempotency_records, budget_alerts, category_budgets, budgets, "
         "recurring_occurrences, recurring_rules, ledger_entry_revisions, "
         "ledger_entries, pending_commands, reply_outbox, processed_events, "

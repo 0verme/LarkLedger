@@ -168,7 +168,7 @@ async def _readiness_app(worker: Any) -> FastAPI:
             _text("CREATE TABLE alembic_version (version_num TEXT)")
         )
         await connection.execute(
-            _text("INSERT INTO alembic_version VALUES ('20260814_0027')")
+            _text("INSERT INTO alembic_version VALUES ('20260814_0028')")
         )
 
     app = FastAPI()
@@ -189,7 +189,7 @@ async def _readiness_app(worker: Any) -> FastAPI:
     app.state.readiness = ReadinessService(
         settings,
         app.state.session_factory,
-        expected_revision="20260814_0027",
+        expected_revision="20260814_0028",
     )
     return app
 
@@ -251,7 +251,7 @@ async def _low_frequency_app(worker: Any, enabled: bool) -> FastAPI:
             _text("CREATE TABLE alembic_version (version_num TEXT)")
         )
         await connection.execute(
-            _text("INSERT INTO alembic_version VALUES ('20260814_0027')")
+            _text("INSERT INTO alembic_version VALUES ('20260814_0028')")
         )
 
     app = FastAPI()
@@ -273,7 +273,7 @@ async def _low_frequency_app(worker: Any, enabled: bool) -> FastAPI:
     app.state.readiness = ReadinessService(
         settings,
         app.state.session_factory,
-        expected_revision="20260814_0027",
+        expected_revision="20260814_0028",
     )
     return app
 

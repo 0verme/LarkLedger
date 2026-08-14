@@ -1305,6 +1305,37 @@ class ClientIdempotencyRecord(Base):
     )
 
 
+class DeadLetterAction(Base):
+    """Append-only operator audit for dead-letter replay / resolve (P44).
+
+    One row per human action across every backlog source (``events`` /
+    ``outbox`` / ``pending_commands``). ``target_id`` intentionally has no
+    foreign key: terminal cleanup of source rows must never erase the audit.
+    Never stores payloads, financial content or credentials. ``request_id``
+    ties the action to the correlated request that performed it (P42).
+    """
+
+    __tablename__ = "dead_letter_actions"
+    __table_args__ = (
+        Index("ix_dead_letter_actions_source_target", "source", "target_id", "created_at"),
+        Index("ix_dead_letter_actions_created", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    operator: Mapped[str] = mapped_column(String(128), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    before_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    after_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class ClientSecurityAudit(Base):
     """Minimal security audit without credential or financial payload material."""
 
