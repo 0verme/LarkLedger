@@ -68,7 +68,7 @@ class SystemStatusService:
         self._session_factory = session_factory
 
     async def aggregate(self) -> dict[str, Any]:
-        """Return per-table status counts plus derived pending/retry/dead totals."""
+        """Return per-table status counts, derived totals and oldest ages."""
         async with self._session_factory() as session:
             event_rows = await self._counts(
                 session, ProcessedEvent.status, _EVENT_OBSERVED_STATUSES
@@ -79,29 +79,56 @@ class SystemStatusService:
             pending_rows = await self._counts(
                 session, PendingCommand.status, _PENDING_OBSERVED_STATUSES
             )
+            event_ages = await self._ages(
+                session,
+                ProcessedEvent,
+                pending_statuses=("received",),
+                retry_statuses=("failed",),
+                dead_statuses=("dead",),
+            )
+            outbox_ages = await self._ages(
+                session,
+                ReplyOutbox,
+                pending_statuses=("pending",),
+                retry_statuses=("failed",),
+                dead_statuses=("dead",),
+            )
+            pending_ages = await self._ages(
+                session,
+                PendingCommand,
+                pending_statuses=("pending", "executing"),
+                retry_statuses=(),
+                dead_statuses=(),
+            )
+        events = _aggregate(
+            event_rows,
+            _EVENT_OBSERVED_STATUSES,
+            pending_keys=("received",),
+            retry_keys=("failed",),
+            dead_keys=("dead",),
+        )
+        outbox = _aggregate(
+            outbox_rows,
+            _OUTBOX_OBSERVED_STATUSES,
+            pending_keys=("pending",),
+            retry_keys=("failed",),
+            dead_keys=("dead",),
+        )
+        pendings = _aggregate(
+            pending_rows,
+            _PENDING_OBSERVED_STATUSES,
+            pending_keys=("pending",),
+            retry_keys=(),
+            dead_keys=(),
+        )
+        events.update(event_ages)
+        outbox.update(outbox_ages)
+        pendings.update(pending_ages)
         return {
             "status": "ok",
-            "events": _aggregate(
-                event_rows,
-                _EVENT_OBSERVED_STATUSES,
-                pending_keys=("received",),
-                retry_keys=("failed",),
-                dead_keys=("dead",),
-            ),
-            "outbox": _aggregate(
-                outbox_rows,
-                _OUTBOX_OBSERVED_STATUSES,
-                pending_keys=("pending",),
-                retry_keys=("failed",),
-                dead_keys=("dead",),
-            ),
-            "pending_commands": _aggregate(
-                pending_rows,
-                _PENDING_OBSERVED_STATUSES,
-                pending_keys=("pending",),
-                retry_keys=(),
-                dead_keys=(),
-            ),
+            "events": events,
+            "outbox": outbox,
+            "pending_commands": pendings,
         }
 
     @staticmethod
@@ -117,3 +144,45 @@ class SystemStatusService:
         )
         result = await session.execute(stmt)
         return [(str(status), int(count)) for status, count in result.all()]
+
+    @staticmethod
+    async def _ages(
+        session: AsyncSession,
+        model: Any,
+        *,
+        pending_statuses: tuple[str, ...],
+        retry_statuses: tuple[str, ...],
+        dead_statuses: tuple[str, ...],
+    ) -> dict[str, str | None]:
+        """Oldest per-bucket timestamp (P44 backlog hygiene), ISO or None.
+
+        Each query rides the existing ``(status, ...)`` index and returns a
+        single scalar, so the aggregate stays bounded regardless of table size.
+        """
+        result: dict[str, str | None] = {
+            "oldest_pending_at": None,
+            "oldest_retry_at": None,
+            "oldest_dead_at": None,
+        }
+        if pending_statuses:
+            result["oldest_pending_at"] = await SystemStatusService._oldest_for(
+                session, model, pending_statuses
+            )
+        if retry_statuses:
+            result["oldest_retry_at"] = await SystemStatusService._oldest_for(
+                session, model, retry_statuses
+            )
+        if dead_statuses:
+            result["oldest_dead_at"] = await SystemStatusService._oldest_for(
+                session, model, dead_statuses
+            )
+        return result
+
+    @staticmethod
+    async def _oldest_for(
+        session: AsyncSession, model: Any, statuses: tuple[str, ...]
+    ) -> str | None:
+        value = await session.scalar(
+            select(func.min(model.updated_at)).where(model.status.in_(statuses))
+        )
+        return value.isoformat() if value is not None else None

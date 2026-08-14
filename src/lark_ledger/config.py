@@ -62,6 +62,14 @@ class Settings(BaseSettings):
     reply_retry_base_seconds: float = Field(default=2.0, gt=0, le=86400)
     reply_retry_max_seconds: float = Field(default=3600.0, gt=0, le=86400)
 
+    # Dead-letter / backlog warning (P44). A non-zero threshold makes
+    # ``/ops/status`` surface ``dead_warning`` when the aggregate dead count
+    # (events + outbox) reaches it. Readiness semantics are untouched: a
+    # backlog never turns into a 503. Zero (the default) disables the warning
+    # so low-traffic personal deployments never flap on small historical
+    # leftovers.
+    ops_dead_warning_threshold: int = Field(default=0, ge=0, le=1000000)
+
     # Terminal delivery retention (P06d). Cleanup is deliberately explicit:
     # disabling uses the boolean switch, while every enabled retention window
     # is at least one day so a zero value can never erase all terminal data.

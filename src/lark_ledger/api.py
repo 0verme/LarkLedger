@@ -57,6 +57,7 @@ async def ops_status(request: Request) -> JSONResponse:
                 type(exc).__name__,
             )
             backlog = {"status": "unavailable", "reason": "aggregate_unavailable"}
+    dead_warning = _dead_warning(settings, backlog)
     return JSONResponse(
         status_code=status.HTTP_200_OK,
         content={
@@ -64,8 +65,26 @@ async def ops_status(request: Request) -> JSONResponse:
             "build": resolve_build_info(settings).to_dict(),
             "backlog": backlog,
             "workers": worker_heartbeats,
+            **({"dead_warning": True} if dead_warning else {}),
         },
     )
+
+
+def _dead_warning(settings: Settings, backlog: dict[str, Any]) -> bool:
+    """Aggregate dead-count threshold check (P44, opt-in, readiness-agnostic).
+
+    Only surfaces an advisory flag; it never changes readiness (a backlog stays
+    ``degraded``-style at most and never turns into a 503).
+    """
+    threshold = settings.ops_dead_warning_threshold
+    if threshold <= 0:
+        return False
+    total = 0
+    for key in ("events", "outbox"):
+        section = backlog.get(key) if isinstance(backlog, dict) else None
+        if isinstance(section, dict):
+            total += int(section.get("dead") or 0)
+    return total >= threshold
 
 
 def _worker_heartbeat_payload(request: Request) -> dict[str, Any]:
