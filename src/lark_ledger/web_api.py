@@ -66,6 +66,13 @@ from lark_ledger.services.dashboard_auth import (
     DashboardAuthService,
     DashboardPrincipal,
 )
+from lark_ledger.services.dead_letter import (
+    DeadLetterConflictError,
+    DeadLetterNotFoundError,
+    DeadLetterOpsService,
+    DeadLetterQueryService,
+    DeadLetterUnsupportedError,
+)
 from lark_ledger.services.event_replay import EventReplayService
 from lark_ledger.services.goals import (
     GoalConflictError,
@@ -126,6 +133,12 @@ from lark_ledger.web_schemas import (
     BudgetUpdateRequest,
     CurrentSession,
     DashboardData,
+    DeadLetterActionRequest,
+    DeadLetterActionResponse,
+    DeadLetterAuditEntry,
+    DeadLetterDetail,
+    DeadLetterItem,
+    DeadLetterPage,
     DeletedFilter,
     EntryCreateRequest,
     EntryDetail,
@@ -1994,6 +2007,151 @@ async def admin_config(
         session_ttl_seconds=settings.dashboard_session_ttl_seconds,
         secure_cookie=settings.dashboard_cookie_secure,
     )
+
+
+@router.get("/admin/dead-letters", response_model=DeadLetterPage)
+async def admin_dead_letters(
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(admin_principal)],
+    source: Annotated[str | None, Query()] = None,
+    state: Annotated[str | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    reason: Annotated[str | None, Query()] = None,
+    retryable: Annotated[bool | None, Query()] = None,
+    replay_safe: Annotated[bool | None, Query()] = None,
+    created_from: Annotated[datetime | None, Query()] = None,
+    created_to: Annotated[datetime | None, Query()] = None,
+    page: Annotated[int, Query(ge=1)] = 1,
+    page_size: Annotated[int, Query(ge=1, le=100)] = 25,
+    sort: Annotated[str, Query(pattern="^(dead_at|created_at|attempts)$")] = "dead_at",
+) -> DeadLetterPage:
+    """Redacted dead-letter list across every backlog source (admin only)."""
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    service = DeadLetterQueryService(factory)
+    page_result = await service.list_items(
+        source=source,
+        state=state,
+        status=status,
+        reason=reason,
+        retryable=retryable,
+        replay_safe=replay_safe,
+        created_from=created_from,
+        created_to=created_to,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+    )
+    return DeadLetterPage(
+        items=[DeadLetterItem(**item.to_safe_dict()) for item in page_result.items],
+        page=page_result.page,
+        page_size=page_result.page_size,
+        total=page_result.total,
+        pages=page_result.pages,
+    )
+
+
+@router.get("/admin/dead-letters/{source}/{target_id}", response_model=DeadLetterDetail)
+async def admin_dead_letter_detail(
+    source: str,
+    target_id: str,
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> DeadLetterDetail:
+    """One redacted dead-letter detail with audit history (admin only)."""
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    detail = await DeadLetterQueryService(factory).detail(source, target_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="记录不存在或已被清理")
+    data = detail.to_safe_dict()
+    return DeadLetterDetail(
+        **{key: value for key, value in data.items() if key != "audit"},
+        audit=[
+            DeadLetterAuditEntry(
+                action=str(entry["action"]),
+                operator=str(entry["operator"]),
+                reason=entry.get("reason"),
+                before_status=entry.get("before_status"),
+                after_status=entry.get("after_status"),
+                error_code=entry.get("error_code"),
+                request_id=entry.get("request_id"),
+                created_at=entry.get("created_at"),
+            )
+            for entry in data.get("audit", [])
+        ],
+    )
+
+
+@router.post(
+    "/admin/dead-letters/{source}/{target_id}/replay",
+    response_model=DeadLetterActionResponse,
+)
+async def admin_dead_letter_replay(
+    source: str,
+    target_id: str,
+    payload: DeadLetterActionRequest,
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    admin: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> DeadLetterActionResponse:
+    """Safely re-queue one dead-letter (locked transition + audit, admin only).
+
+    The API only re-queues; the existing worker performs the delivery through
+    the normal lease path. Never executes a remote side effect here.
+    """
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    service = DeadLetterOpsService(factory)
+    request_id = getattr(request.state, "request_id", None)
+    try:
+        result = await service.replay(
+            source,
+            target_id,
+            operator=admin.user_open_id,
+            reason=payload.reason,
+            request_id=request_id,
+        )
+    except DeadLetterNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DeadLetterConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except DeadLetterUnsupportedError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    reply_worker = getattr(request.app.state, "reply_worker", None)
+    if reply_worker is not None and result.source == "outbox":
+        reply_worker.wakeup()
+    return DeadLetterActionResponse(**result.to_safe_dict())
+
+
+@router.post(
+    "/admin/dead-letters/{source}/{target_id}/resolve",
+    response_model=DeadLetterActionResponse,
+)
+async def admin_dead_letter_resolve(
+    source: str,
+    target_id: str,
+    payload: DeadLetterActionRequest,
+    request: Request,
+    _: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+    admin: Annotated[DashboardPrincipal, Depends(admin_principal)],
+) -> DeadLetterActionResponse:
+    """Acknowledge a dead-letter without replaying (audit-only, admin only)."""
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    service = DeadLetterOpsService(factory)
+    request_id = getattr(request.state, "request_id", None)
+    try:
+        result = await service.resolve(
+            source,
+            target_id,
+            operator=admin.user_open_id,
+            reason=payload.reason,
+            request_id=request_id,
+        )
+    except DeadLetterNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DeadLetterActionResponse(**result.to_safe_dict())
 
 
 def _analytics_dates(

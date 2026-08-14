@@ -292,6 +292,62 @@ export type AdminDeadSummary = {
 	latest_events: AdminEvent[];
 	latest_replies: AdminOutbox[];
 };
+export type DeadLetterItem = {
+	id: string;
+	source: "events" | "outbox" | "pending_commands";
+	status: string;
+	state: "pending" | "retry" | "dead" | "resolved" | "terminal";
+	created_at: string | null;
+	dead_at: string | null;
+	attempts: number;
+	reason_category: string;
+	retryable: boolean;
+	replay_safe: boolean;
+	requires_manual_review: boolean;
+	terminal: boolean;
+	payload_summary: string;
+	last_error_summary: string | null;
+	resolved: boolean;
+};
+export type DeadLetterPage = {
+	items: DeadLetterItem[];
+	page: number;
+	page_size: number;
+	total: number;
+	pages: number;
+};
+export type DeadLetterAuditEntry = {
+	action: string;
+	operator: string;
+	reason: string | null;
+	before_status: string | null;
+	after_status: string | null;
+	error_code: string | null;
+	request_id: string | null;
+	created_at: string | null;
+};
+export type DeadLetterDetail = DeadLetterItem & {
+	event_id: string | null;
+	message_id: string | null;
+	reply_type: string | null;
+	transport: string | null;
+	lease_owner: string | null;
+	lease_expires_at: string | null;
+	remote_message_id: string | null;
+	next_attempt_at: string | null;
+	updated_at: string | null;
+	audit: DeadLetterAuditEntry[];
+};
+export type DeadLetterActionResponse = {
+	source: string;
+	target_id: string;
+	action: string;
+	outcome: string;
+	before_status: string | null;
+	after_status: string | null;
+	audit_id: string | null;
+	message: string;
+};
 export type ReplayPreflight = {
 	event_found: boolean;
 	eligible: boolean;

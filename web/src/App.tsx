@@ -15,6 +15,7 @@ import {
 	Home,
 	KeyRound,
 	Landmark,
+	AlertTriangle,
 	LogOut,
 	Menu,
 	MessageSquareReply,
@@ -39,6 +40,7 @@ import {
 import { ApiError, api, type Ledger, type LedgerList, type Me } from "./api";
 import { DashboardPage } from "./pages/DashboardPage";
 import {
+	DeadLettersPage,
 	DeadPage,
 	EventsPage,
 	HealthPage,
@@ -108,6 +110,12 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
 				icon: RotateCcw,
 				admin: true,
 			},
+			{
+				label: "Dead Letters",
+				path: "/admin/dead-letters",
+				icon: AlertTriangle,
+				admin: true,
+			},
 		],
 	},
 	{
@@ -173,6 +181,7 @@ function pageElement(item: NavItem) {
 	if (item.path === "/admin/events") return <EventsPage />;
 	if (item.path === "/admin/outbox") return <OutboxPage />;
 	if (item.path === "/admin/dead") return <DeadPage />;
+	if (item.path === "/admin/dead-letters") return <DeadLettersPage />;
 	if (item.path === "/admin/health") return <HealthPage />;
 	if (item.path === "/admin/config") return <ConfigPage />;
 	if (item.path === "/sessions") return <SessionsPage />;

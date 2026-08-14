@@ -755,3 +755,72 @@ class CurrentSession(BaseModel):
     avatar_url: str
     role: str
     expires_at: datetime
+
+
+class DeadLetterItem(BaseModel):
+    """Redacted summary row for the dead-letter operations list (P44)."""
+
+    id: str
+    source: str
+    status: str
+    state: str
+    created_at: datetime | None
+    dead_at: datetime | None
+    attempts: int
+    reason_category: str
+    retryable: bool
+    replay_safe: bool
+    requires_manual_review: bool
+    terminal: bool
+    payload_summary: str
+    last_error_summary: str | None
+    resolved: bool = False
+
+
+class DeadLetterPage(BaseModel):
+    items: list[DeadLetterItem]
+    page: int
+    page_size: int
+    total: int
+    pages: int
+
+
+class DeadLetterAuditEntry(BaseModel):
+    action: str
+    operator: str
+    reason: str | None
+    before_status: str | None
+    after_status: str | None
+    error_code: str | None
+    request_id: str | None
+    created_at: str | None
+
+
+class DeadLetterDetail(DeadLetterItem):
+    """Richer, still-redacted per-item view (P44)."""
+
+    event_id: str | None = None
+    message_id: str | None = None
+    reply_type: str | None = None
+    transport: str | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    remote_message_id: str | None = None
+    next_attempt_at: datetime | None = None
+    updated_at: datetime | None = None
+    audit: list[DeadLetterAuditEntry] = Field(default_factory=list)
+
+
+class DeadLetterActionRequest(BaseModel):
+    reason: str = Field(min_length=3, max_length=512)
+
+
+class DeadLetterActionResponse(BaseModel):
+    source: str
+    target_id: str
+    action: str
+    outcome: str
+    before_status: str | None
+    after_status: str | None
+    audit_id: str | None
+    message: str
