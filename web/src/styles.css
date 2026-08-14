@@ -146,6 +146,12 @@ button {
 	color: inherit;
 }
 
+/* 键盘焦点指示：统一为低饱和 Mist 轮廓（表单控件自带 ring，不受影响） */
+:focus-visible {
+	outline: 2px solid var(--mist);
+	outline-offset: 2px;
+}
+
 ::selection {
 	background: rgba(90, 122, 151, 0.22);
 }
@@ -412,8 +418,8 @@ button {
 }
 .ledger-switcher select:focus {
 	outline: none;
-	border-color: var(--line-3);
-	box-shadow: 0 0 0 3px rgba(24, 28, 34, 0.05);
+	border-color: var(--mist);
+	box-shadow: 0 0 0 3px rgba(90, 122, 151, 0.18);
 }
 .ledger-switcher button {
 	width: 36px;
@@ -1339,8 +1345,8 @@ button {
 .export-card input:focus,
 .admin-filter select:focus,
 .custom-range input:focus {
-	border-color: var(--line-3);
-	box-shadow: 0 0 0 3px rgba(24, 28, 34, 0.05);
+	border-color: var(--mist);
+	box-shadow: 0 0 0 3px rgba(90, 122, 151, 0.18);
 	background: var(--surface-solid);
 }
 .search-box {
@@ -1356,8 +1362,8 @@ button {
 	transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 .search-box:focus-within {
-	border-color: var(--line-3);
-	box-shadow: 0 0 0 3px rgba(24, 28, 34, 0.05);
+	border-color: var(--mist);
+	box-shadow: 0 0 0 3px rgba(90, 122, 151, 0.18);
 }
 .search-box input {
 	border: 0;
@@ -1449,8 +1455,8 @@ button {
 }
 .ai-entry-box textarea:focus {
 	outline: none;
-	border-color: var(--line-3);
-	box-shadow: 0 0 0 3px rgba(24, 28, 34, 0.05);
+	border-color: var(--mist);
+	box-shadow: 0 0 0 3px rgba(90, 122, 151, 0.18);
 }
 .ai-entry-actions {
 	display: flex;
@@ -1484,8 +1490,8 @@ button {
 	transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
 .amount-input:focus-within {
-	border-color: var(--line-3);
-	box-shadow: 0 0 0 3px rgba(24, 28, 34, 0.05);
+	border-color: var(--mist);
+	box-shadow: 0 0 0 3px rgba(90, 122, 151, 0.18);
 }
 .amount-input svg {
 	color: var(--text-4);
@@ -2932,8 +2938,8 @@ td strong {
 }
 .reason-field textarea:focus {
 	outline: none;
-	border-color: var(--line-3);
-	box-shadow: 0 0 0 3px rgba(24, 28, 34, 0.05);
+	border-color: var(--mist);
+	box-shadow: 0 0 0 3px rgba(90, 122, 151, 0.18);
 }
 .preflight {
 	padding: 16px;
@@ -3328,6 +3334,9 @@ td strong {
 	}
 	.content {
 		padding: 22px 20px;
+	}
+	.quick-add-fab {
+		display: grid;
 	}
 	.placeholder-page {
 		padding: 28px;
