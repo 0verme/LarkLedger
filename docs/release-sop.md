@@ -118,3 +118,34 @@ v0.10.0 发布时曾出现：tag 与 GHCR 镜像均存在，但 `/releases/tag/v
 **根因**：当时 `release.yml` 只执行 build/push GHCR 镜像，没有创建 GitHub Release 的步骤，GitHub Release 依赖人工创建，本次被遗漏。
 
 **修复**：P41 为 release workflow 增加自动化 Release publishing（validate → image → release 三段式 + 全部 guard），未来版本 push annotated tag 后自动闭环，不再依赖人工创建。
+
+## Dead-letter incident handling（P44）
+
+当 `/ops/status` 显示 `backlog.*.dead > 0` 或收到 dead 增长告警时，按以下
+runbook 处理。**先只读诊断，再判断，最后才执行动作。**
+
+1. **查看聚合状态**：`curl http://<host>/ops/status`，记录 `backlog` 的
+   `events` / `outbox` / `pending_commands` 计数与 `oldest_*_at` 时间。
+2. **查看受保护详情**：以管理员登录 Web 后台，打开
+   Operations → Dead Letters（`/admin/dead-letters`），或直接调用
+   `GET /api/web/v1/admin/dead-letters?source=outbox&state=dead`。
+3. **判断原因分类**：`reason_category` 是 bounded 分类
+   （network / timeout / rate_limited / remote_rejected / …），不是 raw
+   exception；错误摘要已脱敏。
+4. **判断重放安全**：看 `retryable` / `replay_safe` / `requires_manual_review` /
+   `terminal`。只有 transient 且 `replay_safe=true` 的项才能重放。
+5. **replay / resolve**：transient 安全 → `POST .../replay {reason}`（API 只
+   重新入队，worker 负责投递）；terminal 或不应重放 → `POST .../resolve
+   {reason}`（审计标记，不删行）。
+6. **检查 worker**：确认 `/ops/status` 的 `workers.event_worker` /
+   `workers.reply_worker` 心跳正常、非 stale。
+7. **检查 backlog**：重放后 pending 应短暂上升后回落；若持续积压，查
+   `workers.reply_worker` 与飞书限流（429）。
+8. **检查业务副作用**：确认账本出现预期记录且无重复（重放前先核对
+   `replay_safe` 与审计历史；存在 `remote_message_id` 时禁止重放）。
+9. **记录结果**：所有 replay / resolve 都自动写入 `dead_letter_actions`
+   （operator、reason、前后状态、request_id），无需额外登记。
+
+**禁止**：直接 `DELETE` / `UPDATE` dead 行、手工清 `attempts`、批量重放
+所有 dead、为了计数归零而清数据。历史清理交给 Cleanup Worker 的 retention
+窗口（`outbox_dead_retention_days` / `event_dead_retention_days`）。

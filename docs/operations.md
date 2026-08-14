@@ -67,7 +67,7 @@ cleanup_worker / recurring_worker / receiver
   **readiness 从不自动执行 migration**。
 - worker stale：worker 任务存活但循环心跳（`last_sweep_at`）超过
   `LARK_LEDGER_READINESS_STALE_AFTER_SECONDS`（默认 30s）未推进 → `warning`
-  + `reason: "worker_stale"`（degraded，不是 503）。事件/reply worker
+  - `reason: "worker_stale"`（degraded，不是 503）。事件/reply worker
   高频轮询（1s），直接使用该阈值；低频 worker（recurring 300s、
   cleanup 3600s）的 stale 窗口按自身 sweep 周期缩放（至少两倍周期），
   避免健康低频 worker 被永久误报。
@@ -193,6 +193,71 @@ checks.migration.current != checks.migration.expected
 dead 表示永久失败（payload / contract / 超出重试预算）。用 Web 后台的
 事件重放工具（`docs/environment.md` 的管理员人工事件重放）或检查
 `processed_events.last_error_code` 定位根因。dead 本身是 degraded 而非 not ready。
+
+## Dead-letter 语义与处理（P44）
+
+### 状态语义
+
+- **pending** — 已持久化，等待 worker / 用户（`events.received`、`outbox.pending`、
+  `pending_commands.pending`）。
+- **retry** — 失败过一次，已按指数退避安排下次重试（`failed` 且
+  `next_attempt_at` 在未来）。
+- **dead** — 重试耗尽或永久失败，需要运维判断（`events.dead`、`outbox.dead`）。
+- **resolved** — 运维人员确认不重放（`dead_letter_actions` 中的 `resolve` 审计标记；
+  源行保留，不删除、不改状态）。
+
+### 统一查询模型
+
+受保护的运维 API（管理员登录后可访问）：
+
+```text
+GET  /api/web/v1/admin/dead-letters?source=&state=&reason=&retryable=&replay_safe=&created_from=&created_to=&page=&page_size=&sort=
+GET  /api/web/v1/admin/dead-letters/{source}/{id}
+POST /api/web/v1/admin/dead-letters/{source}/{id}/replay   {reason}
+POST /api/web/v1/admin/dead-letters/{source}/{id}/resolve  {reason}
+```
+
+列表与详情**只返回脱敏摘要**：来源、状态、尝试次数、原因分类
+（network / timeout / rate_limited / authentication / permission /
+remote_not_found / remote_rejected / invalid_payload / serialization /
+database / business_conflict / expired / unknown）、可重放性评估、payload 类型
+摘要、脱敏后的单行错误摘要。不返回业务 payload、财务文本、token、cookie、
+DB URL 或完整异常。
+
+### Replay（什么时候可以重放）
+
+- 原因分类属于 **network / timeout / rate_limited**（transient），且
+  `replay_safe=true`（无 `remote_message_id`、无已提交业务结果）时：可以重放。
+- replay 只把 `dead`/`failed` 重新入队（outbox → `pending`，事件 → `received`），
+  由现有 worker 按正常租约路径投递；API 本身不执行任何远端副作用。
+- 每个 replay 都写入 `dead_letter_actions` 审计（operator、reason、前后状态、
+  request_id），并受 PostgreSQL 行锁保护：两个管理员同时重放同一记录只有一次
+  有效状态迁移，另一方得到 409。
+
+### Do not replay（什么时候不能重放）
+
+- 原因分类为 **remote_rejected / remote_not_found / invalid_payload /
+  serialization / expired**：terminal，重放必然再次失败。
+- **authentication / permission / database / business_conflict / unknown**：
+  需要人工审查，不允许一键重放。
+- `replay_safe=false`（存在已记录的 `remote_message_id` 或业务结果已提交）默认
+  禁止重放，避免重复副作用。
+
+### 生产处理流程（inspect → classify → assess → replay/resolve → verify）
+
+1. 查看 `/ops/status` 的 `backlog` 计数与 `oldest_*_at` 时间。
+2. 打开 Dead Letters 页面（`/admin/dead-letters`），按 source / reason 过滤。
+3. 打开单条详情，看原因分类与重放评估。
+4. 判断：transient 且安全 → `replay`（填写原因）；terminal → `resolve`
+   （记录审计，不删除源行）。
+5. 重放后确认 `/ops/status` 中对应 pending 计数变化、worker 心跳正常。
+6. 检查业务副作用（账本是否出现预期记录）。
+
+### 历史清理
+
+**绝不直接 DELETE dead 行让计数归零。** dead-letter 是有审计价值的运维资产；
+清理交给 Cleanup Worker 的 retention 窗口（`outbox_dead_retention_days`，默认 90 天），
+人工只通过 `resolve` 记录处理结论。
 
 ### Outbox 积压
 

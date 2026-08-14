@@ -2,6 +2,28 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [Unreleased]
+
+### Dead-letter Operations / Backlog Hygiene (P44)
+
+- **统一 dead-letter 查询模型**：新增 `lark_ledger.dead_letter`（core 领域词汇）与 `lark_ledger.services.dead_letter`（domain 服务），把 `processed_events` / `reply_outbox` / `pending_commands` 三张表映射为统一语义（`pending` / `retry` / `dead` / `resolved` / `terminal`），并提供脱敏摘要（source / id / status / dead_at / attempts / reason_category / retryable / replay_safe / payload_summary / last_error_summary）。
+- **有界错误分类**：`classify_error_code` 把异常码映射为有限分类（network / timeout / rate_limited / authentication / permission / remote_not_found / remote_rejected / invalid_payload / serialization / database / business_conflict / expired / unknown）；HTTP 4xx 按状态细分、5xx 视为可重试的远端瞬时错误；输出层对历史污染的错误摘要再次脱敏（凭据键名整体打码）。
+- **Replayability 评估**：`assessment_for` 为每条 dead-letter 给出 `retryable` / `replay_safe` / `requires_manual_review` / `terminal`；transient（network/timeout/rate_limited）且无 `remote_message_id` 才允许安全重放；terminal 与人工审查类一律禁止一键重放。
+- **安全 replay / resolve API**：`POST /api/web/v1/admin/dead-letters/{source}/{id}/replay`（行锁 `FOR UPDATE` + 事务内状态迁移 + 审计，outbox `dead/failed → pending`，事件委托既有 `EventReplayService`；API 不执行远端副作用，worker 走正常租约路径）与 `.../resolve`（纯审计标记，不删行、不改源状态，幂等）。
+- **统一审计表 `dead_letter_actions`**（append-only，migration `20260814_0028`）：记录 operator / action / reason / before-after status / request_id，支持 replay 与 resolve 全生命周期追溯；事件 replay 同时保留既有 `event_replay_audits` 深层审计。
+- **受保护 ops 查询 API**：`GET /admin/dead-letters`（source / state / status / reason / retryable / replay_safe / 日期范围 / 分页 / 排序）与 `GET /admin/dead-letters/{source}/{id}`（detail + 审计历史），仅 ADMIN 可访问；列表与详情均不返回 payload、财务文本、token、cookie、DB URL 或完整异常。
+- **Web Operations Dead Letters 页面**：`/admin/dead-letters` 提供按 source / state / reason 过滤的列表、统计卡片（按 source / retryable / manual review）、单条详情抽屉（重放评估 + 审计历史）、replay / resolve 动作（replay 需要 reason，terminal 或 `replay_safe=false` 时禁用一键重放）。
+- **`/ops/status` 增强**：backlog 聚合新增 `oldest_pending_at` / `oldest_retry_at` / `oldest_dead_at`（有界标量，随 `(status, ...)` 索引）；可选用 `LARK_LEDGER_OPS_DEAD_WARNING_THRESHOLD`（默认 0 关闭）输出 `dead_warning` 标记；readiness 语义不变（dead 积压仍是 degraded + HTTP 200）。
+- **文档与 runbook**：`docs/operations.md` 新增 dead-letter 语义 / replay 边界 / 生产处理流程；`docs/release-sop.md` 新增 Dead-letter incident handling runbook。
+
+### Migration
+
+- `20260814_0028_dead_letter_actions`：新增 `dead_letter_actions` 审计表（additive，upgrade/downgrade 已验证），Alembic head 升至 `20260814_0028`。升级前按 backup-restore SOP 备份。
+
+### Tests
+
+- 新增 `tests/test_dead_letter.py`（分类 / 评估 / 查询 / replay / resolve / 审计 / 脱敏）、`tests/test_web_dead_letter.py`（鉴权 / list / detail / replay / resolve / CSRF / secret 断言）、`tests/integration/test_dead_letter_postgres.py`（真实 PostgreSQL 并发 replay 只生效一次、worker 拾取、resolve 幂等、migration roundtrip）；`/ops/status` age 断言与架构 guards（dead-letter 模块 transport-neutral）同步扩展。
+
 ## [0.11.0] - 2026-08-14
 
 ### Production Observability / Ops Hardening
