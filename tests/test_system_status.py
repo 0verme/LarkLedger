@@ -136,6 +136,18 @@ async def test_system_status_service_aggregates_bounded_counts() -> None:
         pendings = payload["pending_commands"]
         assert pendings["pending"] == 1
         assert pendings["total"] == 2  # confirmed excluded
+
+        # P44 backlog hygiene: oldest-age buckets are bounded scalars, absent
+        # when the bucket is empty.
+        assert events["oldest_pending_at"] is not None
+        assert events["oldest_retry_at"] is not None
+        assert events["oldest_dead_at"] is not None
+        assert outbox["oldest_pending_at"] is not None
+        assert outbox["oldest_retry_at"] is not None
+        assert outbox["oldest_dead_at"] is not None
+        assert pendings["oldest_pending_at"] is not None
+        assert pendings["oldest_retry_at"] is None
+        assert pendings["oldest_dead_at"] is None
     finally:
         await engine.dispose()
 

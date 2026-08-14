@@ -204,3 +204,26 @@ def test_dashboard_auth_never_logs_credentials() -> None:
         if "logger." in line and ("token" in line or "cookie" in line or "secret" in line)
     ]
     assert lines == [], f"session adapter may log credentials: {lines}"
+
+
+def test_dead_letter_services_are_transport_neutral() -> None:
+    """P44: the dead-letter domain vocabulary and its services must never
+    import a transport/adapter module or the web layer."""
+    dead_letter_path = SRC / "dead_letter.py"
+    assert classify(dead_letter_path) == "core", (
+        "lark_ledger.dead_letter must stay in the core layer"
+    )
+    service_path = SERVICES_DIR / "dead_letter.py"
+    assert classify(service_path) == "domain", (
+        "lark_ledger.services.dead_letter must stay in the domain layer"
+    )
+    for path in (dead_letter_path, service_path):
+        problems = _violations([path])
+        assert problems == [], "\n".join(problems)
+    # The ops service may reuse the existing event replay domain service, but
+    # must never reach into HTTP / Feishu adapters.
+    source = service_path.read_text(encoding="utf-8")
+    for banned in ("fastapi", "starlette", "feishu", "web_api", "httpx"):
+        assert f"import {banned}" not in source and f"from {banned}" not in source, (
+            f"dead-letter domain service imports transport module {banned}"
+        )
