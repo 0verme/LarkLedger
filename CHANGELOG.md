@@ -2,7 +2,7 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
-## [Unreleased]
+## [0.12.0] - 2026-08-14
 
 ### Dead-letter Operations / Backlog Hygiene (P44)
 
