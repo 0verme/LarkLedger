@@ -165,6 +165,89 @@ async def test_resolve_idempotent_on_real_postgres(
     assert len(detail.audit) == 1
 
 
+async def test_concurrent_resolve_writes_exactly_one_audit(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Two operators resolving the same dead-letter concurrently must produce
+    exactly one resolve audit; the losing request reports already_resolved.
+    """
+    outbox = _dead_outbox()
+    async with postgres_session_factory() as session:
+        session.add(outbox)
+        await session.commit()
+    outbox_id = str(outbox.id)
+
+    service = DeadLetterOpsService(postgres_session_factory)
+
+    async def _attempt(operator: str) -> str:
+        result = await service.resolve(
+            "outbox", outbox_id, operator=operator, reason="concurrent resolve"
+        )
+        return result.outcome
+
+    first, second = await asyncio.gather(_attempt("operator-a"), _attempt("operator-b"))
+    assert sorted([first, second]) == ["already_resolved", "resolved"]
+
+    async with postgres_session_factory() as session:
+        audits = (
+            await session.scalars(
+                select(DeadLetterAction).where(DeadLetterAction.target_id == outbox_id)
+            )
+        ).all()
+        row = await session.get(ReplyOutbox, outbox.id)
+    assert len(audits) == 1
+    assert audits[0].action == "resolve"
+    assert row is not None
+    assert row.status == ReplyStatus.DEAD.value  # resolve never rewrites source rows
+
+async def test_replay_rejects_delivered_outbox(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A dead row that already delivered (remote_message_id set) must never be
+    replayed: replay would duplicate the sent reply and leave a row the worker
+    claim filter never picks up. Only resolve is allowed.
+    """
+    outbox = ReplyOutbox(
+        event_id=None,
+        message_id="om_delivered",
+        reply_type="text",
+        sequence=0,
+        transport="feishu",
+        payload_json={"text": "delivered once"},
+        status=ReplyStatus.DEAD.value,
+        attempt_count=1,
+        remote_message_id="om_remote_123",
+        created_at=NOW - timedelta(days=1),
+        updated_at=NOW - timedelta(days=1),
+    )
+    async with postgres_session_factory() as session:
+        session.add(outbox)
+        await session.commit()
+    outbox_id = str(outbox.id)
+
+    service = DeadLetterOpsService(postgres_session_factory)
+    with pytest.raises(DeadLetterConflictError):
+        await service.replay(
+            "outbox", outbox_id, operator="operator", reason="must be rejected"
+        )
+
+    # resolve remains available and audit-only
+    result = await service.resolve(
+        "outbox", outbox_id, operator="operator", reason="delivered, nothing to replay"
+    )
+    assert result.outcome == "resolved"
+    async with postgres_session_factory() as session:
+        row = await session.get(ReplyOutbox, outbox.id)
+        audits = (
+            await session.scalars(
+                select(DeadLetterAction).where(DeadLetterAction.target_id == outbox_id)
+            )
+        ).all()
+    assert row is not None
+    assert row.status == ReplyStatus.DEAD.value
+    assert len(audits) == 1
+    assert audits[0].action == "resolve"
+
 async def test_replay_non_dead_row_is_conflict(
     postgres_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

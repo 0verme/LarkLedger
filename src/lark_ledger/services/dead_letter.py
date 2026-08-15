@@ -702,6 +702,14 @@ class DeadLetterOpsService:
                 raise DeadLetterConflictError(
                     f"outbox row {outbox_id} is '{row.status}', not dead/failed"
                 )
+            if row.remote_message_id is not None:
+                # Delivered rows carry the remote id (set only after a
+                # successful send); replaying would duplicate the sent reply
+                # and leave a row the worker's claim filter never picks up.
+                raise DeadLetterConflictError(
+                    f"outbox row {outbox_id} already delivered (remote_message_id set); "
+                    "replay would duplicate the sent reply — resolve instead"
+                )
             before = row.status
             row.status = ReplyStatus.PENDING.value
             row.next_attempt_at = None
@@ -860,19 +868,35 @@ class DeadLetterOpsService:
         source: DeadLetterSource,
         target_id: str,
     ) -> Any | None:
+        """Load and row-lock the source row (P44 concurrency contract).
+
+        The lock serializes concurrent ``resolve`` calls on the same target so
+        the ``already_resolved`` re-check and the audit insert are atomic: one
+        logical resolve can never write two audit rows. It also serializes
+        against a concurrent ``replay`` of the same row (replay locks the same
+        source row), keeping the audit trail unambiguous.
+        """
         if source is DeadLetterSource.EVENTS:
-            return await session.get(ProcessedEvent, target_id)
+            return await session.scalar(
+                select(ProcessedEvent)
+                .where(ProcessedEvent.event_id == target_id)
+                .with_for_update()
+            )
         if source is DeadLetterSource.OUTBOX:
             try:
                 parsed = uuid.UUID(target_id)
             except ValueError:
                 return None
-            return await session.get(ReplyOutbox, parsed)
+            return await session.scalar(
+                select(ReplyOutbox).where(ReplyOutbox.id == parsed).with_for_update()
+            )
         try:
             parsed = uuid.UUID(target_id)
         except ValueError:
             return None
-        return await session.get(PendingCommand, parsed)
+        return await session.scalar(
+            select(PendingCommand).where(PendingCommand.id == parsed).with_for_update()
+        )
 
     @staticmethod
     def _clean_target(target_id: str) -> str:
