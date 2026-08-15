@@ -181,9 +181,7 @@ async def readiness(request: Request) -> JSONResponse:
         )
     payload = await service.check(request.app.state)
     response_status = (
-        status.HTTP_200_OK
-        if payload["status"] == "ready"
-        else status.HTTP_503_SERVICE_UNAVAILABLE
+        status.HTTP_200_OK if payload["status"] == "ready" else status.HTTP_503_SERVICE_UNAVAILABLE
     )
     return JSONResponse(status_code=response_status, content=payload)
 

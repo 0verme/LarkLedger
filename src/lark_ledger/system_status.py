@@ -73,9 +73,7 @@ class SystemStatusService:
             event_rows = await self._counts(
                 session, ProcessedEvent.status, _EVENT_OBSERVED_STATUSES
             )
-            outbox_rows = await self._counts(
-                session, ReplyOutbox.status, _OUTBOX_OBSERVED_STATUSES
-            )
+            outbox_rows = await self._counts(session, ReplyOutbox.status, _OUTBOX_OBSERVED_STATUSES)
             pending_rows = await self._counts(
                 session, PendingCommand.status, _PENDING_OBSERVED_STATUSES
             )

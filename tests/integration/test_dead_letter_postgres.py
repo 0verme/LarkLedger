@@ -76,9 +76,7 @@ async def test_concurrent_replay_produces_exactly_one_transition(
         except DeadLetterConflictError:
             return "conflict"
 
-    first, second = await asyncio.gather(
-        _attempt("operator-a"), _attempt("operator-b")
-    )
+    first, second = await asyncio.gather(_attempt("operator-a"), _attempt("operator-b"))
     outcomes = sorted([first, second])
     assert outcomes == ["conflict", "requeued"]
 
@@ -88,12 +86,7 @@ async def test_concurrent_replay_produces_exactly_one_transition(
         assert row.status == ReplyStatus.PENDING.value
         assert row.last_error_code is None
         assert row.result_summary is None
-        audits = int(
-            await session.scalar(
-                select(func.count()).select_from(DeadLetterAction)
-            )
-            or 0
-        )
+        audits = int(await session.scalar(select(func.count()).select_from(DeadLetterAction)) or 0)
         # exactly one replay audit (the losing request wrote none)
         assert audits == 1
         audit = await session.scalar(select(DeadLetterAction))
@@ -148,18 +141,14 @@ async def test_resolve_idempotent_on_real_postgres(
     assert second.audit_id == first.audit_id
 
     async with postgres_session_factory() as session:
-        count = int(
-            await session.scalar(select(func.count()).select_from(DeadLetterAction)) or 0
-        )
+        count = int(await session.scalar(select(func.count()).select_from(DeadLetterAction)) or 0)
         row = await session.get(ReplyOutbox, outbox.id)
     assert count == 1
     assert row is not None
     assert row.status == ReplyStatus.DEAD.value  # resolve never rewrites source rows
 
     # the unified query marks it resolved
-    detail = await DeadLetterQueryService(postgres_session_factory).detail(
-        "outbox", str(outbox.id)
-    )
+    detail = await DeadLetterQueryService(postgres_session_factory).detail("outbox", str(outbox.id))
     assert detail is not None
     assert detail.resolved is True
     assert len(detail.audit) == 1
@@ -199,6 +188,32 @@ async def test_concurrent_resolve_writes_exactly_one_audit(
     assert audits[0].action == "resolve"
     assert row is not None
     assert row.status == ReplyStatus.DEAD.value  # resolve never rewrites source rows
+
+
+async def test_replay_non_dead_row_is_conflict(
+    postgres_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    outbox = ReplyOutbox(
+        event_id=None,
+        message_id="om_sent",
+        reply_type="text",
+        sequence=0,
+        transport="feishu",
+        payload_json={"text": "already delivered"},
+        status=ReplyStatus.SENT.value,
+        attempt_count=1,
+        created_at=NOW - timedelta(days=1),
+        updated_at=NOW - timedelta(days=1),
+    )
+    async with postgres_session_factory() as session:
+        session.add(outbox)
+        await session.commit()
+
+    with pytest.raises(DeadLetterConflictError):
+        await DeadLetterOpsService(postgres_session_factory).replay(
+            "outbox", str(outbox.id), operator="operator", reason="should be rejected"
+        )
+
 
 async def test_replay_rejects_delivered_outbox(
     postgres_session_factory: async_sessionmaker[AsyncSession],
@@ -247,30 +262,6 @@ async def test_replay_rejects_delivered_outbox(
     assert row.status == ReplyStatus.DEAD.value
     assert len(audits) == 1
     assert audits[0].action == "resolve"
-
-async def test_replay_non_dead_row_is_conflict(
-    postgres_session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    outbox = ReplyOutbox(
-        event_id=None,
-        message_id="om_sent",
-        reply_type="text",
-        sequence=0,
-        transport="feishu",
-        payload_json={"text": "already delivered"},
-        status=ReplyStatus.SENT.value,
-        attempt_count=1,
-        created_at=NOW - timedelta(days=1),
-        updated_at=NOW - timedelta(days=1),
-    )
-    async with postgres_session_factory() as session:
-        session.add(outbox)
-        await session.commit()
-
-    with pytest.raises(DeadLetterConflictError):
-        await DeadLetterOpsService(postgres_session_factory).replay(
-            "outbox", str(outbox.id), operator="operator", reason="should be rejected"
-        )
 
 
 async def test_migration_roundtrip_dead_letter_actions(

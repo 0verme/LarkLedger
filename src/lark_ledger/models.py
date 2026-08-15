@@ -373,9 +373,7 @@ class Account(Base):
         ),
         CheckConstraint("type IN ('cash', 'asset', 'liability')", name="ck_accounts_type"),
         CheckConstraint("status IN ('active', 'archived')", name="ck_accounts_status"),
-        CheckConstraint(
-            "visibility IN ('shared', 'private')", name="ck_accounts_visibility"
-        ),
+        CheckConstraint("visibility IN ('shared', 'private')", name="ck_accounts_visibility"),
         CheckConstraint(
             "(visibility <> 'private') OR (owner_user_id IS NOT NULL)",
             name="ck_accounts_private_owner",
@@ -582,9 +580,7 @@ class FinancialGoal(Base):
             "status IN ('active', 'completed', 'archived')",
             name="ck_financial_goals_status",
         ),
-        CheckConstraint(
-            "length(name) > 0 AND length(name) <= 64", name="ck_financial_goals_name"
-        ),
+        CheckConstraint("length(name) > 0 AND length(name) <= 64", name="ck_financial_goals_name"),
         Index("ix_financial_goals_ledger_status", "ledger_id", "status", "created_at"),
     )
 
@@ -601,9 +597,7 @@ class FinancialGoal(Base):
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CNY")
     # Business date in the configured application timezone; NULL = no deadline.
     target_date: Mapped[date | None] = mapped_column(Date, nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=GoalStatus.ACTIVE.value
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default=GoalStatus.ACTIVE.value)
     created_by_user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False
     )
@@ -778,9 +772,7 @@ class RecurringRule(Base):
             name="ck_recurring_rules_transaction_type",
         ),
         CheckConstraint("interval >= 1", name="ck_recurring_rules_interval"),
-        CheckConstraint(
-            "anchor_day BETWEEN 1 AND 31", name="ck_recurring_rules_anchor_day"
-        ),
+        CheckConstraint("anchor_day BETWEEN 1 AND 31", name="ck_recurring_rules_anchor_day"),
         # Worker scan: due active rules (business-date comparison done in code).
         Index("ix_recurring_rules_due", "status", "next_occurrence"),
         Index("ix_recurring_rules_ledger_created", "ledger_id", "created_at"),
@@ -835,9 +827,7 @@ class RecurringOccurrence(Base):
 
     __tablename__ = "recurring_occurrences"
     __table_args__ = (
-        UniqueConstraint(
-            "rule_id", "occurrence_date", name="uq_recurring_occurrences_rule_date"
-        ),
+        UniqueConstraint("rule_id", "occurrence_date", name="uq_recurring_occurrences_rule_date"),
         ForeignKeyConstraint(
             ["ledger_id", "rule_id"],
             ["recurring_rules.ledger_id", "recurring_rules.id"],

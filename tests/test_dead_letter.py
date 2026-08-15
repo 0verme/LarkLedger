@@ -90,12 +90,8 @@ class TestClassification:
         assert classify_error_code("TimeoutError", None) is DeadLetterReason.TIMEOUT
 
     def test_payload_and_database(self) -> None:
-        assert classify_error_code("ReplyPayloadError", None) is (
-            DeadLetterReason.INVALID_PAYLOAD
-        )
-        assert classify_error_code("EventPayloadError", None) is (
-            DeadLetterReason.INVALID_PAYLOAD
-        )
+        assert classify_error_code("ReplyPayloadError", None) is (DeadLetterReason.INVALID_PAYLOAD)
+        assert classify_error_code("EventPayloadError", None) is (DeadLetterReason.INVALID_PAYLOAD)
         assert classify_error_code("IntegrityError", None) is DeadLetterReason.DATABASE
 
     def test_unknown_and_empty(self) -> None:
@@ -321,9 +317,7 @@ async def test_resolve_idempotent_and_audited(
         "outbox", ids["outbox"], operator="ou_admin", reason="historical test fixture"
     )
     assert first.outcome == "resolved"
-    second = await ops.resolve(
-        "outbox", ids["outbox"], operator="ou_admin", reason="duplicate"
-    )
+    second = await ops.resolve("outbox", ids["outbox"], operator="ou_admin", reason="duplicate")
     assert second.outcome == "already_resolved"
     assert second.audit_id == first.audit_id
 
@@ -344,9 +338,7 @@ async def test_audit_rows_recorded_without_payload(
         rows = (
             (
                 await session.execute(
-                    select(DeadLetterAction).where(
-                        DeadLetterAction.target_id == ids["outbox"]
-                    )
+                    select(DeadLetterAction).where(DeadLetterAction.target_id == ids["outbox"])
                 )
             )
             .scalars()
@@ -398,14 +390,16 @@ async def test_query_source_isolation(
 
 class TestClassificationExtra:
     def test_http_500_is_retryable(self) -> None:
-        assert classify_error_code(
-            "HTTPStatusError", "Server error '500 Internal Server Error'"
-        ) is DeadLetterReason.NETWORK
+        assert (
+            classify_error_code("HTTPStatusError", "Server error '500 Internal Server Error'")
+            is DeadLetterReason.NETWORK
+        )
 
     def test_http_409_is_business_conflict(self) -> None:
-        assert classify_error_code(
-            "HTTPStatusError", "Client error '409 Conflict'"
-        ) is DeadLetterReason.BUSINESS_CONFLICT
+        assert (
+            classify_error_code("HTTPStatusError", "Client error '409 Conflict'")
+            is DeadLetterReason.BUSINESS_CONFLICT
+        )
 
 
 async def _seed_pending(factory: async_sessionmaker[AsyncSession]) -> str:
@@ -584,9 +578,7 @@ async def test_events_replay_rejected_by_preflight_conflicts(
 
     ops = DeadLetterOpsService(factory)
     with pytest.raises(DeadLetterConflictError):
-        await ops.replay(
-            "events", event_id, operator="ou_admin", reason="blind replay attempt"
-        )
+        await ops.replay("events", event_id, operator="ou_admin", reason="blind replay attempt")
 
 
 async def test_list_date_range_and_sort(

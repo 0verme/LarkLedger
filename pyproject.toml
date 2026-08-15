@@ -63,9 +63,7 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = [
-  "postgres: integration tests that require TEST_POSTGRES_URL",
-]
+markers = ["postgres: integration tests that require TEST_POSTGRES_URL"]
 
 [tool.coverage.run]
 source = ["lark_ledger"]

@@ -45,18 +45,10 @@ async def sqlite_factory() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession
                 ProcessedEvent(event_id="e-dead", status="dead"),
                 ProcessedEvent(event_id="e-processing", status="processing"),
                 ProcessedEvent(event_id="e-succeeded", status="succeeded"),
-                ReplyOutbox(
-                    message_id="m1", reply_type="text", status="pending", payload_json={}
-                ),
-                ReplyOutbox(
-                    message_id="m2", reply_type="text", status="failed", payload_json={}
-                ),
-                ReplyOutbox(
-                    message_id="m3", reply_type="text", status="dead", payload_json={}
-                ),
-                ReplyOutbox(
-                    message_id="m4", reply_type="text", status="sent", payload_json={}
-                ),
+                ReplyOutbox(message_id="m1", reply_type="text", status="pending", payload_json={}),
+                ReplyOutbox(message_id="m2", reply_type="text", status="failed", payload_json={}),
+                ReplyOutbox(message_id="m3", reply_type="text", status="dead", payload_json={}),
+                ReplyOutbox(message_id="m4", reply_type="text", status="sent", payload_json={}),
                 PendingCommand(
                     user_open_id="ou_u1",
                     confirmation_code="CA0001",

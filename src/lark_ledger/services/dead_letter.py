@@ -291,9 +291,7 @@ class DeadLetterQueryService:
             summary = await self._load_one(session, clean_source, clean_id)
             if summary is None:
                 return None
-            resolved_keys = await self._resolved_keys(
-                session, [(clean_source.value, clean_id)]
-            )
+            resolved_keys = await self._resolved_keys(session, [(clean_source.value, clean_id)])
             summary = self._with_resolved(summary, resolved_keys)
             audit = await self._audit_history(session, clean_source, clean_id)
             detail_data: dict[str, Any] = {}
@@ -466,9 +464,7 @@ class DeadLetterQueryService:
                     "after_status": row.resulting_status,
                     "error_code": row.error_code,
                     "request_id": None,
-                    "created_at": (
-                        row.created_at.isoformat() if row.created_at else None
-                    ),
+                    "created_at": (row.created_at.isoformat() if row.created_at else None),
                 }
                 for row in replay_rows
             )
@@ -540,9 +536,7 @@ class DeadLetterQueryService:
             source=DeadLetterSource.PENDING_COMMANDS.value,
             id=str(row.id),
             status=row.status,
-            state=_STATE_FOR[DeadLetterSource.PENDING_COMMANDS.value].get(
-                row.status, "terminal"
-            ),
+            state=_STATE_FOR[DeadLetterSource.PENDING_COMMANDS.value].get(row.status, "terminal"),
             created_at=row.created_at,
             dead_at=row.updated_at,
             attempts=0,
@@ -673,9 +667,7 @@ class DeadLetterOpsService:
             return await self._replay_outbox(
                 clean_target, operator=operator, reason=reason, request_id=request_id
             )
-        raise DeadLetterUnsupportedError(
-            f"source '{clean_source.value}' does not support replay"
-        )
+        raise DeadLetterUnsupportedError(f"source '{clean_source.value}' does not support replay")
 
     async def _replay_outbox(
         self,
@@ -692,9 +684,7 @@ class DeadLetterOpsService:
             raise DeadLetterNotFoundError(f"invalid outbox id: {outbox_id}") from exc
         async with self._factory() as session:
             row = await session.scalar(
-                select(ReplyOutbox)
-                .where(ReplyOutbox.id == parsed_id)
-                .with_for_update()
+                select(ReplyOutbox).where(ReplyOutbox.id == parsed_id).with_for_update()
             )
             if row is None:
                 raise DeadLetterNotFoundError(f"outbox row not found: {outbox_id}")
@@ -761,9 +751,7 @@ class DeadLetterOpsService:
                 if result.preflight is not None
                 else "unknown"
             )
-            raise DeadLetterConflictError(
-                f"event {event_id} replay rejected by preflight: {codes}"
-            )
+            raise DeadLetterConflictError(f"event {event_id} replay rejected by preflight: {codes}")
         async with self._factory() as session:
             audit = self._new_action(
                 source=DeadLetterSource.EVENTS,
@@ -814,9 +802,7 @@ class DeadLetterOpsService:
         async with self._factory() as session:
             row = await self._load_for_resolve(session, clean_source, clean_target)
             if row is None:
-                raise DeadLetterNotFoundError(
-                    f"{clean_source.value} row not found: {clean_target}"
-                )
+                raise DeadLetterNotFoundError(f"{clean_source.value} row not found: {clean_target}")
             before = str(getattr(row, "status", "unknown"))
             existing = await session.scalar(
                 select(DeadLetterAction)
@@ -931,9 +917,7 @@ class DeadLetterOpsService:
         )
 
 
-def _resolve_status_filter(
-    state: str | None, status: str | None
-) -> frozenset[str] | None:
+def _resolve_status_filter(state: str | None, status: str | None) -> frozenset[str] | None:
     """Map the unified ``state`` filter to concrete source statuses.
 
     An explicit ``status`` filter wins over ``state``; ``None`` means no status

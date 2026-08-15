@@ -98,9 +98,7 @@ async def _client(
     factory: async_sessionmaker[AsyncSession], user: str
 ) -> tuple[httpx.AsyncClient, str]:
     auth = DashboardAuthService(settings(), factory)
-    created = await auth.create_session(
-        {"open_id": user, "name": user, "avatar_url": ""}
-    )
+    created = await auth.create_session({"open_id": user, "name": user, "avatar_url": ""})
     app = FastAPI()
     app.state.settings = settings()
     app.state.session_factory = factory
@@ -190,9 +188,7 @@ async def test_unauthenticated_and_normal_user_forbidden(
 
     user_client, user_csrf = await _client(factory, "ou_user")
     async with user_client:
-        assert (
-            await user_client.get("/api/web/v1/admin/dead-letters")
-        ).status_code == 403
+        assert (await user_client.get("/api/web/v1/admin/dead-letters")).status_code == 403
         assert (
             await user_client.get(f"/api/web/v1/admin/dead-letters/outbox/{outbox_id}")
         ).status_code == 403
@@ -233,26 +229,19 @@ async def test_admin_list_detail_and_filters(
         _assert_no_secrets(data, "list")
 
         # source filter
-        events_only = await admin_client.get(
-            "/api/web/v1/admin/dead-letters?source=events"
-        )
+        events_only = await admin_client.get("/api/web/v1/admin/dead-letters?source=events")
         assert events_only.json()["total"] == 1
         assert events_only.json()["items"][0]["source"] == "events"
 
         # reason filter
-        rejected = await admin_client.get(
-            "/api/web/v1/admin/dead-letters?reason=remote_rejected"
-        )
+        rejected = await admin_client.get("/api/web/v1/admin/dead-letters?reason=remote_rejected")
         assert rejected.json()["total"] == 2
         assert all(
-            item["reason_category"] == "remote_rejected"
-            for item in rejected.json()["items"]
+            item["reason_category"] == "remote_rejected" for item in rejected.json()["items"]
         )
 
         # retryable filter
-        retryable = await admin_client.get(
-            "/api/web/v1/admin/dead-letters?retryable=true"
-        )
+        retryable = await admin_client.get("/api/web/v1/admin/dead-letters?retryable=true")
         assert retryable.json()["total"] == 0
 
         # pagination
@@ -263,9 +252,7 @@ async def test_admin_list_detail_and_filters(
         assert len(paged.json()["items"]) == 1
 
         # detail
-        detail = await admin_client.get(
-            f"/api/web/v1/admin/dead-letters/outbox/{outbox_id}"
-        )
+        detail = await admin_client.get(f"/api/web/v1/admin/dead-letters/outbox/{outbox_id}")
         assert detail.status_code == 200
         detail_data = detail.json()
         assert detail_data["reason_category"] == "remote_rejected"
@@ -277,9 +264,7 @@ async def test_admin_list_detail_and_filters(
 
         # detail not found
         assert (
-            await admin_client.get(
-                f"/api/web/v1/admin/dead-letters/outbox/{uuid.uuid4()}"
-            )
+            await admin_client.get(f"/api/web/v1/admin/dead-letters/outbox/{uuid.uuid4()}")
         ).status_code == 404
 
         # event detail exposes no payload / user id
@@ -324,9 +309,7 @@ async def test_admin_replay_flow(
             rows = (
                 (
                     await session.execute(
-                        select(DeadLetterAction).where(
-                            DeadLetterAction.target_id == outbox_id
-                        )
+                        select(DeadLetterAction).where(DeadLetterAction.target_id == outbox_id)
                     )
                 )
                 .scalars()
@@ -369,9 +352,7 @@ async def test_admin_resolve_idempotent_and_audited(
         assert second.json()["outcome"] == "already_resolved"
 
         # detail shows resolved marker + audit history
-        detail = await admin_client.get(
-            f"/api/web/v1/admin/dead-letters/outbox/{outbox_id}"
-        )
+        detail = await admin_client.get(f"/api/web/v1/admin/dead-letters/outbox/{outbox_id}")
         assert detail.json()["resolved"] is True
         assert len(detail.json()["audit"]) == 1
         _assert_no_secrets(detail.json(), "resolved detail")
@@ -435,9 +416,7 @@ async def test_security_redaction_across_endpoints(
         assert "sk-live-" not in (summary or "")
         assert "hunter2" not in (summary or "")
 
-        detail = await admin_client.get(
-            f"/api/web/v1/admin/dead-letters/outbox/{outbox_id}"
-        )
+        detail = await admin_client.get(f"/api/web/v1/admin/dead-letters/outbox/{outbox_id}")
         _assert_no_secrets(detail.json(), "detail with poisoned summary")
         detail_summary = detail.json()["last_error_summary"]
         assert "supersecretpw" not in (detail_summary or "")

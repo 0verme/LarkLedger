@@ -123,7 +123,12 @@ const groups: Array<{ label?: string; items: NavItem[] }> = [
 		items: [
 			{ label: "登录会话", path: "/sessions", icon: MonitorSmartphone },
 			{ label: "API 令牌", path: "/api-tokens", icon: KeyRound },
-			{ label: "健康状态", path: "/admin/health", icon: HeartPulse, admin: true },
+			{
+				label: "健康状态",
+				path: "/admin/health",
+				icon: HeartPulse,
+				admin: true,
+			},
 			{ label: "配置", path: "/admin/config", icon: Settings, admin: true },
 			{ label: "关于", path: "/about", icon: ShieldCheck },
 		],
@@ -236,10 +241,7 @@ function LedgerNameDialog({
 					<button type="button" onClick={onClose} disabled={busy}>
 						取消
 					</button>
-					<button
-						className="primary-small"
-						disabled={busy || !name.trim()}
-					>
+					<button className="primary-small" disabled={busy || !name.trim()}>
 						创建
 					</button>
 				</div>
@@ -394,29 +396,32 @@ function Shell({ me }: { me: Me }) {
 						<strong>{pageNames.get(location.pathname) ?? "页面"}</strong>
 					</div>
 				</header>
-			<main className="content">
-				<Routes>
-					{visibleGroups
-						.flatMap((group) => group.items)
-						.map((item) => (
-							<Route
-								key={item.path}
-								path={item.path}
-								element={pageElement(item)}
-							/>
-						))}
-					<Route path="/transactions" element={<TransactionsRedirect />} />
-					<Route path="/transactions/:id" element={<TransactionsRedirect />} />
-					<Route path="*" element={<Navigate to="/" replace />} />
-				</Routes>
-			</main>
-			<button
-				className="quick-add-fab"
-				aria-label="记一笔"
-				onClick={() => navigate("/entries?new=1")}
-			>
-				+
-			</button>
+				<main className="content">
+					<Routes>
+						{visibleGroups
+							.flatMap((group) => group.items)
+							.map((item) => (
+								<Route
+									key={item.path}
+									path={item.path}
+									element={pageElement(item)}
+								/>
+							))}
+						<Route path="/transactions" element={<TransactionsRedirect />} />
+						<Route
+							path="/transactions/:id"
+							element={<TransactionsRedirect />}
+						/>
+						<Route path="*" element={<Navigate to="/" replace />} />
+					</Routes>
+				</main>
+				<button
+					className="quick-add-fab"
+					aria-label="记一笔"
+					onClick={() => navigate("/entries?new=1")}
+				>
+					+
+				</button>
 			</div>
 		</div>
 	);
