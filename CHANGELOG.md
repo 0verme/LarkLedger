@@ -2,6 +2,39 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [0.13.0] - 2026-08-15
+
+### Web Experience / Design System (P45)
+
+- **DeRouter-inspired design system**：以 calm、minimal、premium SaaS 视觉语言建立全站统一 design tokens（语义色板 `--bg` / `--surface-glass` / `--text` 等），统一 Button / Input / Table / Dialog / Drawer / Toast / Badge / Charts 等组件质感，`theme-color` 同步更新为低饱和浅色基调。
+- **Dashboard Hero**：新首页 Hero 区（低饱和渐变 glow + 玻璃白卡片），关键业务入口与 KPI 保持可见，桌面 / 平板 / 移动断点布局稳定。
+- **Accessibility 修复**：恢复明显的 `focus-visible` 焦点环，改善表单键盘焦点路径；修复移动端（≤800px）Quick Entry FAB（`quick-add-fab`）回归，恢复快速记账入口。
+
+### Presentation Polish：Money / Empty / Loading (P45)
+
+- **金额展示统一**：扩展 `money(value, currency)`（默认 CNY），revision 时间线、AI 确认预览、图表 tooltip 等不再直接输出裸金额；目标 / 周期账单 / 待确认预览传入各自 `currency`，不改变业务语义。
+- **空状态统一**：新增 `web/src/components/States.tsx`（`EmptyState` / `PageSkeleton` / `TableSkeleton`），全站 16+ 处空状态收敛为同一视觉语言；Admin / Ops 页保留系统语气（「没有匹配的…」），Reports 页错误态与空数据态明确拆分。
+- **加载态统一**：页面级统一 `PageSkeleton`、表格/列表级 `TableSkeleton`（替换文字占位）、抽屉 compact spinner；button busy（`aria-busy`）保持原有语义。
+- **无障碍**：skeleton 带 `role=status` + `aria-label`，骨架不被当作真实内容；CTA 均为原生 button/link。
+- **测试**：`money()` 7 用例、`States` 6 用例；DeadLettersPage loading 断言改为 `role=status`。
+
+### Operations Safety / Dead-letter Admin
+
+- **Concurrent resolve exactly-once audit**：`resolve` 改为对源行 `SELECT ... FOR UPDATE` 行锁，并发 resolve 串行化，同一逻辑操作最多写入一条 `dead_letter_actions` 审计；与并发 replay 也互斥（同一源行锁），审计链清晰。
+- **Delivered outbox 禁止 replay**：`remote_message_id != null`（已投递）的 outbox 记录经 Admin API replay 一律返回 HTTP 409 冲突，避免重复投递已发送的回复；后端判定与 UI `replay_safe` 展示一致。
+- **Admin Dead Letters 专项前端测试**：`DeadLettersPage` 新增 10 个 vitest 用例（列表 / loading / error / empty / 详情抽屉 / 审计历史 / replay 禁用规则 / resolve / 过滤）。
+- **格式归一**：dead-letter / ops 源码与测试统一 ruff/black 格式（无行为变化）。
+
+### Database
+
+- **No new migration in v0.13.0.** Alembic head 保持 `20260814_0028_dead_letter_actions`，生产 schema 无变化。
+
+### Upgrade
+
+1. 使用固定版本镜像 `ghcr.io/0verme/larkledger:0.13.0`（同时发布 `0.13` 与 `latest`，digest 一致，以 GitHub Release workflow 输出为准）。
+2. 无需数据库 migration；部署后确认 `/readyz` migration 组件仍为 `20260814_0028`。
+3. 行为变化：对已投递 outbox 调用 `POST /admin/dead-letters/outbox/{id}/replay` 现在返回 409（此前会尝试重放）；请改用 `resolve`。
+
 ## [0.12.0] - 2026-08-14
 
 ### Dead-letter Operations / Backlog Hygiene (P44)

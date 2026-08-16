@@ -16,7 +16,13 @@ const MAX_AI_TEXT = 500;
 
 export type AIEntryStatus = AIEntryResult["status"];
 
-function ResultPanel({ result, onClear }: { result: AIEntryResult; onClear: () => void }) {
+function ResultPanel({
+	result,
+	onClear,
+}: {
+	result: AIEntryResult;
+	onClear: () => void;
+}) {
 	switch (result.status) {
 		case "executed":
 		case "query_result":
@@ -25,7 +31,9 @@ function ResultPanel({ result, onClear }: { result: AIEntryResult; onClear: () =
 					<Check size={16} />
 					<p>
 						{result.message}
-						{result.replayed ? <small>（已按原请求返回，未重复记账）</small> : null}
+						{result.replayed ? (
+							<small>（已按原请求返回，未重复记账）</small>
+						) : null}
 					</p>
 				</div>
 			);
@@ -36,7 +44,9 @@ function ResultPanel({ result, onClear }: { result: AIEntryResult; onClear: () =
 					<p>
 						<strong>需要补充信息</strong>
 						<span>{result.message}</span>
-						<small>补充后直接修改上方输入内容再发送，例如：「记一笔 28 支出」。</small>
+						<small>
+							补充后直接修改上方输入内容再发送，例如：「记一笔 28 支出」。
+						</small>
 					</p>
 				</div>
 			);
@@ -48,7 +58,9 @@ function ResultPanel({ result, onClear }: { result: AIEntryResult; onClear: () =
 						<strong>这项操作需要确认</strong>
 						<span>{result.message}</span>
 						{result.expires_at ? (
-							<small>确认单将在 {new Date(result.expires_at).toLocaleString()} 过期。</small>
+							<small>
+								确认单将在 {new Date(result.expires_at).toLocaleString()} 过期。
+							</small>
 						) : null}
 					</p>
 				</div>
@@ -59,11 +71,14 @@ function ResultPanel({ result, onClear }: { result: AIEntryResult; onClear: () =
 					<AlertTriangle size={16} />
 					<p>
 						{result.message}
-						<small>
-							请求编号：{result.request_id}（供排查，不会影响使用）
-						</small>
+						<small>请求编号：{result.request_id}（供排查，不会影响使用）</small>
 					</p>
-					<button type="button" className="ai-result-close" onClick={onClear} aria-label="关闭">
+					<button
+						type="button"
+						className="ai-result-close"
+						onClick={onClear}
+						aria-label="关闭"
+					>
 						<X size={14} />
 					</button>
 				</div>
@@ -90,24 +105,31 @@ function ConfirmationDialog({
 			<div className="confirm-dialog ai-confirm">
 				<h3>确认操作</h3>
 				<p className="ai-confirm-copy">
-					你确认要执行这次 AI 记账操作吗？{result.risk ? "（高风险操作需要确认。）" : ""}
+					你确认要执行这次 AI 记账操作吗？
+					{result.risk ? "（高风险操作需要确认。）" : ""}
 				</p>
 				{result.preview ? (
 					<div className="ai-preview">
 						{typeof result.preview.items === "object" &&
 						Array.isArray(result.preview.items) &&
 						result.preview.items.length ? (
-							(result.preview.items as Array<{
-								label?: string;
-								amount?: string;
-								direction?: string;
-								category?: string;
-								note?: string;
-							}>).map((item, index) => (
+							(
+								result.preview.items as Array<{
+									label?: string;
+									amount?: string;
+									direction?: string;
+									category?: string;
+									note?: string;
+								}>
+							).map((item, index) => (
 								<div key={index}>
 									<span>{item.label ?? item.category ?? "账目"}</span>
 									<b>
-										{item.direction === "income" ? "+" : item.direction === "expense" ? "-" : ""}
+										{item.direction === "income"
+											? "+"
+											: item.direction === "expense"
+												? "-"
+												: ""}
 										{item.amount ? money(item.amount) : ""}
 									</b>
 								</div>
@@ -125,7 +147,12 @@ function ConfirmationDialog({
 					<button type="button" onClick={onCancel} disabled={busy}>
 						取消
 					</button>
-					<button className="danger-solid" onClick={onConfirm} disabled={busy} aria-busy={busy}>
+					<button
+						className="danger-solid"
+						onClick={onConfirm}
+						disabled={busy}
+						aria-busy={busy}
+					>
 						{busy ? "处理中…" : "确认执行"}
 					</button>
 				</div>
@@ -174,9 +201,12 @@ export function AIEntryPanel({ onDone }: { onDone: () => void }) {
 
 	const cancel = useMutation({
 		mutationFn: async (confirmationId: string) => {
-			await api<PendingActionResponse>(`/pending/${encodeURIComponent(confirmationId)}/cancel`, {
-				method: "POST",
-			});
+			await api<PendingActionResponse>(
+				`/pending/${encodeURIComponent(confirmationId)}/cancel`,
+				{
+					method: "POST",
+				},
+			);
 		},
 		onSuccess: () => {
 			setResult(null);
@@ -204,7 +234,11 @@ export function AIEntryPanel({ onDone }: { onDone: () => void }) {
 					value={text}
 					onChange={(event) => setText(event.target.value)}
 					onKeyDown={(event) => {
-						if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+						if (
+							event.key === "Enter" &&
+							!event.shiftKey &&
+							!event.nativeEvent.isComposing
+						) {
 							event.preventDefault();
 							send();
 						}
@@ -225,7 +259,11 @@ export function AIEntryPanel({ onDone }: { onDone: () => void }) {
 						disabled={busy || !trimmed}
 						aria-busy={submit.isPending}
 					>
-						{submit.isPending ? <Loader2 className="spin" size={15} /> : <Send size={15} />}
+						{submit.isPending ? (
+							<Loader2 className="spin" size={15} />
+						) : (
+							<Send size={15} />
+						)}
 						{submit.isPending ? "解析中…" : "发送"}
 					</button>
 				</div>
@@ -243,7 +281,11 @@ export function AIEntryPanel({ onDone }: { onDone: () => void }) {
 				<ConfirmationDialog
 					result={result}
 					busy={busy}
-					error={confirm.error || cancel.error ? errorText(confirm.error ?? cancel.error) : undefined}
+					error={
+						confirm.error || cancel.error
+							? errorText(confirm.error ?? cancel.error)
+							: undefined
+					}
 					onConfirm={() => confirm.mutate(confirmationId)}
 					onCancel={() => cancel.mutate(confirmationId)}
 				/>

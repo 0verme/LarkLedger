@@ -9,11 +9,7 @@ import {
 	Smartphone,
 	XCircle,
 } from "lucide-react";
-import {
-	sessionApi,
-	type CurrentSession,
-	type WebSession,
-} from "../api";
+import { sessionApi, type CurrentSession, type WebSession } from "../api";
 import { TableSkeleton } from "../components/States";
 
 function DeviceIcon({ device }: { device: string }) {
@@ -143,9 +139,7 @@ export function SessionsPage() {
 					<div className="avatar large">{me.data.name.slice(0, 1)}</div>
 					<div>
 						<strong>{me.data.name}</strong>
-						<span>
-							{me.data.role === "ADMIN" ? "管理员" : "用户"} · 已登录
-						</span>
+						<span>{me.data.role === "ADMIN" ? "管理员" : "用户"} · 已登录</span>
 						<span className="session-expiry">
 							会话有效期至{" "}
 							{new Date(me.data.expires_at).toLocaleString("zh-CN")}
@@ -157,12 +151,11 @@ export function SessionsPage() {
 			<section className="panel">
 				<div className="panel-head">
 					<h2>
-						已登录设备{" "}
-						<span className="count-badge">{activeCount}</span>
+						已登录设备 <span className="count-badge">{activeCount}</span>
 					</h2>
 					<p>
-						<ShieldCheck size={14} /> 服务器仅保存会话摘要，浏览器持有
-						HttpOnly Cookie 明文
+						<ShieldCheck size={14} /> 服务器仅保存会话摘要，浏览器持有 HttpOnly
+						Cookie 明文
 					</p>
 				</div>
 				{sessions.isLoading ? (

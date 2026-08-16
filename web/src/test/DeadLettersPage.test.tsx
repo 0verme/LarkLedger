@@ -10,7 +10,12 @@ import type {
 } from "../api";
 import { DeadLettersPage } from "../pages/AdminPages";
 
-function renderPage(fetchMock: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+function renderPage(
+	fetchMock: (
+		input: RequestInfo | URL,
+		init?: RequestInit,
+	) => Promise<Response>,
+) {
 	const mock = vi.fn(fetchMock);
 	vi.stubGlobal("fetch", mock);
 	const client = new QueryClient({
@@ -84,14 +89,17 @@ function sourceSelect() {
 describe("DeadLettersPage", () => {
 	it("renders summary cards, table rows and replayability badges", async () => {
 		renderPage(listOnlyMock([unsafeEvent, safeOutbox]));
-		expect(await screen.findByRole("heading", { name: "Dead Letters" })).toBeInTheDocument();
+		expect(
+			await screen.findByRole("heading", { name: "Dead Letters" }),
+		).toBeInTheDocument();
 		expect(await screen.findByText("共 2 项")).toBeInTheDocument();
 		// summary cards: per-source counts + derived buckets
 		const eventCards = screen.getAllByText("事件");
 		expect(eventCards.some((el) => el.tagName === "H3")).toBe(true);
 		const eventCount = eventCards
 			.find((el) => el.tagName === "H3")!
-			.closest("section")!.querySelector("span")!;
+			.closest("section")!
+			.querySelector("span")!;
 		expect(eventCount).toHaveTextContent("1");
 		expect(screen.getByText("可重试")).toBeInTheDocument();
 		expect(screen.getByText("需人工审查")).toBeInTheDocument();
@@ -134,7 +142,9 @@ describe("DeadLettersPage", () => {
 			}
 			return Promise.resolve(Response.json({}));
 		});
-		expect(await screen.findByRole("heading", { name: "加载失败" })).toBeInTheDocument();
+		expect(
+			await screen.findByRole("heading", { name: "加载失败" }),
+		).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "重试" }));
 		expect(await screen.findByText("outbox01")).toBeInTheDocument();
 		expect(calls).toBeGreaterThanOrEqual(2);
@@ -142,8 +152,12 @@ describe("DeadLettersPage", () => {
 
 	it("shows the empty state when nothing matches", async () => {
 		renderPage(listOnlyMock([]));
-		expect(await screen.findByRole("heading", { name: "没有匹配的 Dead Letter" })).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "详情" })).not.toBeInTheDocument();
+		expect(
+			await screen.findByRole("heading", { name: "没有匹配的 Dead Letter" }),
+		).toBeInTheDocument();
+		expect(
+			screen.queryByRole("button", { name: "详情" }),
+		).not.toBeInTheDocument();
 	});
 
 	it("opens the detail drawer with audit history", async () => {
@@ -182,10 +196,14 @@ describe("DeadLettersPage", () => {
 			return Promise.resolve(Response.json({}));
 		});
 		fireEvent.click(await screen.findByRole("button", { name: "详情" }));
-		expect(await screen.findByRole("heading", { name: /outbox: outbox01/ })).toBeInTheDocument();
+		expect(
+			await screen.findByRole("heading", { name: /outbox: outbox01/ }),
+		).toBeInTheDocument();
 		expect(screen.getByText("Connection reset")).toBeInTheDocument();
 		// audit history renders operator and reason
-		expect(await screen.findByRole("heading", { name: "审计历史" })).toBeInTheDocument();
+		expect(
+			await screen.findByRole("heading", { name: "审计历史" }),
+		).toBeInTheDocument();
 		expect(screen.getByText("ou_admin")).toBeInTheDocument();
 		expect(screen.getByText("historical fixture")).toBeInTheDocument();
 	});
@@ -199,7 +217,9 @@ describe("DeadLettersPage", () => {
 		renderPage((input) => {
 			const url = String(input);
 			if (url.endsWith("/admin/dead-letters/events/evt-400")) {
-				return Promise.resolve(Response.json({ ...terminal, event_id: "evt-400", audit: [] }));
+				return Promise.resolve(
+					Response.json({ ...terminal, event_id: "evt-400", audit: [] }),
+				);
 			}
 			if (url.includes("/admin/dead-letters")) {
 				return Promise.resolve(Response.json(pagePayload([terminal])));
@@ -211,7 +231,9 @@ describe("DeadLettersPage", () => {
 		// terminal rows are not replayable, and the reason field is empty anyway
 		expect(replayButton).toBeDisabled();
 		expect(replayButton).toHaveAttribute("title", "该记录不可重放");
-		const resolveButton = screen.getByRole("button", { name: "解决（不重放）" });
+		const resolveButton = screen.getByRole("button", {
+			name: "解决（不重放）",
+		});
 		expect(resolveButton).toBeDisabled(); // reason too short
 		fireEvent.change(screen.getByPlaceholderText(/记录调查结论/), {
 			target: { value: "investigated and closed" },
@@ -224,7 +246,9 @@ describe("DeadLettersPage", () => {
 		renderPage((input) => {
 			const url = String(input);
 			if (url.endsWith("/admin/dead-letters/outbox/outbox01")) {
-				return Promise.resolve(Response.json({ ...safeOutbox, event_id: null, audit: [] }));
+				return Promise.resolve(
+					Response.json({ ...safeOutbox, event_id: null, audit: [] }),
+				);
 			}
 			if (url.includes("/admin/dead-letters")) {
 				return Promise.resolve(Response.json(pagePayload([safeOutbox])));
@@ -258,11 +282,16 @@ describe("DeadLettersPage", () => {
 		};
 		renderPage((input, init) => {
 			const url = String(input);
-			if (url.endsWith("/admin/dead-letters/outbox/outbox01/replay") && init?.method === "POST") {
+			if (
+				url.endsWith("/admin/dead-letters/outbox/outbox01/replay") &&
+				init?.method === "POST"
+			) {
 				return Promise.resolve(Response.json(action));
 			}
 			if (url.endsWith("/admin/dead-letters/outbox/outbox01")) {
-				return Promise.resolve(Response.json({ ...safeOutbox, event_id: null, audit: [] }));
+				return Promise.resolve(
+					Response.json({ ...safeOutbox, event_id: null, audit: [] }),
+				);
 			}
 			if (url.includes("/admin/dead-letters")) {
 				return Promise.resolve(Response.json(pagePayload([safeOutbox])));
@@ -275,13 +304,19 @@ describe("DeadLettersPage", () => {
 		});
 		fireEvent.click(await screen.findByRole("button", { name: "重放" }));
 		expect(
-			await screen.findByText("回复已重新入队，将由回复 Worker 按正常租约路径投递"),
+			await screen.findByText(
+				"回复已重新入队，将由回复 Worker 按正常租约路径投递",
+			),
 		).toBeInTheDocument();
 		const mock = vi.mocked(fetch);
 		const post = mock.mock.calls.find((call) => call[1]?.method === "POST");
 		expect(post).toBeDefined();
-		expect(String(post![0])).toContain("/admin/dead-letters/outbox/outbox01/replay");
-		expect(JSON.parse(String(post![1]?.body))).toEqual({ reason: "dependency recovered" });
+		expect(String(post![0])).toContain(
+			"/admin/dead-letters/outbox/outbox01/replay",
+		);
+		expect(JSON.parse(String(post![1]?.body))).toEqual({
+			reason: "dependency recovered",
+		});
 	});
 
 	it("resolves without replaying and marks the item resolved", async () => {
@@ -297,11 +332,16 @@ describe("DeadLettersPage", () => {
 		};
 		renderPage((input, init) => {
 			const url = String(input);
-			if (url.endsWith("/admin/dead-letters/events/evt-400/resolve") && init?.method === "POST") {
+			if (
+				url.endsWith("/admin/dead-letters/events/evt-400/resolve") &&
+				init?.method === "POST"
+			) {
 				return Promise.resolve(Response.json(action));
 			}
 			if (url.endsWith("/admin/dead-letters/events/evt-400")) {
-				return Promise.resolve(Response.json({ ...unsafeEvent, event_id: "evt-400", audit: [] }));
+				return Promise.resolve(
+					Response.json({ ...unsafeEvent, event_id: "evt-400", audit: [] }),
+				);
 			}
 			if (url.includes("/admin/dead-letters")) {
 				return Promise.resolve(Response.json(pagePayload([unsafeEvent])));
@@ -312,7 +352,9 @@ describe("DeadLettersPage", () => {
 		fireEvent.change(await screen.findByPlaceholderText(/记录调查结论/), {
 			target: { value: "permanent failure, acknowledge" },
 		});
-		fireEvent.click(await screen.findByRole("button", { name: "解决（不重放）" }));
+		fireEvent.click(
+			await screen.findByRole("button", { name: "解决（不重放）" }),
+		);
 		expect(
 			await screen.findByText("已记录解决标记；源记录保留，仅用于审计追溯"),
 		).toBeInTheDocument();
@@ -320,7 +362,9 @@ describe("DeadLettersPage", () => {
 		const mock = vi.mocked(fetch);
 		const post = mock.mock.calls.find((call) => call[1]?.method === "POST");
 		expect(post).toBeDefined();
-		expect(String(post![0])).toContain("/admin/dead-letters/events/evt-400/resolve");
+		expect(String(post![0])).toContain(
+			"/admin/dead-letters/events/evt-400/resolve",
+		);
 		expect(JSON.parse(String(post![1]?.body))).toEqual({
 			reason: "permanent failure, acknowledge",
 		});

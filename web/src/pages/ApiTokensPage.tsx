@@ -293,7 +293,10 @@ export function ApiTokensPage() {
 						<h3>撤销令牌「{revoking.name}」？</h3>
 						<p>撤销后立即失效，使用该令牌的程序将无法再访问账本。</p>
 						<div>
-							<button onClick={() => setRevoking(null)} disabled={revoke.isPending}>
+							<button
+								onClick={() => setRevoking(null)}
+								disabled={revoke.isPending}
+							>
 								取消
 							</button>
 							<button
