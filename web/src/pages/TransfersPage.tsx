@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeftRight, Plus, RotateCcw, X } from "lucide-react";
+import { ArrowLeftRight, Loader2, Plus, RotateCcw, X } from "lucide-react";
 import { api, localTime, money, type AccountList, type TransferDetail, type TransferPage } from "../api";
+import { EmptyState, PageSkeleton } from "../components/States";
 
 export function TransfersPage() {
   const client = useQueryClient();
@@ -37,7 +38,7 @@ export function TransfersPage() {
       window.setTimeout(() => setNotice(""), 2400);
     },
   });
-  if (transfers.isLoading) return <div className="page-skeleton"><div /><div /></div>;
+  if (transfers.isLoading) return <PageSkeleton rows={2} />;
   if (transfers.isError || !transfers.data) {
     return <div className="state-panel"><h3>转账加载失败</h3><button onClick={() => transfers.refetch()}>重试</button></div>;
   }
@@ -51,7 +52,7 @@ export function TransfersPage() {
         <button className="primary-small" onClick={() => setCreating(true)} disabled={!accounts.data?.items.length}><Plus size={16} /> 新建转账</button>
       </div>
       {rows.length === 0 ? (
-        <div className="empty-ledger"><ArrowLeftRight size={30} /><h3>还没有转账</h3><p>在两个账户之间转移资金，不会计入收入或支出</p></div>
+        <EmptyState icon={<ArrowLeftRight size={30} />} title="还没有转账" description="在两个账户之间转移资金，不会计入收入或支出。" />
       ) : (
         <section className="table-panel">
           <div className="table-scroll"><table><thead><tr><th>时间</th><th>转出</th><th>转入</th><th>金额</th><th>备注</th><th>状态</th></tr></thead><tbody>
@@ -81,7 +82,7 @@ export function TransfersPage() {
           <button className="drawer-scrim" onClick={() => setSelected(null)} aria-label="关闭转账详情" />
           <aside className="entry-drawer pending-drawer">
             <button className="drawer-close" onClick={() => setSelected(null)} aria-label="关闭"><X /></button>
-            {detail.isLoading ? <div className="drawer-loading">加载详情…</div> : detail.isError || !current ? <div className="state-panel"><h3>转账不存在</h3></div> : (
+            {detail.isLoading ? <div className="drawer-loading"><Loader2 className="spin" size={16} /> 加载详情…</div> : detail.isError || !current ? <div className="state-panel"><h3>转账不存在</h3></div> : (
               <>
                 <div className="drawer-title">
                   <span className={`status-dot ${current.reversed_at ? "deleted" : ""}`}>{current.reversed_at ? "已撤销" : "有效"}</span>
@@ -97,7 +98,7 @@ export function TransfersPage() {
                 </dl>
                 {!current.reversed_at && <div className="drawer-actions"><button className="danger" disabled={reverse.isPending} onClick={() => reverse.mutate(current.id)}><RotateCcw size={16} /> 撤销转账</button></div>}
                 {reverse.error && <p className="form-error">{reverse.error.message}</p>}
-                <section className="revision-section"><h3>操作记录</h3>{detail.data?.revisions.length ? detail.data.revisions.map((revision) => <article key={revision.id}><i /><div><strong>{{ create: "创建", update: "修改", reverse: "撤销" }[revision.change_type]}</strong><time>{localTime(revision.created_at)}</time>{revision.change_type === "update" && <p>金额 {String(revision.before.amount)} → {String(revision.after.amount)}</p>}</div></article>) : <p className="muted-empty">暂无操作记录</p>}</section>
+                <section className="revision-section"><h3>操作记录</h3>{detail.data?.revisions.length ? detail.data.revisions.map((revision) => <article key={revision.id}><i /><div><strong>{{ create: "创建", update: "修改", reverse: "撤销" }[revision.change_type]}</strong><time>{localTime(revision.created_at)}</time>{revision.change_type === "update" && <p>金额 {money(String(revision.before.amount))} → {money(String(revision.after.amount))}</p>}</div></article>) : <p className="muted-empty">暂无操作记录</p>}</section>
               </>
             )}
           </aside>

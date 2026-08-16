@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, CheckCircle2, Flag, Pencil, Plus, Target, Trash2, TrendingUp } from "lucide-react";
 import { api, money, type Account, type AccountList, type Goal, type GoalCreateInput, type GoalList, type GoalUpdateInput } from "../api";
+import { EmptyState, PageSkeleton } from "../components/States";
 
 function progressTone(percent: number, reached: boolean): string {
   if (reached) return "reached";
@@ -59,7 +60,7 @@ export function GoalsPage() {
       action.mutate({ path: "/goals", method: "POST", body });
     }
   };
-  if (goals.isLoading) return <div className="page-skeleton"><div /><div /></div>;
+  if (goals.isLoading) return <PageSkeleton rows={2} />;
   if (goals.isError || !goals.data) {
     return <div className="state-panel"><h3>目标加载失败</h3><button onClick={() => goals.refetch()}>重试</button></div>;
   }
@@ -74,7 +75,7 @@ export function GoalsPage() {
         <button className="primary-small" onClick={() => setEditing({ goalId: null, form: emptyForm(accountOptions) })}><Plus size={16} /> 创建目标</button>
       </div>
       {items.length === 0 ? (
-        <div className="empty-ledger"><Flag size={30} /><h3>还没有财务目标</h3><p>在 Web 端创建“应急储备 60000”，进度来自真实账户余额，不用手动记账。</p><button className="primary-small" onClick={() => setEditing({ goalId: null, form: emptyForm(accountOptions) })}><Plus size={15} /> 创建目标</button></div>
+        <EmptyState icon={<Flag size={30} />} title="还没有财务目标" description="在 Web 端创建“应急储备 60000”，进度来自真实账户余额，不用手动记账。" action={<button className="primary-small" onClick={() => setEditing({ goalId: null, form: emptyForm(accountOptions) })}><Plus size={15} /> 创建目标</button>} />
       ) : (
         <div className="goal-grid">
           {items.map((goal) => {
@@ -98,7 +99,7 @@ export function GoalsPage() {
                 </div>
                 {goal.description && <p className="goal-desc">{goal.description}</p>}
                 <div className="goal-amount">
-                  <strong>{money(goal.current_amount)}</strong><span> / {money(goal.target_amount)}</span>
+                  <strong>{money(goal.current_amount, goal.currency)}</strong><span> / {money(goal.target_amount, goal.currency)}</span>
                 </div>
                 <div className="budget-track" aria-label="目标进度">
                   <i className={tone} style={{ width: `${Math.min(percent, 100)}%` }} />
@@ -113,7 +114,7 @@ export function GoalsPage() {
                   {goal.account_bindings.length > 0
                     ? `账户：${goal.account_bindings.map((b) => b.account_name ?? "未命名").join("、")}`
                     : "未绑定账户"}
-                  {goal.remaining_amount !== null && !goal.is_target_reached && ` · 剩余 ${money(goal.remaining_amount)}`}
+                  {goal.remaining_amount !== null && !goal.is_target_reached && ` · 剩余 ${money(goal.remaining_amount, goal.currency)}`}
                 </p>
                 {goal.is_target_reached && <p className="goal-meta muted-empty">余额可能随后变化，状态由你管理。</p>}
               </article>
@@ -126,7 +127,7 @@ export function GoalsPage() {
           <summary className="panel-title"><h3>已归档目标</h3><span>{archived.length} 个</span></summary>
           <div className="category-list">
             {archived.map((goal) => (
-              <div key={goal.id}><span>{goal.name}</span><b>{money(goal.target_amount)}</b><em>{Number(goal.progress_percent ?? 0).toFixed(0)}%</em></div>
+              <div key={goal.id}><span>{goal.name}</span><b>{money(goal.target_amount, goal.currency)}</b><em>{Number(goal.progress_percent ?? 0).toFixed(0)}%</em></div>
             ))}
           </div>
         </details>

@@ -4,6 +4,7 @@ import { AlertTriangle, Check, Loader2, Send, Sparkles, X } from "lucide-react";
 import {
 	api,
 	errorText,
+	money,
 	newIdempotencyKey,
 	type AIEntryResult,
 	type PendingActionResponse,
@@ -107,7 +108,7 @@ function ConfirmationDialog({
 									<span>{item.label ?? item.category ?? "账目"}</span>
 									<b>
 										{item.direction === "income" ? "+" : item.direction === "expense" ? "-" : ""}
-										{item.amount ?? ""}
+										{item.amount ? money(item.amount) : ""}
 									</b>
 								</div>
 							))

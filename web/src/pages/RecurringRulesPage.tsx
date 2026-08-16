@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Pause, Pencil, Play, Plus, RotateCcw, SkipForward } from "lucide-react";
 import { api, money, type Account, type AccountList, type RecurringFrequency, type RecurringRule, type RecurringRuleCreateInput, type RecurringRuleList } from "../api";
+import { EmptyState, PageSkeleton } from "../components/States";
 
 const frequencyLabels: Record<RecurringFrequency, string> = {
   weekly: "每周",
@@ -70,7 +71,7 @@ export function RecurringRulesPage() {
       action.mutate({ path: "/recurring-rules", method: "POST", body });
     }
   };
-  if (rules.isLoading) return <div className="page-skeleton"><div /><div /></div>;
+  if (rules.isLoading) return <PageSkeleton rows={2} />;
   if (rules.isError || !rules.data) {
     return <div className="state-panel"><h3>周期账单加载失败</h3><button onClick={() => rules.refetch()}>重试</button></div>;
   }
@@ -84,7 +85,7 @@ export function RecurringRulesPage() {
         <button className="primary-small" onClick={() => setEditing({ ruleId: null, form: emptyForm(items, accountsById) })}><Plus size={16} /> 创建周期账单</button>
       </div>
       {items.length === 0 ? (
-        <div className="empty-ledger"><CalendarClock size={30} /><h3>还没有周期账单</h3><p>在飞书里说“每月8号房租3500”，或直接在这里创建。</p><button className="primary-small" onClick={() => setEditing({ ruleId: null, form: emptyForm(items, accountsById) })}><Plus size={15} /> 创建周期账单</button></div>
+        <EmptyState icon={<CalendarClock size={30} />} title="还没有周期账单" description="在飞书里说“每月8号房租3500”，或直接在这里创建。" action={<button className="primary-small" onClick={() => setEditing({ ruleId: null, form: emptyForm(items, accountsById) })}><Plus size={15} /> 创建周期账单</button>} />
       ) : (
         <section className="table-panel">
           <div className="table-scroll"><table><thead><tr><th>名称</th><th>类型</th><th>金额</th><th>账户</th><th>周期</th><th>下次日期</th><th>状态</th><th>操作</th></tr></thead><tbody>
@@ -96,7 +97,7 @@ export function RecurringRulesPage() {
                 <tr key={rule.id}>
                   <td><strong>{label}</strong>{rule.pending_count > 0 && <span className="status-chip warning" style={{ marginLeft: 8 }}>待确认</span>}<div className="table-sub">{rule.category}</div></td>
                   <td>{sign}</td>
-                  <td className={rule.transaction_type === "income" ? "positive" : ""}>{money(rule.amount)}</td>
+                  <td className={rule.transaction_type === "income" ? "positive" : ""}>{money(rule.amount, rule.currency)}</td>
                   <td>{rule.account_name ?? "默认账户"}</td>
                   <td>{frequencyLabels[rule.frequency]}{rule.interval > 1 ? `×${rule.interval}` : ""}</td>
                   <td>{rule.next_occurrence}</td>

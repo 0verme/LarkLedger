@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	ChevronLeft,
 	ChevronRight,
+	Inbox,
+	Loader2,
 	Pencil,
 	Plus,
 	RotateCcw,
@@ -21,6 +23,7 @@ import {
 	type EntryPage,
 } from "../api";
 import { QuickEntryDialog } from "../components/QuickEntryDialog";
+import { EmptyState, TableSkeleton } from "../components/States";
 
 function useDebounced(value: string, delay = 300) {
 	const [result, setResult] = useState(value);
@@ -251,20 +254,26 @@ export function EntriesPage() {
 			</section>
 			<section className="table-panel">
 				{entries.isLoading ? (
-					<div className="table-skeleton">正在加载账目…</div>
+					<TableSkeleton rows={5} />
 				) : entries.isError ? (
 					<div className="state-panel">
 						<h3>账目加载失败</h3>
 						<button onClick={() => entries.refetch()}>重试</button>
 					</div>
 				) : !entries.data?.items.length ? (
-					<div className="empty-ledger">
-						<h3>还没有账目</h3>
-						<p>记下你的第一笔收支吧。</p>
-						<button className="primary-small" onClick={() => setCreating(true)}>
-							<Plus size={16} /> 记一笔
-						</button>
-					</div>
+					<EmptyState
+						icon={<Inbox size={30} />}
+						title="还没有账目"
+						description="记下你的第一笔收支吧。"
+						action={
+							<button
+								className="primary-small"
+								onClick={() => setCreating(true)}
+							>
+								<Plus size={16} /> 记一笔
+							</button>
+						}
+					/>
 				) : (
 					<div className="table-scroll">
 						<table>
@@ -354,7 +363,9 @@ export function EntriesPage() {
 							<X />
 						</button>
 						{detail.isLoading ? (
-							<div className="drawer-loading">加载详情…</div>
+							<div className="drawer-loading">
+								<Loader2 className="spin" size={16} /> 加载详情…
+							</div>
 						) : detail.isError || !current ? (
 							<div className="state-panel">
 								<h3>账目不存在</h3>
@@ -455,7 +466,7 @@ export function EntriesPage() {
 													{revision.change_type === "update" && (
 														<p>
 															{revision.before.amount !== revision.after.amount
-																? `金额 ${String(revision.before.amount)} → ${String(revision.after.amount)}`
+																? `金额 ${money(String(revision.before.amount))} → ${money(String(revision.after.amount))}`
 																: revision.before.account_id !==
 																		revision.after.account_id
 																	? "交易账户已变更"

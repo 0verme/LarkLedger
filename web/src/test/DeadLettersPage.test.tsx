@@ -111,7 +111,9 @@ describe("DeadLettersPage", () => {
 					/* never resolves — keeps the query in the loading state */
 				}),
 		);
-		expect(screen.getByText("正在加载 Dead Letters…")).toBeInTheDocument();
+		expect(
+			screen.getByRole("status", { name: "正在加载" }),
+		).toBeInTheDocument();
 	});
 
 	it("shows an error panel and refetches on retry", async () => {

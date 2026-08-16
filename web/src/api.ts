@@ -671,8 +671,11 @@ export const sessionApi = {
 	logout: () => api<void>("/auth/logout", { method: "POST" }),
 };
 
-export const money = (value: string | number) =>
-	new Intl.NumberFormat("zh-CN", { style: "currency", currency: "CNY" }).format(
+// P45 — 全站唯一年金额 presentation helper。只负责显示格式，
+// 不做浮点运算、不改业务语义。默认账本币种 CNY；
+// 目标 / 周期账单等模型自带 currency 时显式传入。
+export const money = (value: string | number, currency = "CNY") =>
+	new Intl.NumberFormat("zh-CN", { style: "currency", currency }).format(
 		Number(value),
 	);
 

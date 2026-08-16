@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Home, UserPlus, Users } from "lucide-react";
 import { api, type Household, type HouseholdInvitation, type HouseholdList } from "../api";
+import { EmptyState } from "../components/States";
 
 export function HouseholdsPage() {
   const queryClient = useQueryClient();
@@ -25,7 +26,7 @@ export function HouseholdsPage() {
       <div className="dashboard-grid">
         {(households.data?.items ?? []).map((household) => <HouseholdCard key={household.id} household={household} onInvite={inviteMember} onLeave={(id) => leave.mutate(id)} onRemove={(householdId, userId) => remove.mutate({ householdId, userId })} />)}
       </div>
-      {!households.isLoading && !(households.data?.items.length) && <section className="panel empty-ledger"><Users size={28} /><h3>还没有家庭空间</h3><p>创建家庭，或等待已有内部用户发来邀请。</p></section>}
+      {!households.isLoading && !(households.data?.items.length) && <section className="panel"><EmptyState icon={<Users size={28} />} title="还没有家庭空间" description="创建家庭，或等待已有内部用户发来邀请。" /></section>}
     </div>
   );
 }

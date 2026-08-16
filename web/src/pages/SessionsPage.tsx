@@ -14,6 +14,7 @@ import {
 	type CurrentSession,
 	type WebSession,
 } from "../api";
+import { TableSkeleton } from "../components/States";
 
 function DeviceIcon({ device }: { device: string }) {
 	if (/移动端/.test(device)) return <Smartphone size={18} />;
@@ -165,7 +166,7 @@ export function SessionsPage() {
 					</p>
 				</div>
 				{sessions.isLoading ? (
-					<p className="muted-note">正在加载会话列表…</p>
+					<TableSkeleton rows={2} />
 				) : items.length === 0 ? (
 					<p className="muted-note">暂无会话</p>
 				) : (

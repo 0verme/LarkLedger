@@ -17,6 +17,7 @@ import {
 	type ClientCredentialList,
 	type ClientCredentialScope,
 } from "../api";
+import { EmptyState, PageSkeleton } from "../components/States";
 
 const SCOPE_LABELS: Record<ClientCredentialScope, string> = {
 	"ledger:read": "只读（查询账本）",
@@ -209,21 +210,18 @@ export function ApiTokensPage() {
 				</p>
 			</div>
 			{tokens.isLoading ? (
-				<div className="page-skeleton">
-					<div />
-					<div />
-				</div>
+				<PageSkeleton rows={2} />
 			) : tokens.isError || !tokens.data ? (
 				<div className="state-panel">
 					<h3>令牌列表加载失败</h3>
 					<button onClick={() => tokens.refetch()}>重试</button>
 				</div>
 			) : tokens.data.items.length === 0 ? (
-				<div className="empty-ledger">
-					<KeyRound size={30} />
-					<h3>还没有 API 令牌</h3>
-					<p>创建一个令牌给 CLI 或硬件客户端使用</p>
-				</div>
+				<EmptyState
+					icon={<KeyRound size={30} />}
+					title="还没有 API 令牌"
+					description="创建一个令牌给 CLI 或硬件客户端使用。"
+				/>
 			) : (
 				<section className="table-panel">
 					<div className="table-scroll">

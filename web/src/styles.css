@@ -1967,6 +1967,10 @@ td strong {
 	gap: 9px;
 }
 .drawer-loading {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
 	padding: 60px 0;
 	text-align: center;
 	color: var(--text-3);
@@ -2161,6 +2165,9 @@ td strong {
 	color: var(--text-4);
 	margin-bottom: 6px;
 }
+.empty-ledger .empty-action {
+	margin-top: 14px;
+}
 .state-panel button {
 	margin-top: 4px;
 }
@@ -2182,10 +2189,21 @@ td strong {
 	display: grid;
 	gap: 14px;
 }
-.page-skeleton div,
-.table-skeleton {
+.page-skeleton div {
 	min-height: 100px;
 	border-radius: var(--r-lg);
+	background: linear-gradient(90deg, rgba(24, 28, 34, 0.055) 25%, rgba(255, 255, 255, 0.7) 50%, rgba(24, 28, 34, 0.055) 75%);
+	background-size: 200% 100%;
+	animation: shimmer 1.3s infinite;
+	border: 1px solid var(--line-1);
+}
+.table-skeleton {
+	display: grid;
+	gap: 10px;
+}
+.table-skeleton div {
+	height: 34px;
+	border-radius: var(--r-sm);
 	background: linear-gradient(90deg, rgba(24, 28, 34, 0.055) 25%, rgba(255, 255, 255, 0.7) 50%, rgba(24, 28, 34, 0.055) 75%);
 	background-size: 200% 100%;
 	animation: shimmer 1.3s infinite;

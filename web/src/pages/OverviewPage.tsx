@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { AlertTriangle, ArrowDownRight, ArrowUpRight, BellRing, CalendarClock, Users, WalletCards } from "lucide-react";
 import { api, localTime, money, type HouseholdOverview, type Insight, type InsightList } from "../api";
+import { EmptyState, PageSkeleton } from "../components/States";
 
 export function OverviewPage() {
   const query = useQuery({ queryKey: ["overview"], queryFn: () => api<HouseholdOverview>("/overview") });
@@ -10,7 +11,7 @@ export function OverviewPage() {
     queryFn: () => api<InsightList>("/insights?limit=5"),
     enabled: query.isSuccess,
   });
-  if (query.isLoading) return <div className="page-skeleton"><div /><div /><div /></div>;
+  if (query.isLoading) return <PageSkeleton rows={3} />;
   if (query.isError) return <section className="state-panel"><h2>概览暂时不可用</h2><button onClick={() => query.refetch()}>重新加载</button></section>;
   const data = query.data!;
   const isHousehold = data.ledger_kind === "household_shared";
@@ -97,7 +98,7 @@ export function OverviewPage() {
 
       <section className="panel recent-panel">
         <div className="panel-title"><h3>最近交易</h3><span>{data.recent_transactions.length} 笔</span></div>
-        {data.recent_transactions.length ? <div className="recent-list">{data.recent_transactions.map((entry) => <Link key={entry.id} to={`/entries?entry=${entry.short_id}`}><code>#{entry.short_id}</code><span><b>{entry.category}{entry.payer_name ? ` · ${entry.payer_name}` : ""}</b><small>{entry.note || "无备注"} · {localTime(entry.occurred_at)}</small></span><strong className={entry.direction === "income" ? "positive" : ""}>{entry.direction === "income" ? "+" : "-"}{money(entry.amount)}</strong></Link>)}</div> : <div className="empty-ledger"><h3>还没有账目</h3><p>记下你的第一笔收支吧。</p><Link className="primary-small" to="/entries">查看流水</Link></div>}
+        {data.recent_transactions.length ? <div className="recent-list">{data.recent_transactions.map((entry) => <Link key={entry.id} to={`/entries?entry=${entry.short_id}`}><code>#{entry.short_id}</code><span><b>{entry.category}{entry.payer_name ? ` · ${entry.payer_name}` : ""}</b><small>{entry.note || "无备注"} · {localTime(entry.occurred_at)}</small></span><strong className={entry.direction === "income" ? "positive" : ""}>{entry.direction === "income" ? "+" : "-"}{money(entry.amount)}</strong></Link>)}</div> : <EmptyState icon={<ArrowDownRight size={30} />} title="还没有账目" description="记下你的第一笔收支吧。" action={<Link className="primary-small" to="/entries">查看流水</Link>} />}
       </section>
     </div>
   );

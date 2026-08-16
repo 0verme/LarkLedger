@@ -22,6 +22,7 @@ import {
 	type EventReplayResult,
 	type HealthSnapshot,
 } from "../api";
+import { EmptyState, PageSkeleton, TableSkeleton } from "../components/States";
 
 const eventStatuses = [
 	"",
@@ -111,17 +112,17 @@ export function EventsPage() {
 			<div className="table-panel">
 				<div className="table-scroll">
 					{query.isLoading ? (
-						<div className="table-skeleton">正在加载事件…</div>
+						<TableSkeleton rows={4} />
 					) : query.isError ? (
 						<div className="state-panel">
 							<h3>事件加载失败</h3>
 							<button onClick={() => query.refetch()}>重试</button>
 						</div>
 					) : !query.data?.items.length ? (
-						<div className="empty-ledger">
-							<ServerCrash size={28} />
-							<h3>没有匹配的事件</h3>
-						</div>
+						<EmptyState
+							icon={<ServerCrash size={28} />}
+							title="没有匹配的事件"
+						/>
 					) : (
 						<table>
 							<thead>
@@ -209,17 +210,17 @@ export function OutboxPage() {
 			<div className="table-panel">
 				<div className="table-scroll">
 					{query.isLoading ? (
-						<div className="table-skeleton">正在加载回复队列…</div>
+						<TableSkeleton rows={4} />
 					) : query.isError ? (
 						<div className="state-panel">
 							<h3>回复队列加载失败</h3>
 							<button onClick={() => query.refetch()}>重试</button>
 						</div>
 					) : !query.data?.items.length ? (
-						<div className="empty-ledger">
-							<CheckCircle2 size={28} />
-							<h3>没有匹配的回复</h3>
-						</div>
+						<EmptyState
+							icon={<CheckCircle2 size={28} />}
+							title="没有匹配的回复"
+						/>
 					) : (
 						<table>
 							<thead>
@@ -312,8 +313,7 @@ export function DeadPage() {
 		setPreflight(null);
 		setConfirming(false);
 	};
-	if (query.isLoading)
-		return <div className="table-skeleton">正在加载 Dead 队列…</div>;
+	if (query.isLoading) return <TableSkeleton rows={4} />;
 	if (query.isError || !query.data)
 		return (
 			<div className="state-panel">
@@ -505,13 +505,7 @@ export function HealthPage() {
 		queryFn: () => api<HealthSnapshot>("/admin/health"),
 		refetchInterval: 15000,
 	});
-	if (query.isLoading)
-		return (
-			<div className="page-skeleton">
-				<div />
-				<div />
-			</div>
-		);
+	if (query.isLoading) return <PageSkeleton rows={2} />;
 	if (query.isError || !query.data)
 		return (
 			<div className="state-panel">
@@ -793,17 +787,17 @@ export function DeadLettersPage() {
 			<div className="table-panel">
 				<div className="table-scroll">
 					{query.isLoading ? (
-						<div className="table-skeleton">正在加载 Dead Letters…</div>
+						<TableSkeleton rows={4} />
 					) : query.isError ? (
 						<div className="state-panel">
 							<h3>加载失败</h3>
 							<button onClick={() => query.refetch()}>重试</button>
 						</div>
 					) : !query.data?.items.length ? (
-						<div className="empty-ledger">
-							<CheckCircle2 size={28} />
-							<h3>没有匹配的 Dead Letter</h3>
-						</div>
+						<EmptyState
+							icon={<CheckCircle2 size={28} />}
+							title="没有匹配的 Dead Letter"
+						/>
 					) : (
 						<table>
 							<thead>

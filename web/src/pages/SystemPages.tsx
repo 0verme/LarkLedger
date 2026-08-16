@@ -1,13 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { BookOpenCheck, Database, LockKeyhole, ShieldCheck } from "lucide-react";
 import { api, type SafeSystemConfig } from "../api";
+import { PageSkeleton } from "../components/States";
 
 const enabled = (value: boolean) => value ? "已启用" : "未启用";
 const configured = (value: boolean) => value ? "已配置" : "未配置";
 
 export function ConfigPage() {
   const query = useQuery({ queryKey: ["admin-config"], queryFn: () => api<SafeSystemConfig>("/admin/config") });
-  if (query.isLoading) return <div className="page-skeleton"><div /><div /></div>;
+  if (query.isLoading) return <PageSkeleton rows={2} />;
   if (query.isError || !query.data) return <div className="state-panel"><h3>安全配置加载失败</h3><button onClick={() => query.refetch()}>重试</button></div>;
   const config = query.data;
   const rows = [

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, Eye, EyeOff, Landmark, Pencil, Plus, Star } from "lucide-react";
 import { api, money, type Account, type AccountList, type AssetSummary } from "../api";
+import { EmptyState, PageSkeleton } from "../components/States";
 
 type AccountType = "cash" | "asset" | "liability";
 
@@ -42,7 +43,7 @@ export function AccountsPage() {
       window.setTimeout(() => setNotice(""), 2400);
     },
   });
-  if (accounts.isLoading) return <div className="page-skeleton"><div /><div /></div>;
+  if (accounts.isLoading) return <PageSkeleton rows={2} />;
   if (accounts.isError || !accounts.data) {
     return (
       <div className="state-panel">
@@ -69,7 +70,7 @@ export function AccountsPage() {
         </section>
       )}
       {sorted.length === 0 ? (
-        <div className="empty-ledger"><Landmark size={30} /><h3>还没有账户</h3><p>创建一个账户来管理你的资金余额</p></div>
+        <EmptyState icon={<Landmark size={30} />} title="还没有账户" description="创建一个账户来管理你的资金余额。" />
       ) : (
         <section className="table-panel">
           <div className="table-scroll"><table><thead><tr><th>账户</th><th>类型</th><th>余额</th><th>期初余额</th><th>可见性</th><th>状态</th><th>操作</th></tr></thead><tbody>
