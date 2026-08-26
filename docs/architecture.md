@@ -206,6 +206,121 @@ ledger / timezone 全部来自服务端 Session）。首页「直接说一句」
 换行，executed / confirmation_required / clarification_required / error 分别
 渲染成功、确认 Dialog、补充提示和错误（含 request_id）。
 
+## 统一查询事实层（P46 Deterministic Ledger Query Contracts）
+
+P46 为未来的 AI / Assistant 查询（#14 自然语言查询、#15 provenance、#16
+对比/归因）建立**唯一的查询事实入口**。查询语义不再散落在 Feishu 文本路径
+与 Web Dashboard 各自实现中，而是收敛为一套 transport-neutral、deterministic、
+ledger-scoped、privacy-safe 的契约：
+
+```text
+用户语言
+   ↓（#14 的 NL 解析，只负责理解语言）
+QueryIntent（已过 schema 校验的安全意图，extra=forbid）
+   ↓
+QueryPlanner（授权 + 账户名称解析 + 时区/范围归一化，不触库）
+   ↓
+QueryPlan（服务端解析后的确定性执行计划，不含 SQL）
+   ↓
+LedgerQueryService（唯一查询执行器，先过滤隐私再聚合）
+   ↓
+QueryResult（确定性事实：items / total_count / aggregates / groups /
+            pagination / period / applied filters + typed status）
+```
+
+AI / Assistant 不能访问数据库、不能生成可执行 SQL、不能做财务计算、不能
+决定真实 ledger/account scope —— 只能构造 `QueryIntent` 并消费 `QueryResult`。
+
+### 契约（`src/lark_ledger/query_schemas.py`，纯 Pydantic、不 import DB）
+
+- **QueryIntent**：用户意图层。字段：`mode ∈ {list, aggregate, group}`、
+  `start/end`（必须带时区，左闭右开 `[start, end)`，成对出现且递增）、
+  可选 `timezone`（IANA 名，分组桶与 period 报告使用）、`direction`、
+  `category`（精确字符串，分类在数据模型中是自由字符串，无注册表）、
+  `account`（账户**名称**，禁止客户端传 account_id）、
+  `min_amount/max_amount`（仅 Decimal）、`keyword`（note/category 子串）、
+  `sort ∈ {occurred_at, amount}`、`order ∈ {asc, desc}`、
+  `grouping ∈ {category, account, day, week, month}`、
+  `top_n`（1..50，必须搭配 grouping）、`page/page_size`（web 同款：
+  page_size 上限 100，默认 25）。`extra=forbid`：`sql` / `where` /
+  `raw_*` / `custom_filter` 等 SQL-shaped 字段和未知字段一律被拒绝；
+  不存在 `merchant` / `category_group` 字段 —— 数据模型没有这些概念，
+  绝不偷偷映射到 note/category。naive datetime、start>=end、min>max、
+  page_size 超限、aggregate/group 缺时间范围都在构造期报错。
+- **QueryPlan**：`QueryPlanner` 输出。字段全部是**已解析的业务事实**：
+  UTC 归一化的 `start/end`、解析后的 `account_id` + `account_name`、
+  `ledger_id`、`privacy_applied` 标记、分页/排序/分组/Top N 边界。
+  永不包含 raw SQL / SQLAlchemy statement / ORM 对象。
+- **QueryResult**：确定性事实。`status ∈ {ok, empty, invalid,
+  needs_clarification, unsupported}`（presenter 必须按 status 分支，不解析
+  异常字符串）；`items`（QueryEntry 事实，不含 Transfer）、`total_count`、
+  `aggregates`（income/expense/balance/count，Decimal 精确）、`groups`、
+  `pagination`（page/page_size/total/pages）、`period`（归一化后的
+  [start, end) + timezone）、`applied filters`（已生效过滤条件，可审计）、
+  `unsupported` / `clarification` 结构化原因。provenance（#15）与 typed UI
+  blocks（#17）留为扩展点，本阶段不实现。
+
+`aggregate` / `group` 模式必须携带显式时间范围，且不超过 366 天（与
+report/analytics 上限一致）；`list` 模式时间范围可选、分页任意深。
+
+### 授权与隐私（privacy BEFORE aggregation）
+
+所有查询按同一条链执行：
+
+```text
+actor → RequestContext → LedgerAuthorizationService（账本可达性）
+      → QueryPlanner（名称解析限定在可见账户内）
+      → LedgerQueryService（SQL WHERE 阶段应用隐私条件）
+      → 聚合 / 分组 / Top N / 分页计数
+```
+
+- **个人账本隔离**：`LedgerAuthorizationService.get_accessible` 失败抛
+  `LedgerQueryAccessDeniedError`（PermissionError），与既有
+  `LedgerAccessDeniedError` 语义一致，由 adapter / AI 管道映射为安全提示。
+- **家庭账本**：完全复用现有 household 语义（household_shared + 有效成员），
+  不重新定义。
+- **私有账户**：`PrivacyService.entry_visibility_scope` 作为真实 SQL 条件在
+  **聚合之前**应用 —— 私有账户行不会通过 total、count、group total、
+  Top N、pagination total 间接泄漏；私有账户名无法解析（受控
+  `needs_clarification`，且对未知名与不可见名返回完全相同的结构化原因，
+  避免存在性探测）。**查询先过滤隐私，再聚合**，没有例外。
+
+### 时区 / 排序 / 分页语义
+
+- 时间范围必须是 aware datetime；planner 统一归一化为 UTC 存储比较，
+  `[start, end)` 左闭右开；`period` 回显归一化结果。
+- day/week/month 分组桶在**意图指定的时区**（缺省用服务时区，结果回显实际
+  使用的时区）内计算；week 从周一开始，键为该周周一日期。
+- 排序永远带确定性 tie-breaker：主键方向 + `(created_at, id)` 同向决胜，
+  绝不依赖数据库自然顺序。分组按金额降序、同金额按键升序。
+- 分页复用 Web 约定：`page/page_size`（默认 25，上限 100），`pages =
+  ceil(total/page_size)`。
+
+### 受控结果（不猜）
+
+| 情况 | 结果 |
+|---|---|
+| 无匹配行 | `empty`（正常受控结果，非异常） |
+| 范围 > 366 天 / 时区无效 | `invalid` + `invalid_reason` |
+| 账户名未知 / 歧义 / 不可见 | `needs_clarification` + `clarification` |
+| 执行器未实现的 grouping/mode | `unsupported` + `unsupported` 原因 |
+| SQL-shaped / 未知字段 / merchant | schema 拒绝（pydantic ValidationError，
+  与 ParsedCommand 同款受控错误） |
+
+### Transfer 红线
+
+查询只读 `ledger_entries`。`Transfer` 是独立事实，永不进入 expense/income
+列表、分类/分组/聚合、消费统计 —— 需要 transfer 查询时必须是独立的事实类型
+（#16 处理）。
+
+### 架构守护
+
+`tests/architecture/test_assistant_query_guards.py`：契约模块不 import
+sqlalchemy / db 入口；AI 解析器（`services/ai.py`）不 import sqlalchemy /
+db / ORM 模型；任何 domain service 不 import `lark_ledger.db`；查询执行器
+与 planner 不 import adapter。依赖方向始终是
+`Adapter/AI → Application → Domain → Core/Database`。
+
 ## 消息处理链路
 
 ```text
