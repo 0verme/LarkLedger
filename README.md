@@ -8,6 +8,16 @@
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
+## 效果展示
+
+| 批量图片流水 | 语音批量记账 |
+| --- | --- |
+| ![从支付流水截图批量记账](docs/assets/batch-image-bookkeeping.png) | ![将语音中的多笔消费批量记账](docs/assets/voice-batch-bookkeeping.png) |
+| 小票识别 | 复杂文字批量记账 |
+| ![识别超市小票并记录消费](docs/assets/receipt-bookkeeping.png) | ![从一段自然语言中识别多笔收支](docs/assets/text-batch-bookkeeping.png) |
+
+以上截图使用已获准公开的脱敏数据。识别结果以机器人确认回复为准。
+
 ## 当前能力（v0.10.0 主线）
 
 - **平台 / 通道无关 Core（v0.10.0）**：Feishu / First-party Web / Machine API 三套入口共享同一个 `ClientApplicationService` Application Layer——对于相同业务事实产生一致 Domain Result，Core 不依赖任何渠道 transport（架构守护见 `tests/architecture/`）。正式通道无关 Client API：**`/api/v1`**（`/api/client/v1` 为同一组 handler 的兼容别名）；Bearer API Token（`llv1_*`，明文只显示一次、DB 只存 SHA-256 digest、可 revoke / expiry、scope 只缩权），headless client 不需要 Feishu、浏览器 cookie 或 OAuth session 即可独立完成认证 / 选账本 / 记账 / 查询 / Overview / Goals / Insights；写请求强制 `Idempotency-Key`（同 key 重试 replay、不同 body 409、PostgreSQL 并发 exactly-once）；稳定 error envelope 与 OpenAPI 契约（见 [Client API 文档](docs/client-api.md)）
@@ -266,16 +276,6 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 后续路线不在本次发布承诺内；v0.10.0 不扩展为多租户财务 ERP / OAuth Authorization Server / SaaS API Gateway。
 
 镜像与版本：当前正式版本为 **v0.10.0**（First-party Client / Unified AI Entry）。预构建镜像：`ghcr.io/0verme/larkledger:0.10.0`（亦有 `0.10` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
-
-## 效果展示
-
-| 批量图片流水 | 语音批量记账 |
-| --- | --- |
-| ![从支付流水截图批量记账](docs/assets/batch-image-bookkeeping.png) | ![将语音中的多笔消费批量记账](docs/assets/voice-batch-bookkeeping.png) |
-| 小票识别 | 复杂文字批量记账 |
-| ![识别超市小票并记录消费](docs/assets/receipt-bookkeeping.png) | ![从一段自然语言中识别多笔收支](docs/assets/text-batch-bookkeeping.png) |
-
-以上截图使用已获准公开的脱敏数据。识别结果以机器人确认回复为准。
 
 ## 安全边界
 
