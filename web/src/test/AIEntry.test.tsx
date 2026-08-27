@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { AIEntryPanel } from "../components/AIEntryPanel";
-import type { AIEntryResult } from "../api";
+import type { AIEntryResult, QueryResult } from "../api";
 
 // P39 frontend matrix (WAI01–WAI11): the AI entry panel must distinguish
 // executed / confirmation_required / clarification_required / error, stay
@@ -27,6 +28,8 @@ function result(overrides: Partial<AIEntryResult> = {}): AIEntryResult {
 		expires_at: null,
 		preview: null,
 		missing_fields: [],
+		query_result: null,
+		query_intent: null,
 		...overrides,
 	};
 }
@@ -45,9 +48,11 @@ function renderPanel(onDone = vi.fn()) {
 		defaultOptions: { queries: { retry: false } },
 	});
 	const utils = render(
-		<QueryClientProvider client={client}>
-			<AIEntryPanel onDone={onDone} />
-		</QueryClientProvider>,
+		<MemoryRouter>
+			<QueryClientProvider client={client}>
+				<AIEntryPanel onDone={onDone} />
+			</QueryClientProvider>
+		</MemoryRouter>,
 	);
 	return { ...utils, onDone };
 }
@@ -300,5 +305,64 @@ describe("WAI01–WAI11 AI entry panel", () => {
 		fireEvent.change(input, { target: { value: "打车35" } });
 		fireEvent.click(screen.getByRole("button", { name: /发送/ }));
 		expect(await screen.findByText(/已记录 A83F2 支出 ¥28.00/)).toBeInTheDocument();
+	});
+
+	it("WAI12 query results expose bounded provenance links", async () => {
+		const queryResult: QueryResult = {
+			status: "ok",
+			mode: "aggregate",
+			message: "共 2 笔 · 支出 ¥63.00",
+			items: [],
+			total_count: 2,
+			aggregates: {
+				currency: "CNY",
+				income: "0.00",
+				expense: "63.00",
+				balance: "-63.00",
+				count: 2,
+			},
+			groups: null,
+			pagination: null,
+			period: { start: "2026-08-01T00:00:00Z", end: "2026-09-01T00:00:00Z", timezone: "Asia/Shanghai" },
+			filters: {},
+			provenance: {
+				period: { start: "2026-08-01T00:00:00Z", end: "2026-09-01T00:00:00Z", timezone: "Asia/Shanghai" },
+				filters: {},
+				aggregation: { mode: "aggregate", grouping: null, metric: "amount" },
+				source_count: 2,
+				source_short_ids: ["A0001", "A0002"],
+				source_ids_truncated: false,
+				as_of: "2026-08-27T00:00:00Z",
+			},
+			analysis: null,
+			unsupported: [],
+			clarification: [],
+			invalid_reason: null,
+		};
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(() =>
+				jsonOk(
+					result({
+						status: "query_result",
+						message: queryResult.message,
+						operation: "query",
+						query_result: queryResult,
+					}),
+				),
+			),
+		);
+		renderPanel();
+		const input = screen.getByRole("textbox", { name: "AI 记账输入" });
+		fireEvent.change(input, { target: { value: "查询八月支出" } });
+		fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+
+		expect(await screen.findByText("查询了 2 笔账目")).toBeInTheDocument();
+		const first = screen.getByRole("link", { name: "#A0001" });
+		expect(first).toHaveAttribute("href", "/entries?entry=A0001");
+		expect(screen.getByRole("link", { name: "#A0002" })).toHaveAttribute(
+			"href",
+			"/entries?entry=A0002",
+		);
 	});
 });

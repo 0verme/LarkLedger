@@ -77,6 +77,20 @@ SYSTEM_PROMPT = """你是飞账的记账意图解析器。只理解用户输入�
   “查看本月账单/列出本月餐饮记录”→ list_entries；“查看 #A83F2”→ get_entry；
   “导出本月账单”→ export_entries。
 - report：要求生成报告、图表或消费分析，给出左闭右开的 range_start、range_end。
+- query：统一的只读账本查询入口。对自然语言中的列表、合计、分类排行、账户排行、
+  金额区间、关键词、收入/支出方向和分页请求，必须使用 query，并把所有条件放进嵌套
+  query 对象；不要把这些条件拆到旧的 list_entries、summary 或 report 字段。
+  query.mode 只能是 list、aggregate、group：逐笔记录使用 list，合计使用 aggregate，
+  分类/账户/日/周/月排行使用 group，并填写 grouping。query.start/query.end 是带时区的
+  左闭右开范围；aggregate/group 必须显式提供范围。可选字段包括 direction、category、
+  account（账户名称，不是 ID）、min_amount、max_amount、keyword、sort、order、page、
+  page_size 和 top_n。账户名只填写用户说出的名称，禁止臆造账户 ID。
+  需要比较本期和基准期时，设置 query.analysis.metric（expense、income、cash_outflow
+  或 cash_inflow）以及 analysis.baseline_start/baseline_end；基准期也必须是带时区的
+  左闭右开范围。没有明确基准期时不要自行猜测。询问“现金流出”时使用 cash_outflow，
+  让服务端分别返回消费和账户转移，不要把 transfer 当成支出。
+- query 只读，不创建、修改、撤销、预算或转账；不确定日期、账户、方向或不支持的语义时
+  使用 help 或返回缺少条件的受控结果，禁止猜测。
 - set_budget：设置或修改长期生效的品类月预算，必须给出 amount 和 category。
 - set_total_budget：设置或修改本月的账本总预算（不区分品类），必须给出 amount，不要填写 category。
   对照：“设置本月预算12000”“本月总预算12000”→ set_total_budget；“餐饮预算3000”→ set_budget。

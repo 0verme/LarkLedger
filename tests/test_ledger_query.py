@@ -27,8 +27,10 @@ from lark_ledger.models import (
     LedgerEntry,
 )
 from lark_ledger.query_schemas import (
+    QueryAnalysis,
     QueryGrouping,
     QueryIntent,
+    QueryMetric,
     QueryMode,
     QueryOrder,
     QueryPlan,
@@ -905,3 +907,126 @@ async def test_transfers_never_enter_entry_queries(session: AsyncSession) -> Non
         QueryIntent(**span, mode=QueryMode.GROUP, grouping=QueryGrouping.CATEGORY),
     )
     assert groups.status is QueryStatus.EMPTY
+
+
+async def test_provenance_is_bounded_and_drill_down_reuses_query_scope(
+    session: AsyncSession,
+) -> None:
+    context = await _identity(session, "ou_provenance", "A")
+    account = await _default_account(session, context)
+    for index in range(3):
+        await _entry(
+            session,
+            context,
+            short_id=f"PV{index:03d}",
+            amount=str(10 + index),
+            account_id=account.id,
+            occurred_at=datetime(2026, 8, 8, 4, tzinfo=UTC) - timedelta(days=index),
+        )
+    await session.commit()
+
+    intent = QueryIntent(
+        mode=QueryMode.AGGREGATE,
+        start=datetime(2026, 8, 1, tzinfo=UTC),
+        end=datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    result = await _svc(session).query(context, intent)
+    assert result.provenance is not None
+    assert result.provenance.source_count == 3
+    assert result.provenance.source_short_ids == ["PV000", "PV001", "PV002"]
+    assert result.provenance.aggregation.mode is QueryMode.AGGREGATE
+
+    drill_down = await _svc(session).drill_down(
+        context, intent, page=2, page_size=1
+    )
+    assert drill_down.status is QueryStatus.OK
+    assert [item.short_id for item in drill_down.items] == ["PV001"]
+    assert drill_down.provenance is not None
+    assert drill_down.provenance.source_count == 3
+
+
+async def test_comparison_keeps_consumption_and_transfers_separate(
+    session: AsyncSession,
+) -> None:
+    context = await _identity(session, "ou_analysis", "A")
+    default = await _default_account(session, context)
+    savings = await AccountService(session).create(
+        context, name="储蓄卡", account_type=AccountType.CASH, currency="CNY"
+    )
+    await _entry(
+        session,
+        context,
+        short_id="AN001",
+        amount="80.00",
+        category="餐饮",
+        account_id=default.id,
+        occurred_at=datetime(2026, 8, 8, 4, tzinfo=UTC),
+    )
+    await _entry(
+        session,
+        context,
+        short_id="AN002",
+        amount="1000.00",
+        direction=Direction.INCOME,
+        category="工资",
+        account_id=default.id,
+        occurred_at=datetime(2026, 8, 9, 4, tzinfo=UTC),
+    )
+    await _entry(
+        session,
+        context,
+        short_id="AN003",
+        amount="50.00",
+        category="餐饮",
+        account_id=default.id,
+        occurred_at=datetime(2026, 7, 8, 4, tzinfo=UTC),
+    )
+    await _entry(
+        session,
+        context,
+        short_id="AN004",
+        amount="200.00",
+        direction=Direction.INCOME,
+        category="工资",
+        account_id=default.id,
+        occurred_at=datetime(2026, 7, 9, 4, tzinfo=UTC),
+    )
+    await TransferService(session).create(
+        context,
+        from_account_id=default.id,
+        to_account_id=savings.id,
+        amount=Decimal("300.00"),
+        occurred_at=datetime(2026, 8, 10, 4, tzinfo=UTC),
+        source_type="client",
+    )
+    await session.commit()
+
+    result = await _svc(session).query(
+        context,
+        QueryIntent(
+            mode=QueryMode.AGGREGATE,
+            start=datetime(2026, 8, 1, tzinfo=UTC),
+            end=datetime(2026, 9, 1, tzinfo=UTC),
+            analysis=QueryAnalysis(
+                metric=QueryMetric.EXPENSE,
+                baseline_start=datetime(2026, 7, 1, tzinfo=UTC),
+                baseline_end=datetime(2026, 8, 1, tzinfo=UTC),
+            ),
+        ),
+    )
+    assert result.status is QueryStatus.OK
+    assert result.analysis is not None
+    assert result.analysis.current.consumption == Decimal("80.00")
+    assert result.analysis.current.income == Decimal("1000.00")
+    assert result.analysis.current.transfer_out == Decimal("300.00")
+    assert result.analysis.current.transfer_in == Decimal("300.00")
+    assert result.analysis.current.cash_outflow == Decimal("380.00")
+    assert result.analysis.baseline is not None
+    assert result.analysis.baseline.consumption == Decimal("50.00")
+    assert result.analysis.delta == Decimal("30.00")
+    assert result.analysis.percentage == Decimal("60.0")
+    assert result.analysis.top_contributors[0].key == "餐饮"
+    # The transfer is a cash-flow fact, not a LedgerEntry source or expense.
+    assert result.total_count == 2
+    assert result.provenance is not None
+    assert result.provenance.source_count == 2

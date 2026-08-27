@@ -21,8 +21,10 @@ from lark_ledger.models import Direction
 from lark_ledger.query_schemas import (
     MAX_QUERY_PAGE_SIZE,
     MAX_QUERY_TOP_N,
+    QueryAnalysis,
     QueryGrouping,
     QueryIntent,
+    QueryMetric,
     QueryMode,
     QueryOrder,
     QueryResult,
@@ -231,6 +233,31 @@ def test_group_requires_range() -> None:
 
 def test_list_range_optional() -> None:
     assert QueryIntent(mode=QueryMode.LIST).start is None
+
+
+def test_analysis_requires_explicit_baseline_pair_and_supported_mode() -> None:
+    baseline = QueryAnalysis(
+        metric=QueryMetric.EXPENSE,
+        baseline_start=datetime(2026, 7, 1, tzinfo=UTC),
+        baseline_end=datetime(2026, 8, 1, tzinfo=UTC),
+    )
+    intent = QueryIntent(
+        mode=QueryMode.AGGREGATE,
+        start=datetime(2026, 8, 1, tzinfo=UTC),
+        end=datetime(2026, 9, 1, tzinfo=UTC),
+        analysis=baseline,
+    )
+    assert intent.analysis is baseline
+
+    with pytest.raises(ValidationError):
+        QueryAnalysis(baseline_start=datetime(2026, 7, 1, tzinfo=UTC))
+    with pytest.raises(ValidationError):
+        QueryAnalysis(
+            baseline_start=datetime(2026, 8, 1, tzinfo=UTC),
+            baseline_end=datetime(2026, 7, 1, tzinfo=UTC),
+        )
+    with pytest.raises(ValidationError):
+        QueryIntent(mode=QueryMode.LIST, analysis=QueryAnalysis())
 
 
 # --------------------------------------------------------------------------- #

@@ -226,6 +226,76 @@ export type AIEntryStatus =
 	| "rejected"
 	| "error";
 
+export type QueryIntent = {
+	mode: "list" | "aggregate" | "group";
+	start: string | null;
+	end: string | null;
+	timezone: string | null;
+	direction: "expense" | "income" | null;
+	category: string | null;
+	account: string | null;
+	min_amount: string | null;
+	max_amount: string | null;
+	keyword: string | null;
+	sort: "occurred_at" | "amount";
+	order: "asc" | "desc";
+	grouping: "category" | "account" | "day" | "week" | "month" | null;
+	top_n: number | null;
+	analysis: {
+		metric: "expense" | "income" | "cash_outflow" | "cash_inflow";
+		baseline_start: string | null;
+		baseline_end: string | null;
+	} | null;
+	page: number;
+	page_size: number;
+};
+
+export type QueryResult = {
+	status: "ok" | "empty" | "invalid" | "needs_clarification" | "unsupported";
+	mode: "list" | "aggregate" | "group";
+	message: string;
+	items: Array<{
+		short_id: string;
+		amount: string;
+		currency: string;
+		direction: "expense" | "income";
+		category: string;
+		note: string;
+		occurred_at: string;
+		account_id: string | null;
+		account_name: string | null;
+	}>;
+	total_count: number;
+	aggregates: {
+		currency: string;
+		income: string;
+		expense: string;
+		balance: string;
+		count: number;
+	} | null;
+	groups: Array<{ key: string; amount: string; count: number }> | null;
+	pagination: { page: number; page_size: number; total: number; pages: number } | null;
+	period: { start: string | null; end: string | null; timezone: string } | null;
+	filters: Record<string, unknown> | null;
+	provenance: {
+		period: { start: string | null; end: string | null; timezone: string };
+		filters: Record<string, unknown>;
+		aggregation: {
+			mode: "list" | "aggregate" | "group";
+			grouping: "category" | "account" | "day" | "week" | "month" | null;
+			metric: string;
+		};
+		source_count: number;
+		source_short_ids: string[];
+		source_ids_truncated: boolean;
+		as_of: string;
+	} | null;
+	analysis: unknown | null;
+	unsupported: string[];
+	clarification: string[];
+	invalid_reason: string | null;
+};
+
 export type AIEntryResult = {
 	status: AIEntryStatus;
 	message: string;
@@ -244,6 +314,8 @@ export type AIEntryResult = {
 	expires_at: string | null;
 	preview: Record<string, unknown> | null;
 	missing_fields: string[];
+	query_result: QueryResult | null;
+	query_intent: QueryIntent | null;
 };
 
 export type PendingActionResponse = { message: string; pending: PendingDetail };

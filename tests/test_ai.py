@@ -59,6 +59,54 @@ async def test_interpreter_uses_strict_schema() -> None:
     assert "日元 JPY" in messages[0]["content"]
 
 
+async def test_interpreter_parses_unified_query_intent() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps(
+                                {
+                                    "action": "query",
+                                    "query": {
+                                        "mode": "aggregate",
+                                        "start": "2026-08-01T00:00:00+08:00",
+                                        "end": "2026-09-01T00:00:00+08:00",
+                                        "direction": "expense",
+                                        "analysis": {
+                                            "metric": "cash_outflow",
+                                            "baseline_start": "2026-07-01T00:00:00+08:00",
+                                            "baseline_end": "2026-08-01T00:00:00+08:00",
+                                        },
+                                    },
+                                }
+                            )
+                        }
+                    }
+                ]
+            },
+        )
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://ai.example/v1"
+    )
+    interpreter = AIInterpreter(Settings(ai_api_key="test-key"), client)
+    command = await interpreter.interpret(
+        "比较八月和七月现金流出", now=datetime(2026, 8, 27, tzinfo=UTC)
+    )
+    await client.aclose()
+
+    assert command.action is Action.QUERY
+    assert command.query is not None
+    assert command.query.mode.value == "aggregate"
+    assert command.query.analysis is not None
+    assert command.query.analysis.metric.value == "cash_outflow"
+    assert command.query.analysis.baseline_start is not None
+
+
 async def test_interpreter_defaults_missing_create_time_to_request_now() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

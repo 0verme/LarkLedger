@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lark_ledger.models import Direction
+from lark_ledger.query_schemas import QueryIntent, QueryResult
 
 
 class Action(StrEnum):
@@ -16,6 +17,7 @@ class Action(StrEnum):
     BATCH = "batch"
     UPDATE_LAST = "update_last"
     UNDO_LAST = "undo_last"
+    QUERY = "query"
     LIST_ENTRIES = "list_entries"
     GET_ENTRY = "get_entry"
     UPDATE_ENTRY = "update_entry"
@@ -80,6 +82,9 @@ class ParsedCommand(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     action: Action
+    # Unified read-only query intent.  The AI may provide only user-level
+    # filters; QueryPlanner resolves ledger/account scope server-side.
+    query: QueryIntent | None = None
     amount: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     currency: str | None = Field(default=None, min_length=3, max_length=3)
     direction: Direction | None = None
@@ -132,6 +137,41 @@ class ParsedCommand(BaseModel):
 
     @model_validator(mode="after")
     def validate_action_fields(self) -> "ParsedCommand":
+        query_fields = (
+            "amount",
+            "currency",
+            "direction",
+            "category",
+            "note",
+            "occurred_at",
+            "range_start",
+            "range_end",
+            "budgets",
+            "entries",
+            "entry_ref",
+            "before_entry_ref",
+            "limit",
+            "from_account_hint",
+            "to_account_hint",
+            "account_hint",
+            "payer_reference",
+        )
+        if self.action is Action.QUERY:
+            if self.query is None:
+                raise ValueError("query requires a query intent")
+            if any(getattr(self, field) is not None for field in query_fields) or any(
+                getattr(self, field)
+                for field in (
+                    "batch_truncated",
+                    "budgets_truncated",
+                    "clear_note",
+                    "export_all",
+                    "include_deleted",
+                )
+            ):
+                raise ValueError("query only accepts the query intent")
+        elif self.query is not None:
+            raise ValueError("query intent is only supported for query")
         if self.action is Action.CREATE:
             missing = [
                 name
@@ -466,6 +506,7 @@ class ExportFileResult(BaseModel):
 class ExecutionResult(BaseModel):
     message: str
     report: ReportData | None = None
+    query_result: QueryResult | None = None
     budget_alert: str | None = None
     export: ExportFileResult | None = None
     # The ledger entry a write action created / mutated, when known. Set by the
@@ -528,6 +569,12 @@ class AIEntryResult(BaseModel):
     preview: dict[str, Any] | None = None
     # clarification_required:
     missing_fields: list[str] = Field(default_factory=list)
+    # query_result: structured, deterministic facts for Web and future clients;
+    # Feishu may continue to use the safe text message fallback.
+    query_result: QueryResult | None = None
+    # Echo the user-level query intent so a client can request a separately
+    # paginated drill-down; it contains no ledger/account database ids.
+    query_intent: QueryIntent | None = None
 
 
 #: AI write actions (lead to a ledger mutation on execution).
@@ -558,6 +605,7 @@ AI_QUERY_ACTIONS = frozenset(
         Action.ASSETS,
         Action.SUMMARY,
         Action.REPORT,
+        Action.QUERY,
         Action.LIST_BUDGETS,
         Action.EXPORT_ENTRIES,
     }

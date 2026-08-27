@@ -33,6 +33,7 @@ from lark_ledger.models import (
     PendingCommand,
     PendingStatus,
 )
+from lark_ledger.query_schemas import QueryIntent, QueryMode
 from lark_ledger.schemas import (
     Action,
     AIEntryResult,
@@ -129,6 +130,7 @@ def _command(
     limit: int | None = None,
     from_account_hint: str | None = None,
     to_account_hint: str | None = None,
+    query: QueryIntent | None = None,
 ) -> ParsedCommand:
     return ParsedCommand(
         action=action,
@@ -152,6 +154,7 @@ def _command(
         limit=limit,
         from_account_hint=from_account_hint,
         to_account_hint=to_account_hint,
+        query=query,
     )
 
 
@@ -672,6 +675,43 @@ async def test_ex07_query_returns_query_result(
     assert outcome.status is AIEntryStatus.QUERY_RESULT
     assert outcome.operation == "list_entries"
     assert "最近" in outcome.message or "1" in outcome.message
+
+
+async def test_ex07_unified_query_returns_structured_result_and_provenance(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    ctx = await _identity(factory, "ou_ex07_unified")
+    await _submit(
+        factory,
+        StubInterpreter(
+            _command(
+                Action.CREATE,
+                amount="28.00",
+                direction=Direction.EXPENSE,
+                category="餐饮",
+                note="午饭",
+            )
+        ),
+        ctx,
+        "午饭28",
+    )
+    query = QueryIntent(mode=QueryMode.LIST, keyword="午饭", page_size=5)
+    outcome = await _submit(
+        factory,
+        StubInterpreter(_command(Action.QUERY, query=query)),
+        ctx,
+        "查询午饭账目",
+    )
+
+    assert outcome.status is AIEntryStatus.QUERY_RESULT
+    assert outcome.operation == "query"
+    assert outcome.query_intent == query
+    assert outcome.query_result is not None
+    assert outcome.query_result.total_count == 1
+    assert outcome.query_result.provenance is not None
+    assert outcome.query_result.provenance.source_count == 1
+    assert outcome.query_result.provenance.source_short_ids
+    assert await _entry_count(factory) == 1
 
 
 async def test_ex08_unauthorized_ledger_is_an_error(
@@ -1277,7 +1317,10 @@ async def test_c08_query_equivalent(
         category="餐饮",
         note="午饭",
     )
-    query = _command(Action.LIST_ENTRIES, limit=5)
+    query = _command(
+        Action.QUERY,
+        query=QueryIntent(mode=QueryMode.LIST, page_size=5),
+    )
     await _feishu_process(
         factory,
         StubInterpreter(create),
@@ -1295,7 +1338,7 @@ async def test_c08_query_equivalent(
     )
     assert outcome.status is AIEntryStatus.QUERY_RESULT
     assert feishu_texts, "Feishu must reply to the query"
-    assert "午饭" in " ".join(feishu_texts) or "28" in " ".join(feishu_texts)
+    assert "共 1 笔" in " ".join(feishu_texts)
     # Query writes nothing on either channel.
     assert await _entry_count(factory) == 1
 

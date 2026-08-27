@@ -50,6 +50,8 @@ MAX_QUERY_TOP_N = 50
 #: bounded to one civil year to keep results deterministic and verifiable.
 MAX_QUERY_RANGE_DAYS = 366
 MAX_QUERY_KEYWORD_LENGTH = 100
+#: Source references are evidence hints, not an unbounded export channel.
+MAX_QUERY_PROVENANCE_IDS = 100
 
 
 class QueryMode(StrEnum):
@@ -100,6 +102,49 @@ class QueryOrder(StrEnum):
     DESC = "desc"
 
 
+class QueryMetric(StrEnum):
+    """Deterministic measure used by an optional comparison analysis."""
+
+    EXPENSE = "expense"
+    INCOME = "income"
+    CASH_OUTFLOW = "cash_outflow"
+    CASH_INFLOW = "cash_inflow"
+
+
+class QueryAnalysis(BaseModel):
+    """Input-level analysis options carried by the assistant intent.
+
+    The current period stays on ``QueryIntent``.  A comparison adds an
+    explicit baseline period; omitting it requests a current-period cash-flow
+    or spending analysis without inventing a baseline.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric: QueryMetric = QueryMetric.EXPENSE
+    baseline_start: datetime | None = None
+    baseline_end: datetime | None = None
+
+    @field_validator("baseline_start", "baseline_end")
+    @classmethod
+    def _baseline_timezone_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("baseline range must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_baseline(self) -> QueryAnalysis:
+        if (self.baseline_start is None) != (self.baseline_end is None):
+            raise ValueError("baseline_start and baseline_end must be provided together")
+        if (
+            self.baseline_start is not None
+            and self.baseline_end is not None
+            and self.baseline_start >= self.baseline_end
+        ):
+            raise ValueError("baseline range must be increasing: [start, end)")
+        return self
+
+
 class QueryIntent(BaseModel):
     """Validated but still "user-intent level" query.
 
@@ -137,6 +182,7 @@ class QueryIntent(BaseModel):
     grouping: QueryGrouping | None = None
     # Requires ``grouping``; always explicit and capped (MAX_QUERY_TOP_N).
     top_n: int | None = Field(default=None, ge=1, le=MAX_QUERY_TOP_N)
+    analysis: QueryAnalysis | None = None
     page: int = Field(default=1, ge=1)
     page_size: int = Field(default=DEFAULT_QUERY_PAGE_SIZE, ge=1, le=MAX_QUERY_PAGE_SIZE)
 
@@ -194,6 +240,11 @@ class QueryIntent(BaseModel):
         if self.top_n is not None:
             if self.grouping is None:
                 raise ValueError("top_n requires a grouping")
+        if self.analysis is not None and self.mode not in {
+            QueryMode.AGGREGATE,
+            QueryMode.GROUP,
+        }:
+            raise ValueError("analysis is only supported in aggregate or group mode")
         if self.mode is not QueryMode.LIST:
             # Aggregate and group are bounded computations (see
             # MAX_QUERY_RANGE_DAYS) so they always require an explicit range;
@@ -234,6 +285,7 @@ class QueryPlan(BaseModel):
     page: int
     page_size: int
     privacy_applied: bool
+    analysis: QueryAnalysis | None
 
 
 class QueryPagination(BaseModel):
@@ -295,14 +347,104 @@ class QueryGroup(BaseModel):
     count: int
 
 
+class QueryAggregation(BaseModel):
+    """Explain which deterministic operation produced a result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: QueryMode
+    grouping: QueryGrouping | None = None
+    metric: str = Field(default="amount", min_length=1, max_length=32)
+
+
+class QueryProvenance(BaseModel):
+    """Bounded, privacy-safe evidence for a deterministic query result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    period: QueryPeriod
+    filters: QueryFilters
+    aggregation: QueryAggregation
+    source_count: int = Field(ge=0)
+    source_short_ids: list[str] = Field(
+        default_factory=list, max_length=MAX_QUERY_PROVENANCE_IDS
+    )
+    source_ids_truncated: bool = False
+    as_of: datetime
+
+
+class QueryFactTotals(BaseModel):
+    """Separate consumption, income and transfer facts for #16."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    currency: str
+    consumption: Decimal
+    income: Decimal
+    transfer_out: Decimal
+    transfer_in: Decimal
+    cash_outflow: Decimal
+    cash_inflow: Decimal
+    entry_count: int = Field(ge=0)
+    transfer_count: int = Field(ge=0)
+
+
+class QueryDistribution(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    amount: Decimal
+    ratio: Decimal
+    count: int = Field(ge=0)
+
+
+class QueryComparisonGroup(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    current: Decimal
+    baseline: Decimal
+    delta: Decimal
+    current_count: int = Field(ge=0)
+    baseline_count: int = Field(ge=0)
+
+
+class QueryTrendPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    period: str
+    consumption: Decimal
+    income: Decimal
+    transfer_out: Decimal
+    transfer_in: Decimal
+
+
+class QueryAnalysisResult(BaseModel):
+    """Deterministic comparison / cash-flow facts for assistant presenters."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metric: QueryMetric
+    current: QueryFactTotals
+    baseline: QueryFactTotals | None = None
+    delta: Decimal | None = None
+    percentage: Decimal | None = None
+    baseline_available: bool = True
+    unavailable_reason: str | None = None
+    top_contributors: list[QueryComparisonGroup] = Field(default_factory=list)
+    distribution: list[QueryDistribution] = Field(default_factory=list)
+    trend: list[QueryTrendPoint] = Field(default_factory=list)
+
+
 class QueryResult(BaseModel):
     """Deterministic query result — facts, not a free-form message.
 
     ``message`` is only a short, deterministic presentation hint; presenters
-    must branch on ``status`` and the structured fields. Provenance (#15) and
-    typed UI blocks (#17) are intentionally deferred; ``unsupported`` /
-    ``clarification`` are the controlled, structured escape hatch adapters may
-    surface without parsing exception strings.
+    must branch on ``status`` and the structured fields. ``provenance`` carries
+    bounded, privacy-safe source references for drill-down; ``analysis`` carries
+    deterministic comparison/cash-flow facts. ``unsupported`` / ``clarification``
+    are the controlled, structured escape hatches adapters may surface without
+    parsing exception strings.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -317,6 +459,8 @@ class QueryResult(BaseModel):
     pagination: QueryPagination | None = None
     period: QueryPeriod | None = None
     filters: QueryFilters | None = None
+    provenance: QueryProvenance | None = None
+    analysis: QueryAnalysisResult | None = None
     #: Recognized-but-not-implemented capability names (defense in depth).
     unsupported: list[str] = Field(default_factory=list)
     #: Why a needs_clarification was returned (structured, not an exception).
