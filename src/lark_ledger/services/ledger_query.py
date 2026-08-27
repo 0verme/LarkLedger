@@ -40,7 +40,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from lark_ledger.context import RequestContext
 from lark_ledger.models import Account, Direction, LedgerEntry
 from lark_ledger.query_schemas import (
+    MAX_QUERY_PROVENANCE_IDS,
     QueryAggregate,
+    QueryAggregation,
     QueryEntry,
     QueryFilters,
     QueryGroup,
@@ -51,6 +53,7 @@ from lark_ledger.query_schemas import (
     QueryPagination,
     QueryPeriod,
     QueryPlan,
+    QueryProvenance,
     QueryResult,
     QuerySort,
     QueryStatus,
@@ -96,7 +99,42 @@ class LedgerQueryService:
             return plan
         return await self.execute(context, plan)
 
+    async def drill_down(
+        self,
+        context: RequestContext,
+        intent: QueryIntent,
+        *,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> QueryResult:
+        """Return the exact source entries for an aggregate/group query.
+
+        The caller supplies the same user-level intent, never a database id or
+        SQL fragment.  Planning runs again, so ledger authorization, account
+        visibility and all range/filter semantics are rechecked before the
+        stable list page is returned.
+        """
+        payload = intent.model_dump(mode="python")
+        payload.update(
+            {
+                "mode": QueryMode.LIST,
+                "grouping": None,
+                "top_n": None,
+                "analysis": None,
+                "page": page,
+                "page_size": page_size,
+            }
+        )
+        list_intent = QueryIntent.model_validate(payload)
+        return await self.query(context, list_intent)
+
     async def execute(self, context: RequestContext, plan: QueryPlan) -> QueryResult:
+        if getattr(plan, "analysis", None) is not None:
+            from lark_ledger.services.ledger_analysis import LedgerAnalysisService
+
+            return await LedgerAnalysisService(
+                self._session, timezone=str(self._timezone), currency=self._currency
+            ).execute(context, plan)
         if plan.mode not in _SUPPORTED_MODES:
             return self._unsupported(plan, [f"mode:{plan.mode}"])
         if plan.grouping is not None and plan.grouping not in _SUPPORTED_GROUPINGS:
@@ -217,6 +255,12 @@ class LedgerQueryService:
             ),
             period=self._period(plan),
             filters=self._filters(plan),
+            provenance=self._provenance(
+                plan,
+                source_count=total,
+                source_short_ids=[item.short_id for item in items],
+                source_ids_truncated=total > len(items),
+            ),
         )
 
     @staticmethod
@@ -239,7 +283,17 @@ class LedgerQueryService:
     ) -> QueryResult:
         rows = (
             await self._session.execute(
-                select(LedgerEntry.amount, LedgerEntry.direction).where(*filters)
+                select(LedgerEntry.short_id, LedgerEntry.amount, LedgerEntry.direction)
+                .where(*filters)
+                .order_by(
+                    *self._order_by(
+                        {
+                            QuerySort.OCCURRED_AT: LedgerEntry.occurred_at,
+                            QuerySort.AMOUNT: LedgerEntry.amount,
+                        }[plan.sort],
+                        plan.order,
+                    )
+                )
             )
         ).all()
         count = len(rows)
@@ -251,10 +305,12 @@ class LedgerQueryService:
                 total_count=0,
                 period=self._period(plan),
                 filters=self._filters(plan),
+                provenance=self._provenance(plan, source_count=0),
             )
         income = Decimal("0")
         expense = Decimal("0")
-        for amount_value, direction in rows:
+        source_short_ids = [row[0] for row in rows[:MAX_QUERY_PROVENANCE_IDS]]
+        for _short_id, amount_value, direction in rows:
             amount = Decimal(amount_value)
             if direction is Direction.INCOME:
                 income += amount
@@ -274,6 +330,12 @@ class LedgerQueryService:
             ),
             period=self._period(plan),
             filters=self._filters(plan),
+            provenance=self._provenance(
+                plan,
+                source_count=count,
+                source_short_ids=source_short_ids,
+                source_ids_truncated=count > len(source_short_ids),
+            ),
         )
 
     # ------------------------------------------------------------------ #
@@ -286,12 +348,23 @@ class LedgerQueryService:
         rows = (
             await self._session.execute(
                 select(
+                    LedgerEntry.short_id,
                     LedgerEntry.amount,
                     LedgerEntry.direction,
                     LedgerEntry.category,
                     LedgerEntry.account_id,
                     LedgerEntry.occurred_at,
-                ).where(*filters)
+                )
+                .where(*filters)
+                .order_by(
+                    *self._order_by(
+                        {
+                            QuerySort.OCCURRED_AT: LedgerEntry.occurred_at,
+                            QuerySort.AMOUNT: LedgerEntry.amount,
+                        }[plan.sort],
+                        plan.order,
+                    )
+                )
             )
         ).all()
         if not rows:
@@ -302,15 +375,15 @@ class LedgerQueryService:
                 total_count=0,
                 period=self._period(plan),
                 filters=self._filters(plan),
+                provenance=self._provenance(plan, source_count=0),
             )
-        names = await self._account_names(
-            {row[3] for row in rows if row[3] is not None}
-        )
+        source_short_ids = [row[0] for row in rows[:MAX_QUERY_PROVENANCE_IDS]]
+        names = await self._account_names({row[4] for row in rows if row[4] is not None})
         grouping = plan.grouping or QueryGrouping.CATEGORY
         zone = ZoneInfo(plan.timezone)
         total_by_key: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
         count_by_key: defaultdict[str, int] = defaultdict(int)
-        for amount_value, _direction, category, account_id, occurred_at in rows:
+        for _short_id, amount_value, _direction, category, account_id, occurred_at in rows:
             amount = Decimal(amount_value)
             key = self._group_key(grouping, category, account_id, occurred_at, names, zone)
             total_by_key[key] += amount
@@ -332,6 +405,12 @@ class LedgerQueryService:
             groups=groups,
             period=self._period(plan),
             filters=self._filters(plan),
+            provenance=self._provenance(
+                plan,
+                source_count=len(rows),
+                source_short_ids=source_short_ids,
+                source_ids_truncated=len(rows) > len(source_short_ids),
+            ),
         )
 
     def _group_key(
@@ -400,6 +479,29 @@ class LedgerQueryService:
             grouping=plan.grouping,
             top_n=plan.top_n,
             privacy_applied=plan.privacy_applied,
+        )
+
+    def _provenance(
+        self,
+        plan: QueryPlan,
+        *,
+        source_count: int,
+        source_short_ids: list[str] | None = None,
+        source_ids_truncated: bool = False,
+    ) -> QueryProvenance:
+        ids = list(source_short_ids or [])[:MAX_QUERY_PROVENANCE_IDS]
+        return QueryProvenance(
+            period=self._period(plan),
+            filters=self._filters(plan),
+            aggregation=QueryAggregation(
+                mode=plan.mode,
+                grouping=plan.grouping,
+                metric="amount",
+            ),
+            source_count=source_count,
+            source_short_ids=ids,
+            source_ids_truncated=source_ids_truncated or len(ids) < len(source_short_ids or []),
+            as_of=datetime.now(UTC),
         )
 
     def _money(self, value: Decimal) -> str:

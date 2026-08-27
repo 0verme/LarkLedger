@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AlertTriangle, Check, Loader2, Send, Sparkles, X } from "lucide-react";
+import { Link } from "react-router-dom";
 import {
 	api,
 	errorText,
@@ -15,6 +16,26 @@ import {
 const MAX_AI_TEXT = 500;
 
 export type AIEntryStatus = AIEntryResult["status"];
+
+function QueryEvidence({ query }: { query: NonNullable<AIEntryResult["query_result"]> }) {
+	const provenance = query.provenance;
+	if (!provenance || provenance.source_count === 0) return null;
+	return (
+		<span className="ai-evidence">
+			<span>查询了 {provenance.source_count} 笔账目</span>
+			<span className="ai-evidence-links">
+				{provenance.source_short_ids.map((shortId) => (
+					<Link key={shortId} to={`/entries?entry=${encodeURIComponent(shortId)}`}>
+						#{shortId}
+					</Link>
+				))}
+			</span>
+			{provenance.source_ids_truncated ? (
+				<small>来源较多，仅展示前 100 笔；可前往流水页继续查看。</small>
+			) : null}
+		</span>
+	);
+}
 
 function ResultPanel({
 	result,
@@ -34,6 +55,7 @@ function ResultPanel({
 						{result.replayed ? (
 							<small>（已按原请求返回，未重复记账）</small>
 						) : null}
+						{result.query_result ? <QueryEvidence query={result.query_result} /> : null}
 					</p>
 				</div>
 			);

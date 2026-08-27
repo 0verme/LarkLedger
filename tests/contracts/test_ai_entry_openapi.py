@@ -70,6 +70,8 @@ def test_ai_entry_response_schema_is_canonical() -> None:
         "confirmation_code",
         "expires_at",
         "missing_fields",
+        "query_result",
+        "query_intent",
     ):
         assert required in props, f"AIEntryResult missing field {required}"
     status_ref = props["status"]["$ref"].rsplit("/", 1)[-1]

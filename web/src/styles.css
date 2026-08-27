@@ -2857,6 +2857,28 @@ td strong {
 .ai-result strong {
 	font-weight: 650;
 }
+.ai-evidence {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 8px;
+	padding-top: 8px;
+	border-top: 1px solid rgba(78, 122, 100, 0.22);
+	font-size: var(--fs-small);
+}
+.ai-evidence-links {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 8px;
+}
+.ai-evidence-links a {
+	color: inherit;
+	font-family: var(--mono);
+	font-weight: 650;
+}
+.ai-evidence-links a:hover {
+	text-decoration: underline;
+}
 .ai-result-ok {
 	background: var(--income-bg);
 	color: var(--income);

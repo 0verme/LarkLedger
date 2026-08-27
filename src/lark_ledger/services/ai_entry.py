@@ -405,6 +405,8 @@ class UnifiedAIEntryService:
                 message=result.message,
                 request_id=request.request_id,
                 operation=command.action.value,
+                query_result=result.query_result,
+                query_intent=command.query,
             )
         return AIEntryResult(
             status=AIEntryStatus.EXECUTED,

@@ -25,6 +25,7 @@ from lark_ledger.models import (
     Transfer,
     TransferRevision,
 )
+from lark_ledger.query_schemas import QueryIntent, QueryResult
 from lark_ledger.schemas import Action, ExecutionResult, ParsedCommand
 from lark_ledger.services.accounts import AccountService
 from lark_ledger.services.budget import BudgetService
@@ -40,6 +41,7 @@ from lark_ledger.services.insights import InsightService
 from lark_ledger.services.ledger import LedgerService
 from lark_ledger.services.ledger_authorization import LedgerAuthorizationService
 from lark_ledger.services.ledger_management import LedgerManagementService
+from lark_ledger.services.ledger_query import LedgerQueryService
 from lark_ledger.services.recurring import RecurringService
 from lark_ledger.services.transfers import AccountBalance, AssetSummary, TransferService
 from lark_ledger.services.web_analytics import WebAnalyticsQueryService
@@ -372,6 +374,9 @@ class ClientApplicationService:
         to_account_id: uuid.UUID | None = None,
     ) -> ExecutionResult:
         await self.authorize(context)
+        if command.action is Action.QUERY:
+            assert command.query is not None
+            return await self.query(context, command.query)
         if command.action is Action.TRANSFER:
             transfer_service = TransferService(self._session)
             if from_account_id is None:
@@ -414,6 +419,28 @@ class ClientApplicationService:
             source_message_id=source_message_id,
             expected_updated_at=expected_updated_at,
         )
+
+    async def query(self, context: RequestContext, intent: QueryIntent) -> ExecutionResult:
+        """Execute a read-only assistant query through the canonical fact layer."""
+        await self.authorize(context)
+        result: QueryResult = await LedgerQueryService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).query(context, intent)
+        return ExecutionResult(message=result.message, query_result=result)
+
+    async def query_drill_down(
+        self,
+        context: RequestContext,
+        intent: QueryIntent,
+        *,
+        page: int = 1,
+        page_size: int = 25,
+    ) -> QueryResult:
+        """Re-run a validated query as a stable, privacy-checked source list."""
+        await self.authorize(context)
+        return await LedgerQueryService(
+            self._session, timezone=self._timezone, currency=self._currency
+        ).drill_down(context, intent, page=page, page_size=page_size)
 
     async def dashboard(self, context: RequestContext) -> DashboardData:
         await self.authorize(context)

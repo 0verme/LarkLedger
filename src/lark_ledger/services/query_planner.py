@@ -31,6 +31,7 @@ from lark_ledger.context import RequestContext
 from lark_ledger.models import Account
 from lark_ledger.query_schemas import (
     MAX_QUERY_RANGE_DAYS,
+    QueryAnalysis,
     QueryFilters,
     QueryIntent,
     QueryMode,
@@ -88,6 +89,10 @@ class QueryPlanner:
             return normalized
         start, end = normalized
 
+        analysis = self._normalize_analysis(intent, zone)
+        if isinstance(analysis, QueryResult):
+            return analysis
+
         resolved = await self._resolve_account(context, intent.account)
         if isinstance(resolved, QueryResult):
             return resolved
@@ -117,6 +122,7 @@ class QueryPlanner:
             page=intent.page,
             page_size=intent.page_size,
             privacy_applied=privacy_applied,
+            analysis=analysis,
         )
 
     # ------------------------------------------------------------------ #
@@ -139,6 +145,34 @@ class QueryPlanner:
                 intent, f"time range must not exceed {MAX_QUERY_RANGE_DAYS} days"
             )
         return start, end
+
+    def _normalize_analysis(
+        self, intent: QueryIntent, zone: ZoneInfo
+    ) -> QueryAnalysis | None | QueryResult:
+        """Normalize an optional comparison baseline to UTC.
+
+        The current query range and the baseline use the same explicit
+        left-closed/right-open and civil-day ceiling semantics.  Keeping this
+        normalization in the planner prevents the analysis service from
+        interpreting model-provided timestamps a second time.
+        """
+        if intent.analysis is None:
+            return None
+        baseline_start = intent.analysis.baseline_start
+        baseline_end = intent.analysis.baseline_end
+        if baseline_start is None or baseline_end is None:
+            return intent.analysis
+        start = baseline_start.astimezone(UTC)
+        end = baseline_end.astimezone(UTC)
+        if (end.astimezone(zone) - start.astimezone(zone)) > timedelta(
+            days=MAX_QUERY_RANGE_DAYS
+        ):
+            return self._invalid(
+                intent, f"baseline range must not exceed {MAX_QUERY_RANGE_DAYS} days"
+            )
+        return intent.analysis.model_copy(
+            update={"baseline_start": start, "baseline_end": end}
+        )
 
     # ------------------------------------------------------------------ #
     # Account name resolution (ledger-scoped + privacy-visible + unique)
