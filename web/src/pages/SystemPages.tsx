@@ -2,11 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import {
 	BookOpenCheck,
 	Database,
+	ExternalLink,
+	GitFork,
 	LockKeyhole,
 	ShieldCheck,
 } from "lucide-react";
 import { api, type SafeSystemConfig } from "../api";
 import { PageSkeleton } from "../components/States";
+import { PROJECT_GITHUB_URL } from "../constants";
 
 const enabled = (value: boolean) => (value ? "已启用" : "未启用");
 const configured = (value: boolean) => (value ? "已配置" : "未配置");
@@ -99,6 +102,16 @@ export function AboutPage() {
 					</p>
 				</article>
 			</div>
+			<a
+				className="about-source-link"
+				href={PROJECT_GITHUB_URL}
+				target="_blank"
+				rel="noopener noreferrer"
+			>
+				<GitFork size={18} strokeWidth={1.8} />
+				<span>GitHub · 0verme</span>
+				<ExternalLink size={14} strokeWidth={1.8} />
+			</a>
 		</section>
 	);
 }

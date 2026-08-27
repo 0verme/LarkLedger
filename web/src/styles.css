@@ -488,6 +488,29 @@ button {
 	background: rgba(24, 28, 34, 0.07);
 	font-weight: 600;
 }
+.github-link {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin: 0 10px 10px;
+	padding: 6px 10px;
+	color: var(--text-3);
+	text-decoration: none;
+	border-radius: var(--r-xs);
+	font-size: var(--fs-small);
+	transition:
+		color var(--dur) var(--ease),
+		background var(--dur) var(--ease);
+}
+.github-link:hover {
+	color: var(--text-2);
+	background: var(--surface-muted);
+}
+.github-link:focus-visible,
+.about-source-link:focus-visible {
+	outline: 2px solid var(--mist);
+	outline-offset: 2px;
+}
 .user-card {
 	margin-top: auto;
 	display: grid;
@@ -2344,6 +2367,28 @@ td strong {
 	color: var(--text-2);
 	font-size: var(--fs-body);
 	line-height: 1.7;
+}
+.about-source-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-top: 20px;
+	padding: 9px 12px;
+	color: var(--text-2);
+	text-decoration: none;
+	border: 1px solid var(--line-1);
+	border-radius: var(--r-sm);
+	background: var(--surface-glass);
+	font-size: var(--fs-body);
+	transition:
+		color var(--dur) var(--ease),
+		border-color var(--dur) var(--ease),
+		background var(--dur) var(--ease);
+}
+.about-source-link:hover {
+	color: var(--text);
+	border-color: var(--line-2);
+	background: var(--surface-hover);
 }
 
 /* --------------------------------------------------------------------------

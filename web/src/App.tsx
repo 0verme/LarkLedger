@@ -11,6 +11,7 @@ import {
 	Clock3,
 	Download,
 	FileText,
+	GitFork,
 	HeartPulse,
 	Home,
 	KeyRound,
@@ -63,6 +64,7 @@ import { RecurringRulesPage } from "./pages/RecurringRulesPage";
 import { AboutPage, ConfigPage } from "./pages/SystemPages";
 import { ApiTokensPage } from "./pages/ApiTokensPage";
 import { SessionsPage } from "./pages/SessionsPage";
+import { PROJECT_GITHUB_URL } from "./constants";
 
 type NavItem = {
 	label: string;
@@ -377,6 +379,15 @@ function Shell({ me }: { me: Me }) {
 						</div>
 					))}
 				</nav>
+				<a
+					className="github-link"
+					href={PROJECT_GITHUB_URL}
+					target="_blank"
+					rel="noopener noreferrer"
+				>
+					<GitFork size={16} strokeWidth={1.8} />
+					<span>GitHub · 0verme</span>
+				</a>
 				<div className="user-card">
 					<div className="avatar">{me.name.slice(0, 1)}</div>
 					<div>
