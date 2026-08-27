@@ -244,6 +244,43 @@ describe("dashboard routing and protection", () => {
 		expect(document.querySelector(".sidebar")).not.toHaveClass("open");
 	});
 
+	it("exposes the GitHub source from the sidebar and about page", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn((input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url.endsWith("/me"))
+					return Promise.resolve(
+						Response.json({
+							open_id: "ou_user",
+							name: "小飞",
+							avatar_url: "",
+							role: "USER",
+							expires_at: "2026-08-08T12:00:00+00:00",
+						}),
+					);
+				return Promise.resolve(Response.json({ items: [] }));
+			}),
+		);
+		renderApp("/about");
+
+		expect(
+			await screen.findByRole("heading", { name: "飞书里的账，网页里看清。" }),
+		).toBeInTheDocument();
+		const githubLinks = screen.getAllByRole("link", {
+			name: "GitHub · 0verme",
+		});
+		expect(githubLinks).toHaveLength(2);
+		for (const link of githubLinks) {
+			expect(link).toHaveAttribute(
+				"href",
+				"https://github.com/0verme/LarkLedger",
+			);
+			expect(link).toHaveAttribute("target", "_blank");
+			expect(link).toHaveAttribute("rel", "noopener noreferrer");
+		}
+	});
+
 	it("returns to login when an authenticated request expires", async () => {
 		let expired = false;
 		vi.stubGlobal(
