@@ -21,6 +21,8 @@ from lark_ledger.models import Direction
 from lark_ledger.query_schemas import (
     MAX_QUERY_PAGE_SIZE,
     MAX_QUERY_TOP_N,
+    AssistantMetricBlock,
+    AssistantTableBlock,
     QueryAnalysis,
     QueryGrouping,
     QueryIntent,
@@ -30,6 +32,7 @@ from lark_ledger.query_schemas import (
     QueryResult,
     QuerySort,
     QueryStatus,
+    assistant_blocks_for_query,
 )
 
 
@@ -278,3 +281,32 @@ def test_query_result_statuses_are_typed() -> None:
 def test_query_result_is_extra_forbid() -> None:
     with pytest.raises(ValidationError):
         QueryResult(status=QueryStatus.OK, mode=QueryMode.LIST, bogus_field=1)
+
+
+def test_assistant_blocks_are_typed_and_generated_from_facts() -> None:
+    result = QueryResult(
+        status=QueryStatus.OK,
+        mode=QueryMode.AGGREGATE,
+        aggregates={
+            "currency": "CNY",
+            "income": Decimal("100.00"),
+            "expense": Decimal("40.00"),
+            "balance": Decimal("60.00"),
+            "count": 2,
+        },
+    )
+    blocks = assistant_blocks_for_query(result)
+    assert isinstance(blocks[0], AssistantMetricBlock)
+    assert blocks[0].value == Decimal("100.00")
+    assert result.model_copy(update={"blocks": blocks}).blocks == blocks
+
+
+def test_assistant_blocks_reject_markup_and_malformed_tables() -> None:
+    with pytest.raises(ValidationError):
+        QueryResult(
+            status=QueryStatus.OK,
+            mode=QueryMode.LIST,
+            blocks=[{"type": "script", "text": "<script>alert(1)</script>"}],
+        )
+    with pytest.raises(ValidationError):
+        AssistantTableBlock(type="table", columns=["分类", "金额"], rows=[["餐饮"]])

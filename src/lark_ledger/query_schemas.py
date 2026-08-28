@@ -34,6 +34,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -436,6 +437,102 @@ class QueryAnalysisResult(BaseModel):
     trend: list[QueryTrendPoint] = Field(default_factory=list)
 
 
+class AssistantTextBlock(BaseModel):
+    """Safe text fallback; never interpreted as markup by a presenter."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["text"]
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class AssistantMetricBlock(BaseModel):
+    """One deterministic monetary fact for cards and compact layouts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["metric"]
+    label: str = Field(min_length=1, max_length=64)
+    value: Decimal
+    currency: str = Field(min_length=3, max_length=3)
+    delta: Decimal | None = None
+    percentage: Decimal | None = None
+
+
+class AssistantTableBlock(BaseModel):
+    """Bounded, already-formatted table data from deterministic facts."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["table"]
+    columns: list[str] = Field(min_length=1, max_length=12)
+    rows: list[list[str]] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def validate_rows(self) -> AssistantTableBlock:
+        if any(len(row) != len(self.columns) for row in self.rows):
+            raise ValueError("table rows must match the column count")
+        if any(len(cell) > 500 for row in self.rows for cell in row):
+            raise ValueError("table cells are too long")
+        return self
+
+
+class AssistantChartPoint(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1, max_length=64)
+    value: Decimal
+
+
+class AssistantChartBlock(BaseModel):
+    """Small chart dataset; the client chooses the visual treatment."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["chart"]
+    chart: Literal["bar", "line"]
+    label: str = Field(min_length=1, max_length=64)
+    currency: str = Field(min_length=3, max_length=3)
+    points: list[AssistantChartPoint] = Field(min_length=1, max_length=100)
+
+
+class AssistantEntriesBlock(BaseModel):
+    """Bounded ledger rows for an evidence/drill-down renderer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["entries"]
+    entries: list[QueryEntry] = Field(max_length=100)
+
+
+class AssistantLinkBlock(BaseModel):
+    """Internal navigation only; external URLs and executable schemes are out."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["link"]
+    label: str = Field(min_length=1, max_length=100)
+    href: str = Field(min_length=1, max_length=500)
+
+    @field_validator("href")
+    @classmethod
+    def internal_only(cls, value: str) -> str:
+        if not value.startswith("/") or value.startswith("//"):
+            raise ValueError("assistant links must be internal paths")
+        return value
+
+
+AssistantResponseBlock = Annotated[
+    AssistantTextBlock
+    | AssistantMetricBlock
+    | AssistantTableBlock
+    | AssistantChartBlock
+    | AssistantEntriesBlock
+    | AssistantLinkBlock,
+    Field(discriminator="type"),
+]
+
+
 class QueryResult(BaseModel):
     """Deterministic query result — facts, not a free-form message.
 
@@ -466,3 +563,57 @@ class QueryResult(BaseModel):
     #: Why a needs_clarification was returned (structured, not an exception).
     clarification: list[str] = Field(default_factory=list)
     invalid_reason: str | None = None
+    #: Typed presentation facts. ``message`` remains the backwards-compatible
+    #: fallback for Feishu and older clients.
+    blocks: list[AssistantResponseBlock] = Field(default_factory=list, max_length=20)
+
+
+def assistant_blocks_for_query(result: QueryResult) -> list[AssistantResponseBlock]:
+    """Build bounded presentation blocks from deterministic query facts.
+
+    This helper deliberately accepts only a ``QueryResult``. The model never
+    supplies HTML, component names, URLs, or numeric values for these blocks.
+    """
+
+    blocks: list[AssistantResponseBlock] = []
+    currency = result.aggregates.currency if result.aggregates is not None else "CNY"
+    if result.aggregates is not None:
+        blocks.extend(
+            [
+                AssistantMetricBlock(
+                    type="metric", label="收入", value=result.aggregates.income, currency=currency
+                ),
+                AssistantMetricBlock(
+                    type="metric", label="支出", value=result.aggregates.expense, currency=currency
+                ),
+                AssistantMetricBlock(
+                    type="metric", label="结余", value=result.aggregates.balance, currency=currency
+                ),
+            ]
+        )
+    if result.groups:
+        blocks.append(
+            AssistantTableBlock(
+                type="table",
+                columns=["分组", "金额", "笔数"],
+                rows=[[group.key, str(group.amount), str(group.count)] for group in result.groups],
+            )
+        )
+    if result.items:
+        blocks.append(AssistantEntriesBlock(type="entries", entries=result.items[:100]))
+    if result.analysis is not None and result.analysis.trend:
+        blocks.append(
+            AssistantChartBlock(
+                type="chart",
+                chart="line",
+                label="趋势",
+                currency=currency,
+                points=[
+                    AssistantChartPoint(label=point.period, value=point.consumption)
+                    for point in result.analysis.trend[:100]
+                ],
+            )
+        )
+    if not blocks and result.message:
+        blocks.append(AssistantTextBlock(type="text", text=result.message))
+    return blocks[:20]

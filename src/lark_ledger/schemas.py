@@ -7,7 +7,11 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lark_ledger.models import Direction
-from lark_ledger.query_schemas import QueryIntent, QueryResult
+from lark_ledger.query_schemas import (
+    AssistantResponseBlock,
+    QueryIntent,
+    QueryResult,
+)
 
 
 class Action(StrEnum):
@@ -572,6 +576,10 @@ class AIEntryResult(BaseModel):
     # query_result: structured, deterministic facts for Web and future clients;
     # Feishu may continue to use the safe text message fallback.
     query_result: QueryResult | None = None
+    # Typed presentation blocks are a convenience mirror of
+    # ``query_result.blocks`` for clients that do not need the full query
+    # envelope. They are always generated from deterministic facts.
+    blocks: list[AssistantResponseBlock] = Field(default_factory=list, max_length=20)
     # Echo the user-level query intent so a client can request a separately
     # paginated drill-down; it contains no ledger/account database ids.
     query_intent: QueryIntent | None = None

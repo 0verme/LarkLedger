@@ -290,11 +290,80 @@ export type QueryResult = {
 		source_ids_truncated: boolean;
 		as_of: string;
 	} | null;
+	blocks: AssistantResponseBlock[];
 	analysis: unknown | null;
 	unsupported: string[];
 	clarification: string[];
 	invalid_reason: string | null;
 };
+
+export type AssistantPageContext = {
+	page: "budget" | "report" | "account" | "entries";
+	start: string | null;
+	end: string | null;
+	filters: Record<string, string>;
+	resource_id: string | null;
+};
+
+export type ConversationSummary = {
+	id: string;
+	title: string;
+	status: "active" | "archived";
+	version: number;
+	last_message_at: string | null;
+	created_at: string;
+	updated_at: string;
+};
+
+export type ConversationMessage = {
+	id: string;
+	sequence: number;
+	role: "user" | "assistant";
+	content: string;
+	result: Record<string, unknown> | null;
+	context: Record<string, unknown> | null;
+	created_at: string;
+};
+
+export type ConversationDetail = ConversationSummary & {
+	resolved_query_context: Record<string, unknown>;
+	messages: ConversationMessage[];
+};
+
+export const assistantConversationApi = {
+	create: (title = "新对话") =>
+		api<ConversationSummary>("/ai/conversations", {
+			method: "POST",
+			body: JSON.stringify({ title }),
+		}),
+	list: () => api<ConversationSummary[]>("/ai/conversations"),
+	detail: (id: string) => api<ConversationDetail>(`/ai/conversations/${encodeURIComponent(id)}`),
+	archive: (id: string) =>
+		api<void>(`/ai/conversations/${encodeURIComponent(id)}/archive`, { method: "POST" }),
+	remove: (id: string) =>
+		api<void>(`/ai/conversations/${encodeURIComponent(id)}`, { method: "DELETE" }),
+};
+
+export type AssistantResponseBlock =
+	| { type: "text"; text: string }
+	| {
+			type: "metric";
+			label: string;
+			value: string;
+			currency: string;
+			delta: string | null;
+			percentage: string | null;
+	  }
+	| { type: "table"; columns: string[]; rows: string[][] }
+	| {
+			type: "chart";
+			chart: "bar" | "line";
+			label: string;
+			currency: string;
+			points: Array<{ label: string; value: string }>;
+	  }
+	| { type: "entries"; entries: QueryResult["items"] }
+	| { type: "link"; label: string; href: string };
 
 export type AIEntryResult = {
 	status: AIEntryStatus;
@@ -316,6 +385,7 @@ export type AIEntryResult = {
 	missing_fields: string[];
 	query_result: QueryResult | null;
 	query_intent: QueryIntent | null;
+	blocks: AssistantResponseBlock[];
 };
 
 export type PendingActionResponse = { message: string; pending: PendingDetail };

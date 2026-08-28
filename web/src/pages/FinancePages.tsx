@@ -23,6 +23,7 @@ import {
 	type ReportData,
 } from "../api";
 import { EmptyState, PageSkeleton } from "../components/States";
+import { ContextualAssistantButton } from "../components/ContextualAssistantButton";
 
 const periodOptions = [
 	{ value: "7d", label: "7 天" },
@@ -322,20 +323,25 @@ export function BudgetsPage() {
 					<p className="eyebrow">MONTHLY BUDGET</p>
 					<h2>预算留有余地，生活更从容。</h2>
 				</div>
-				<div className="month-nav">
-					<button
-						aria-label="上个月"
-						onClick={() => setPeriod(shiftMonth(period, -1))}
-					>
-						<ChevronLeft size={17} />
-					</button>
-					<strong>{data.period ?? period}</strong>
-					<button
-						aria-label="下个月"
-						onClick={() => setPeriod(shiftMonth(period, 1))}
-					>
-						<ChevronRight size={17} />
-					</button>
+				<div className="heading-actions">
+					<div className="month-nav">
+						<button
+							aria-label="上个月"
+							onClick={() => setPeriod(shiftMonth(period, -1))}
+						>
+							<ChevronLeft size={17} />
+						</button>
+						<strong>{data.period ?? period}</strong>
+						<button
+							aria-label="下个月"
+							onClick={() => setPeriod(shiftMonth(period, 1))}
+						>
+							<ChevronRight size={17} />
+						</button>
+					</div>
+					<ContextualAssistantButton
+						context={{ page: "budget", start: `${period}-01`, end: null, filters: { period }, resource_id: null }}
+					/>
 				</div>
 			</div>
 			{data.total_budget !== null ? (
@@ -637,16 +643,21 @@ export function ReportsPage() {
 					<p className="eyebrow">FINANCIAL REPORT</p>
 					<h2>收支报告</h2>
 				</div>
-				<select
-					className="preset-select"
-					value={preset}
-					onChange={(event) => setPreset(event.target.value)}
-				>
-					<option value="month">本月</option>
-					<option value="last_month">上月</option>
-					<option value="90d">最近 90 天</option>
-					<option value="custom">自定义</option>
-				</select>
+				<div className="heading-actions">
+					<select
+						className="preset-select"
+						value={preset}
+						onChange={(event) => setPreset(event.target.value)}
+					>
+						<option value="month">本月</option>
+						<option value="last_month">上月</option>
+						<option value="90d">最近 90 天</option>
+						<option value="custom">自定义</option>
+					</select>
+					<ContextualAssistantButton
+						context={{ page: "report", start: dates.start, end: dates.end, filters: { preset }, resource_id: null }}
+					/>
+				</div>
 			</div>
 			{preset === "custom" && (
 				<div className="custom-range">

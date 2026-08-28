@@ -1295,6 +1295,74 @@ class ClientIdempotencyRecord(Base):
     )
 
 
+class Conversation(Base):
+    """Bounded, ledger-scoped assistant conversation state (P51)."""
+
+    __tablename__ = "assistant_conversations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'archived')", name="ck_assistant_conversations_status"
+        ),
+        Index("ix_assistant_conversations_actor_updated", "actor_user_id", "updated_at"),
+        Index("ix_assistant_conversations_ledger_updated", "ledger_id", "updated_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="CASCADE"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(128), nullable=False, default="新对话")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    resolved_query_context: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict, server_default=text("'{}'")
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ConversationMessage(Base):
+    """One bounded message; result/context JSON contains typed facts only."""
+
+    __tablename__ = "assistant_conversation_messages"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "sequence", name="uq_assistant_message_sequence"),
+        CheckConstraint(
+            "role IN ('user', 'assistant')", name="ck_assistant_conversation_message_role"
+        ),
+        Index("ix_assistant_messages_conversation_created", "conversation_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("assistant_conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    actor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    ledger_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ledgers.id", ondelete="CASCADE"), nullable=False
+    )
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    content: Mapped[str] = mapped_column(String(2000), nullable=False)
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class DeadLetterAction(Base):
     """Append-only operator audit for dead-letter replay / resolve (P44).
 
