@@ -24,12 +24,20 @@ def upgrade() -> None:
         sa.Column("ledger_id", sa.Uuid(), nullable=False),
         sa.Column("title", sa.String(128), nullable=False),
         sa.Column("status", sa.String(16), nullable=False),
-        sa.Column("resolved_query_context", sa.JSON(), nullable=False, server_default=sa.text("'{}'")),
+        sa.Column(
+            "resolved_query_context", sa.JSON(), nullable=False, server_default=sa.text("'{}'")
+        ),
         sa.Column("version", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("last_message_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.CheckConstraint("status IN ('active', 'archived')", name="ck_assistant_conversations_status"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.CheckConstraint(
+            "status IN ('active', 'archived')", name="ck_assistant_conversations_status"
+        ),
         sa.ForeignKeyConstraint(["actor_user_id"], ["users.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["ledger_id"], ["ledgers.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -55,13 +63,21 @@ def upgrade() -> None:
         sa.Column("content", sa.String(2000), nullable=False),
         sa.Column("result_json", sa.JSON(), nullable=True),
         sa.Column("context_json", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.CheckConstraint("role IN ('user', 'assistant')", name="ck_assistant_conversation_message_role"),
-        sa.ForeignKeyConstraint(["conversation_id"], ["assistant_conversations.id"], ondelete="CASCADE"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.CheckConstraint(
+            "role IN ('user', 'assistant')", name="ck_assistant_conversation_message_role"
+        ),
+        sa.ForeignKeyConstraint(
+            ["conversation_id"], ["assistant_conversations.id"], ondelete="CASCADE"
+        ),
         sa.ForeignKeyConstraint(["actor_user_id"], ["users.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["ledger_id"], ["ledgers.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("conversation_id", "sequence", name="uq_assistant_message_sequence"),
+        sa.UniqueConstraint(
+            "conversation_id", "sequence", name="uq_assistant_message_sequence"
+        ),
     )
     op.create_index(
         "ix_assistant_messages_conversation_created",
