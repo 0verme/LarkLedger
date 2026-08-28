@@ -30,6 +30,7 @@ function result(overrides: Partial<AIEntryResult> = {}): AIEntryResult {
 		missing_fields: [],
 		query_result: null,
 		query_intent: null,
+		blocks: [],
 		...overrides,
 	};
 }
@@ -105,7 +106,10 @@ describe("WAI01–WAI11 AI entry panel", () => {
 		);
 		expect(csrf?.[1]).toBe("test-csrf-token");
 		expect(headers["idempotency-key"]).toBeTruthy();
-		expect(JSON.parse(String(init?.body))).toEqual({ text: "午饭28" });
+		expect(JSON.parse(String(init?.body))).toEqual({
+			text: "午饭28",
+			page_context: null,
+		});
 	});
 
 	it("WAI03 executed refreshes the ledger and shows the result", async () => {
@@ -338,6 +342,7 @@ describe("WAI01–WAI11 AI entry panel", () => {
 			unsupported: [],
 			clarification: [],
 			invalid_reason: null,
+			blocks: [],
 		};
 		vi.stubGlobal(
 			"fetch",
@@ -364,5 +369,39 @@ describe("WAI01–WAI11 AI entry panel", () => {
 			"href",
 			"/entries?entry=A0002",
 		);
+	});
+
+	it("WAI13 renders typed result blocks without parsing prose", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(() =>
+				jsonOk(
+					result({
+						status: "query_result",
+						message: "旧版文本回退",
+						operation: "query",
+						blocks: [
+							{
+								type: "metric",
+								label: "本月支出",
+								value: "1521.00",
+								currency: "CNY",
+								delta: null,
+								percentage: null,
+							},
+							{ type: "table", columns: ["分类", "金额"], rows: [["餐饮", "1521.00"]] },
+						],
+					}),
+				),
+			),
+		);
+		renderPanel();
+		fireEvent.change(screen.getByRole("textbox", { name: "AI 记账输入" }), {
+			target: { value: "分析本月支出" },
+		});
+		fireEvent.click(screen.getByRole("button", { name: /发送/ }));
+		expect(await screen.findByText("本月支出")).toBeInTheDocument();
+		expect(screen.getByText("餐饮")).toBeInTheDocument();
+		expect(screen.queryByText("旧版文本回退")).not.toBeInTheDocument();
 	});
 });

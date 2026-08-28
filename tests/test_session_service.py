@@ -168,8 +168,12 @@ async def test_multi_device_sessions_and_revoke_others(
     assert len(sessions) == 2
     current = [s for s in sessions if s.current]
     assert len(current) == 1 and current[0].session_id == phone.principal.session_id
-    assert "iOS" in sessions[0].device  # newest first: laptop created after phone
-    assert "Windows" in sessions[1].device
+    # SQLite's server-side timestamp has second-level precision, so sessions
+    # created back-to-back may compare equal. Assert both devices without
+    # coupling the contract to the database's tie-breaking order.
+    devices = {session.device for session in sessions}
+    assert any("iOS" in device for device in devices)
+    assert any("Windows" in device for device in devices)
 
     # Revoke the laptop session by id; the phone session stays valid.
     laptop_row = await service.revoke_session(

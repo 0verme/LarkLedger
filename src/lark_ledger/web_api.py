@@ -59,6 +59,11 @@ from lark_ledger.services.client_idempotency import (
     IdempotencyConflictError,
     IdempotencyInProgressError,
 )
+from lark_ledger.services.conversation import (
+    ConversationArchived,
+    ConversationNotFound,
+    ConversationService,
+)
 from lark_ledger.services.dashboard_auth import (
     CSRF_HEADER,
     OAUTH_COOKIE,
@@ -131,6 +136,9 @@ from lark_ledger.web_schemas import (
     AnalyticsTrendPoint,
     BudgetOverview,
     BudgetUpdateRequest,
+    ConversationCreateRequest,
+    ConversationDetail,
+    ConversationSummary,
     CurrentSession,
     DashboardData,
     DeadLetterActionRequest,
@@ -1565,6 +1573,77 @@ def _ai_entry_service(
     )
 
 
+@router.post("/ai/conversations", response_model=ConversationSummary, status_code=201)
+async def create_ai_conversation(
+    body: ConversationCreateRequest,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> ConversationSummary:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        result = await ConversationService(session).create(principal.request_context, body.title)
+        await session.commit()
+        return result
+
+
+@router.get("/ai/conversations", response_model=list[ConversationSummary])
+async def list_ai_conversations(
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> list[ConversationSummary]:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        return await ConversationService(session).list(principal.request_context)
+
+
+@router.get("/ai/conversations/{conversation_id}", response_model=ConversationDetail)
+async def get_ai_conversation(
+    conversation_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(current_principal)],
+) -> ConversationDetail:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            return await ConversationService(session).get(
+                principal.request_context, conversation_id
+            )
+        except ConversationNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/ai/conversations/{conversation_id}/archive", status_code=204)
+async def archive_ai_conversation(
+    conversation_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            await ConversationService(session).archive(principal.request_context, conversation_id)
+        except ConversationNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await session.commit()
+    return Response(status_code=204)
+
+
+@router.delete("/ai/conversations/{conversation_id}", status_code=204)
+async def delete_ai_conversation(
+    conversation_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[DashboardPrincipal, Depends(csrf_principal)],
+) -> Response:
+    factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
+    async with factory() as session:
+        try:
+            await ConversationService(session).delete(principal.request_context, conversation_id)
+        except ConversationNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        await session.commit()
+    return Response(status_code=204)
+
+
 @router.post(
     "/ai/entries",
     response_model=AIEntryResult,
@@ -1600,16 +1679,42 @@ async def create_ai_entry(
     async with factory() as session:
 
         async def apply(_record: ClientIdempotencyRecord) -> dict[str, Any]:
+            conversations = ConversationService(session)
+            parser_text = body.text.strip()
+            if body.conversation_id is not None:
+                previous_context = await conversations.context_for(
+                    principal.request_context, body.conversation_id
+                )
+                await conversations.append(
+                    principal.request_context,
+                    body.conversation_id,
+                    role="user",
+                    content=parser_text,
+                )
+                parser_text = conversations.expand_follow_up(parser_text, previous_context)
             outcome = await ai_entry.submit(
                 session=session,
                 request=AIEntryRequest(
                     context=principal.request_context,
-                    text=body.text.strip(),
+                    text=parser_text,
                     request_id=request_id,
                     source_message_ref=request_id,
+                    page_context=(
+                        body.page_context.model_dump(mode="json")
+                        if body.page_context is not None
+                        else None
+                    ),
                 ),
                 commit_changes=False,
             )
+            if body.conversation_id is not None:
+                await conversations.append(
+                    principal.request_context,
+                    body.conversation_id,
+                    role="assistant",
+                    content=outcome.message,
+                    result=outcome,
+                )
             return outcome.model_dump(mode="json")
 
         try:
@@ -1617,7 +1722,15 @@ async def create_ai_entry(
                 principal.request_context,
                 operation="web.ai.entry",
                 key=idempotency_key or "",
-                payload={"text": body.text.strip()},
+                payload={
+                    "text": body.text.strip(),
+                    "page_context": (
+                        body.page_context.model_dump(mode="json")
+                        if body.page_context is not None
+                        else None
+                    ),
+                    "conversation_id": str(body.conversation_id) if body.conversation_id else None,
+                },
                 callback=apply,
                 response_status=200,
             )
@@ -1627,6 +1740,12 @@ async def create_ai_entry(
         except IdempotencyInProgressError as exc:
             await session.rollback()
             raise HTTPException(status_code=503, detail="正在处理中，请稍后重试") from exc
+        except ConversationNotFound as exc:
+            await session.rollback()
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ConversationArchived as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             # Missing/oversized Idempotency-Key or an invalid request shape.
             await session.rollback()

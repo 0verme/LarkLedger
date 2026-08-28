@@ -38,6 +38,7 @@ def test_ai_entry_endpoint_is_published() -> None:
     # json_text lowercases the payload.
     assert "idempotency-key" in json_text(post)
     assert "x-csrf-token" in json_text(post)
+    assert "/api/web/v1/ai/conversations" in schema["paths"]
 
 
 def test_ai_entry_request_schema_is_fixed() -> None:
@@ -50,6 +51,8 @@ def test_ai_entry_request_schema_is_fixed() -> None:
     props = request_schema["properties"]
     assert "text" in props
     assert "maxLength" in props["text"]
+    assert "page_context" in props
+    assert "conversation_id" in props
     # extra="forbid" — no free-form extension of the request.
     assert "additionalProperties" in request_schema
     assert not request_schema["additionalProperties"]
@@ -72,6 +75,7 @@ def test_ai_entry_response_schema_is_canonical() -> None:
         "missing_fields",
         "query_result",
         "query_intent",
+        "blocks",
     ):
         assert required in props, f"AIEntryResult missing field {required}"
     status_ref = props["status"]["$ref"].rsplit("/", 1)[-1]

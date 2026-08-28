@@ -7,6 +7,8 @@ import {
 	errorText,
 	money,
 	newIdempotencyKey,
+	type AssistantPageContext,
+	type AssistantResponseBlock,
 	type AIEntryResult,
 	type PendingActionResponse,
 } from "../api";
@@ -37,6 +39,62 @@ function QueryEvidence({ query }: { query: NonNullable<AIEntryResult["query_resu
 	);
 }
 
+function AssistantBlocks({ blocks }: { blocks: AssistantResponseBlock[] }) {
+	const renderBlock = (block: AssistantResponseBlock, index: number) => {
+		switch (block.type) {
+			case "text":
+				return <p key={index} className="ai-block-text">{block.text}</p>;
+			case "metric":
+				return (
+					<article className="ai-block-metric" key={index}>
+						<span>{block.label}</span>
+						<strong>{money(block.value, block.currency)}</strong>
+						{block.percentage !== null ? <small>较基准 {block.percentage}%</small> : null}
+					</article>
+				);
+			case "table":
+				return (
+					<div className="ai-block-table table-scroll" key={index}>
+						<table>
+							<thead><tr>{block.columns.map((column) => <th key={column}>{column}</th>)}</tr></thead>
+							<tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}</tr>)}</tbody>
+						</table>
+					</div>
+				);
+			case "chart": {
+				const maximum = Math.max(1, ...block.points.map((point) => Number(point.value)));
+				return (
+					<div className="ai-block-chart" key={index} aria-label={block.label}>
+						{block.points.map((point) => (
+							<div className="ai-chart-point" key={point.label} title={`${point.label} ${money(point.value, block.currency)}`}>
+								<i style={{ height: `${Math.max(2, (Number(point.value) / maximum) * 100)}%` }} />
+								<small>{point.label}</small>
+							</div>
+						))}
+					</div>
+				);
+			}
+			case "entries":
+				return (
+					<div className="ai-block-entries table-scroll" key={index}>
+						<table>
+							<thead><tr><th>账目</th><th>时间</th><th>分类</th><th>金额</th></tr></thead>
+							<tbody>{block.entries.map((entry) => <tr key={entry.short_id}>
+								<td><Link to={`/entries?entry=${encodeURIComponent(entry.short_id)}`}>#{entry.short_id}</Link></td>
+								<td>{new Date(entry.occurred_at).toLocaleDateString("zh-CN")}</td>
+								<td>{entry.category}</td>
+								<td className={entry.direction === "income" ? "positive" : ""}>{entry.direction === "income" ? "+" : "-"}{money(entry.amount, entry.currency)}</td>
+							</tr>)}</tbody>
+						</table>
+					</div>
+				);
+			case "link":
+				return <Link className="ai-block-link" key={index} to={block.href}>{block.label}</Link>;
+		}
+	};
+	return <div className="ai-response-blocks">{blocks.map(renderBlock)}</div>;
+}
+
 function ResultPanel({
 	result,
 	onClear,
@@ -47,18 +105,23 @@ function ResultPanel({
 	switch (result.status) {
 		case "executed":
 		case "query_result":
+			{
+				const blocks = result.blocks?.length
+					? result.blocks
+					: result.query_result?.blocks ?? [];
 			return (
 				<div className="ai-result ai-result-ok" role="status">
 					<Check size={16} />
-					<p>
-						{result.message}
+					<div className="ai-result-content">
+						{blocks.length ? <AssistantBlocks blocks={blocks} /> : <p>{result.message}</p>}
 						{result.replayed ? (
 							<small>（已按原请求返回，未重复记账）</small>
 						) : null}
 						{result.query_result ? <QueryEvidence query={result.query_result} /> : null}
-					</p>
+					</div>
 				</div>
 			);
+			}
 		case "clarification_required":
 			return (
 				<div className="ai-result ai-result-hint" role="status">
@@ -183,7 +246,13 @@ function ConfirmationDialog({
 	);
 }
 
-export function AIEntryPanel({ onDone }: { onDone: () => void }) {
+export function AIEntryPanel({
+	onDone,
+	pageContext,
+}: {
+	onDone: () => void;
+	pageContext?: AssistantPageContext;
+}) {
 	const [text, setText] = useState("");
 	const [result, setResult] = useState<AIEntryResult | null>(null);
 	const trimmed = text.trim();
@@ -193,7 +262,7 @@ export function AIEntryPanel({ onDone }: { onDone: () => void }) {
 			const outcome = await api<AIEntryResult>("/ai/entries", {
 				method: "POST",
 				headers: { "Idempotency-Key": newIdempotencyKey() },
-				body: JSON.stringify({ text: trimmed }),
+				body: JSON.stringify({ text: trimmed, page_context: pageContext ?? null }),
 			});
 			return outcome;
 		},
