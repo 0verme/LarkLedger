@@ -612,6 +612,12 @@ async def test_budgets_get_and_report_branches(
             params={"start_date": "2026-09-01", "end_date": "2026-08-01"},
         )
         assert invalid_report.status_code == 422
+        multi_year = await client.get(
+            "/api/web/v1/reports",
+            params={"start_date": "2025-01-01", "end_date": "2026-12-31"},
+        )
+        assert multi_year.status_code == 200
+        assert multi_year.json()["trend_granularity"] == "month"
         empty_report = await client.get(
             "/api/web/v1/reports",
             params={"start_date": "2020-01-01", "end_date": "2020-01-31"},

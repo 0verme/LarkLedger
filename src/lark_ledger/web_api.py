@@ -2679,7 +2679,14 @@ async def report(
 ) -> ReportData:
     settings = cast(Settings, request.app.state.settings)
     try:
-        start, end = local_date_bounds(start_date, end_date, ZoneInfo(settings.timezone))
+        # Reports switch to monthly trend buckets for long ranges, so the
+        # analytics endpoint's 366-day guard does not apply here.
+        start, end = local_date_bounds(
+            start_date,
+            end_date,
+            ZoneInfo(settings.timezone),
+            max_days=None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)

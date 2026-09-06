@@ -180,8 +180,6 @@ class _ReportMixin:
         assert command.range_end is not None
         local_start = self._local_datetime(command.range_start)
         local_end = self._local_datetime(command.range_end)
-        if local_end - local_start > timedelta(days=366):
-            return ExecutionResult(message="单份消费报告最长支持 366 天，请缩短时间范围后重试。")
 
         filters: list[Any] = [
             self._entry_scope(user_open_id),

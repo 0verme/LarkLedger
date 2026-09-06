@@ -359,7 +359,7 @@ async def test_report_aggregates_expenses_income_and_local_days(session: AsyncSe
     assert result.report.trend[1].amount == Decimal("31.00")
 
 
-async def test_report_uses_monthly_trend_and_rejects_ranges_over_366_days(
+async def test_report_uses_monthly_trend_for_long_ranges(
     session: AsyncSession,
 ) -> None:
     service = LedgerService(session)
@@ -384,7 +384,7 @@ async def test_report_uses_monthly_trend_and_rejects_ranges_over_366_days(
     assert result.report is not None
     assert result.report.trend_granularity == "month"
 
-    too_long = await service.execute(
+    multi_year = await service.execute(
         "ou_a",
         ParsedCommand(
             action=Action.REPORT,
@@ -392,5 +392,7 @@ async def test_report_uses_monthly_trend_and_rejects_ranges_over_366_days(
             range_end=datetime(2026, 7, 1, tzinfo=UTC),
         ),
     )
-    assert too_long.report is None
-    assert "366" in too_long.message
+    assert multi_year.report is not None
+    assert multi_year.report.trend_granularity == "month"
+    assert len(multi_year.report.trend) == 18
+    assert multi_year.report.trend[12].amount == Decimal("12")
