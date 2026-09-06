@@ -293,6 +293,53 @@ class EntryCreateRequest(BaseModel):
     paid_by_user_id: uuid.UUID | None = None
 
 
+class WebAssistantPageContext(BaseModel):
+    """Advisory context from a dashboard page.
+
+    The server still derives actor and ledger scope from the session. Resource
+    hints are bounded and are never used as authorization inputs.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    page: Literal["budget", "report", "account", "entries"]
+    start: str | None = Field(default=None, max_length=64)
+    end: str | None = Field(default=None, max_length=64)
+    filters: dict[str, str] = Field(default_factory=dict, max_length=20)
+    resource_id: str | None = Field(default=None, max_length=128)
+
+
+class ConversationCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="新对话", min_length=1, max_length=128)
+
+
+class ConversationSummary(BaseModel):
+    id: uuid.UUID
+    title: str
+    status: Literal["active", "archived"]
+    version: int
+    last_message_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ConversationMessageView(BaseModel):
+    id: uuid.UUID
+    sequence: int
+    role: Literal["user", "assistant"]
+    content: str
+    result: dict[str, Any] | None = None
+    context: dict[str, Any] | None = None
+    created_at: datetime
+
+
+class ConversationDetail(ConversationSummary):
+    resolved_query_context: dict[str, Any]
+    messages: list[ConversationMessageView]
+
+
 class WebAIEntryRequest(BaseModel):
     """P39 — natural-language AI bookkeeping input from the Web dashboard.
 
@@ -304,6 +351,8 @@ class WebAIEntryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(min_length=1, max_length=500)
+    page_context: WebAssistantPageContext | None = None
+    conversation_id: uuid.UUID | None = None
 
 
 class EntryVersionRequest(BaseModel):

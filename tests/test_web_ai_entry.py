@@ -528,5 +528,59 @@ async def test_waip12_rejects_oversized_input(
             headers={**_csrf(csrf), "Idempotency-Key": "waip12-key"},
             json={"text": "x" * 501},
         )
-    assert response.status_code == 422
+        assert response.status_code == 422
     assert await _entry_count(factory) == 0
+
+
+async def test_waip13_conversation_is_bounded_and_ledger_scoped(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    interpreter = StubInterpreter(
+        _command(
+            Action.CREATE,
+            amount="28.00",
+            direction=Direction.EXPENSE,
+            category="餐饮",
+            note="午饭",
+        )
+    )
+    client, csrf = await _client(factory, "ou_waip13", interpreter=interpreter)
+    async with client:
+        created = await client.post(
+            "/api/web/v1/ai/conversations",
+            headers=_csrf(csrf),
+            json={"title": "本月支出"},
+        )
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+        outcome = await client.post(
+            "/api/web/v1/ai/entries",
+            headers={**_csrf(csrf), "Idempotency-Key": "waip13-key"},
+            json={
+                "text": "午饭28",
+                "conversation_id": conversation_id,
+                "page_context": {
+                    "page": "entries",
+                    "start": "2026-08-01T00:00:00Z",
+                    "end": "2026-09-01T00:00:00Z",
+                    "filters": {"category": "餐饮"},
+                    "resource_id": None,
+                },
+            },
+        )
+        assert outcome.status_code == 200
+        detail = await client.get(f"/api/web/v1/ai/conversations/{conversation_id}")
+        assert detail.status_code == 200
+        assert [message["role"] for message in detail.json()["messages"]] == [
+            "user",
+            "assistant",
+        ]
+
+    other, _other_csrf = await _client(
+        factory,
+        "ou_waip13_other",
+        interpreter=interpreter,
+    )
+    async with other:
+        forbidden = await other.get(f"/api/web/v1/ai/conversations/{conversation_id}")
+        assert forbidden.status_code == 404

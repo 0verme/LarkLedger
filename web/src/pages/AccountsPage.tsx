@@ -17,6 +17,7 @@ import {
 	type AssetSummary,
 } from "../api";
 import { EmptyState, PageSkeleton } from "../components/States";
+import { ContextualAssistantButton } from "../components/ContextualAssistantButton";
 
 type AccountType = "cash" | "asset" | "liability";
 
@@ -99,9 +100,14 @@ export function AccountsPage() {
 					<p className="eyebrow">账户管理</p>
 					<h2>每一笔钱，都在它该在的地方。</h2>
 				</div>
-				<button className="primary-small" onClick={() => setCreating(true)}>
-					<Plus size={16} /> 创建账户
-				</button>
+				<div className="heading-actions">
+					<ContextualAssistantButton
+						context={{ page: "account", start: null, end: null, filters: {}, resource_id: null }}
+					/>
+					<button className="primary-small" onClick={() => setCreating(true)}>
+						<Plus size={16} /> 创建账户
+					</button>
+				</div>
 			</div>
 			{assets.data && (
 				<section className="metric-grid asset-metrics">

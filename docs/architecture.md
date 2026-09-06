@@ -485,6 +485,22 @@ Worker 写入 `received → processing → succeeded | failed | dead`，每次�
 
 ## AI 与数据库边界
 
+### Action Intent 安全桥（P52）
+
+助手若要从“回答”进入“操作建议”，必须先产出严格的
+`ActionIntent(operation, command, resource_refs)`。`operation` 只能来自
+`src/lark_ledger/action_intent.py` 的 allowlist，并且必须与既有
+`ParsedCommand.action` 一致；未知操作在到达 Application Service 之前直接拒绝。
+
+该桥只负责契约校验和操作登记，不执行工具、不访问数据库，也不接受客户端提供的
+`ledger_id` / `account_id` 作为权限依据。真实资源解析仍由服务端完成，账本权限由
+`RequestContext` 与 `LedgerAuthorizationService` 决定。写操作继续进入既有
+`RiskRouter → PendingCommand / ClientApplicationService`，因此高风险操作仍需要
+冻结 payload、确认、幂等和审计；查询操作保持只读。
+
+这条边界由 `tests/test_action_intent.py` 和架构守护测试覆盖：模型不能携带任意
+字段/可执行代码，operation 与 action 不匹配或未注册时不能进入业务执行路径。
+
 AI 只允许返回 `ParsedCommand` 定义的字段，额外字段会被拒绝。支持的动作是：
 
 - 新增账目

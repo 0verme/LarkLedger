@@ -24,6 +24,7 @@ import {
 } from "../api";
 import { QuickEntryDialog } from "../components/QuickEntryDialog";
 import { EmptyState, TableSkeleton } from "../components/States";
+import { ContextualAssistantButton } from "../components/ContextualAssistantButton";
 
 function useDebounced(value: string, delay = 300) {
 	const [result, setResult] = useState(value);
@@ -146,6 +147,19 @@ export function EntriesPage() {
 				</div>
 				<div className="heading-actions">
 					<span className="result-count">共 {entries.data?.total ?? 0} 笔</span>
+					<ContextualAssistantButton
+						context={{
+							page: "entries",
+							start: params.get("start"),
+							end: params.get("end"),
+							filters: Object.fromEntries(
+								["search", "direction", "category", "source_type", "amount_min", "amount_max", "deleted", "sort", "order"]
+									.map((key) => [key, params.get(key) ?? ""])
+									.filter(([, value]) => value),
+							),
+							resource_id: selected,
+						}}
+					/>
 					<button className="primary-small" onClick={() => setCreating(true)}>
 						<Plus size={16} /> 新建账目
 					</button>
