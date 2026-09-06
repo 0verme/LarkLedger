@@ -26,12 +26,16 @@ MAX_ANALYTICS_DAYS = 366
 
 
 def local_date_bounds(
-    start_date: date, end_date: date, timezone: ZoneInfo
+    start_date: date,
+    end_date: date,
+    timezone: ZoneInfo,
+    *,
+    max_days: int | None = MAX_ANALYTICS_DAYS,
 ) -> tuple[datetime, datetime]:
     if start_date > end_date:
         raise ValueError("start_date must not be after end_date")
-    if (end_date - start_date).days + 1 > MAX_ANALYTICS_DAYS:
-        raise ValueError(f"analytics range must not exceed {MAX_ANALYTICS_DAYS} days")
+    if max_days is not None and (end_date - start_date).days + 1 > max_days:
+        raise ValueError(f"analytics range must not exceed {max_days} days")
     start = datetime.combine(start_date, time.min, tzinfo=timezone).astimezone(UTC)
     end = datetime.combine(end_date + timedelta(days=1), time.min, tzinfo=timezone).astimezone(
         UTC

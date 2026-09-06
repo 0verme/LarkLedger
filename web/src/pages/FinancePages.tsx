@@ -1,5 +1,10 @@
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import {
+	keepPreviousData,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import {
 	ChevronLeft,
 	ChevronRight,
@@ -10,7 +15,7 @@ import {
 	Plus,
 	Trash2,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
 	api,
 	downloadExport,
@@ -24,6 +29,12 @@ import {
 } from "../api";
 import { EmptyState, PageSkeleton } from "../components/States";
 import { ContextualAssistantButton } from "../components/ContextualAssistantButton";
+import {
+	isValidDateRange,
+	readReportDateRange,
+	ReportDateRangePicker,
+	type ReportDateRange,
+} from "../components/ReportDateRangePicker";
 
 const periodOptions = [
 	{ value: "7d", label: "7 天" },
@@ -613,23 +624,48 @@ function presetDates(preset: string) {
 }
 
 export function ReportsPage() {
-	const [preset, setPreset] = useState("month");
-	const initialCustom = useMemo(() => presetDates("90d"), []);
-	const [customStart, setCustomStart] = useState(initialCustom.start);
-	const [customEnd, setCustomEnd] = useState(initialCustom.end);
-	const dates = useMemo(
-		() =>
-			preset === "custom"
-				? { start: customStart, end: customEnd }
-				: presetDates(preset),
-		[preset, customStart, customEnd],
+	const [params, setParams] = useSearchParams();
+	const today = useMemo(() => new Date(), []);
+	const parsedRange = useMemo(
+		() => readReportDateRange(params, today),
+		[params, today],
 	);
+	const dates = parsedRange.range;
+
+	useEffect(() => {
+		if (!parsedRange.hasUrlRange || parsedRange.validFromUrl) return;
+		setParams(
+			(current) => {
+				const next = new URLSearchParams(current);
+				next.delete("from");
+				next.delete("to");
+				next.delete("start_date");
+				next.delete("end_date");
+				return next;
+			},
+			{ replace: true },
+		);
+	}, [parsedRange.hasUrlRange, parsedRange.validFromUrl, setParams]);
+
+	const updateRange = (range: ReportDateRange) => {
+		if (!isValidDateRange(range)) return;
+		setParams((current) => {
+			const next = new URLSearchParams(current);
+			next.set("from", range.startDate);
+			next.set("to", range.endDate);
+			next.delete("start_date");
+			next.delete("end_date");
+			return next;
+		});
+	};
+
 	const query = useQuery({
-		queryKey: ["report", dates.start, dates.end],
+		queryKey: ["report", dates.startDate, dates.endDate],
 		queryFn: () =>
 			api<ReportData>(
-				`/reports?start_date=${dates.start}&end_date=${dates.end}`,
+				`/reports?start_date=${dates.startDate}&end_date=${dates.endDate}`,
 			),
+		placeholderData: keepPreviousData,
 		retry: false,
 	});
 	const max = Math.max(
@@ -644,42 +680,28 @@ export function ReportsPage() {
 					<h2>收支报告</h2>
 				</div>
 				<div className="heading-actions">
-					<select
-						className="preset-select"
-						value={preset}
-						onChange={(event) => setPreset(event.target.value)}
-					>
-						<option value="month">本月</option>
-						<option value="last_month">上月</option>
-						<option value="90d">最近 90 天</option>
-						<option value="custom">自定义</option>
-					</select>
+					<ReportDateRangePicker
+						value={dates}
+						now={today}
+						onChange={updateRange}
+					/>
+					{query.isFetching && query.data && (
+						<span className="report-query-status" aria-live="polite">
+							更新中…
+						</span>
+					)}
 					<ContextualAssistantButton
-						context={{ page: "report", start: dates.start, end: dates.end, filters: { preset }, resource_id: null }}
+						context={{
+							page: "report",
+							start: dates.startDate,
+							end: dates.endDate,
+							filters: { range: "date" },
+							resource_id: null,
+						}}
 					/>
 				</div>
 			</div>
-			{preset === "custom" && (
-				<div className="custom-range">
-					<label>
-						开始
-						<input
-							type="date"
-							value={customStart}
-							onChange={(event) => setCustomStart(event.target.value)}
-						/>
-					</label>
-					<label>
-						结束
-						<input
-							type="date"
-							value={customEnd}
-							onChange={(event) => setCustomEnd(event.target.value)}
-						/>
-					</label>
-				</div>
-			)}
-			{query.isLoading ? (
+			{query.isPending && !query.data ? (
 				<PageSkeleton rows={2} />
 			) : query.isError ? (
 				<div className="state-panel">

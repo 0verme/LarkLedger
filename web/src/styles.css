@@ -691,6 +691,260 @@ button {
 	gap: 12px;
 	flex-shrink: 0;
 }
+.report-range-picker {
+	position: relative;
+	flex-shrink: 0;
+}
+.report-range-trigger {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	min-height: var(--button-height-sm);
+	padding: 0 11px;
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	background: var(--surface-solid);
+	color: var(--text-2);
+	box-shadow: var(--sh-1);
+	cursor: pointer;
+	font-size: var(--fs-body);
+	font-weight: 600;
+	white-space: nowrap;
+	transition:
+		border-color var(--dur) var(--ease),
+		background var(--dur) var(--ease),
+		color var(--dur) var(--ease),
+		box-shadow var(--dur) var(--ease);
+}
+.report-range-trigger:hover,
+.report-range-trigger[aria-expanded="true"] {
+	border-color: var(--line-3);
+	background: var(--surface-hover);
+	color: var(--text);
+	box-shadow: var(--sh-2);
+}
+.report-range-trigger svg:first-child {
+	color: var(--mist);
+}
+.report-range-trigger:disabled {
+	border-color: var(--button-disabled-border);
+	background: var(--button-disabled-bg);
+	color: var(--button-disabled-text);
+	box-shadow: none;
+	cursor: not-allowed;
+}
+.report-range-trigger:disabled svg:first-child {
+	color: var(--button-disabled-text);
+}
+.report-range-popover {
+	position: absolute;
+	z-index: 30;
+	top: calc(100% + 10px);
+	right: 0;
+	width: min(366px, calc(100vw - 28px));
+	padding: 14px;
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-lg);
+	background: var(--surface-solid);
+	box-shadow: var(--sh-3);
+}
+.report-range-tabs {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 3px;
+	padding: 3px;
+	border-radius: var(--r-sm);
+	background: var(--surface-muted);
+}
+.report-range-tabs button,
+.report-range-shortcuts button,
+.report-range-footer button {
+	border: 0;
+	border-radius: var(--r-xs);
+	background: transparent;
+	color: var(--text-2);
+	cursor: pointer;
+	font-size: var(--fs-body);
+	font-weight: 600;
+	transition:
+		color var(--dur) var(--ease),
+		background var(--dur) var(--ease),
+		box-shadow var(--dur) var(--ease);
+}
+.report-range-tabs button {
+	padding: 8px 10px;
+}
+.report-range-tabs button:hover,
+.report-range-shortcuts button:hover,
+.report-range-footer button:hover {
+	color: var(--text);
+	background: var(--surface-hover);
+}
+.report-range-tabs button.active,
+.report-range-shortcuts button.active {
+	color: var(--text);
+	background: var(--surface-solid);
+	box-shadow: var(--sh-1);
+}
+.report-range-shortcuts {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: 6px;
+	margin: 14px 0 16px;
+}
+.report-range-shortcuts button {
+	min-height: 34px;
+	padding: 6px 4px;
+}
+.report-range-year-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+.report-range-year-header label {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	color: var(--text-3);
+	font-size: var(--fs-small);
+}
+.report-range-year-header input {
+	width: 78px;
+	min-height: 32px;
+	padding: 0 8px;
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-xs);
+	background: var(--surface-solid);
+	color: var(--text);
+	font: inherit;
+	font-size: var(--fs-body);
+	font-weight: 650;
+	text-align: center;
+}
+.report-range-year-header input:focus,
+.report-range-custom input:focus {
+	border-color: var(--mist);
+	box-shadow: 0 0 0 3px var(--mist-bg);
+	outline: none;
+}
+.report-range-icon-button {
+	display: grid;
+	place-items: center;
+	width: 32px;
+	height: 32px;
+	padding: 0;
+	border: 1px solid var(--line-1);
+	border-radius: var(--r-xs);
+	background: transparent;
+	color: var(--text-2);
+	cursor: pointer;
+}
+.report-range-icon-button:hover {
+	background: var(--surface-muted);
+	color: var(--text);
+}
+.report-range-months {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: 6px;
+}
+.report-month-option {
+	position: relative;
+	min-height: 38px;
+	padding: 7px 5px;
+	border: 1px solid transparent;
+	border-radius: var(--r-xs);
+	background: transparent;
+	color: var(--text-2);
+	cursor: pointer;
+	font-size: var(--fs-body);
+	transition:
+		border-color var(--dur) var(--ease),
+		background var(--dur) var(--ease),
+		color var(--dur) var(--ease);
+}
+.report-month-option:hover {
+	background: var(--surface-muted);
+	color: var(--text);
+}
+.report-month-option[data-current="true"]:not(.selected)::after {
+	position: absolute;
+	right: 6px;
+	bottom: 5px;
+	width: 4px;
+	height: 4px;
+	border-radius: var(--r-pill);
+	background: var(--mist);
+	content: "";
+}
+.report-month-option.selected {
+	border-color: var(--mist);
+	background: var(--mist-bg);
+	color: var(--mist);
+	font-weight: 650;
+}
+.report-month-option.selected::before {
+	position: absolute;
+	top: 5px;
+	right: 6px;
+	width: 5px;
+	height: 5px;
+	border: 1px solid currentColor;
+	border-radius: var(--r-pill);
+	content: "";
+}
+.report-range-custom {
+	display: grid;
+	gap: 12px;
+	padding-top: 14px;
+}
+.report-range-custom label {
+	display: grid;
+	gap: 6px;
+	color: var(--text-2);
+	font-size: var(--fs-small);
+	font-weight: 600;
+}
+.report-range-custom input {
+	width: 100%;
+	min-height: 38px;
+	padding: 0 10px;
+	border: 1px solid var(--line-2);
+	border-radius: var(--r-sm);
+	background: var(--surface-solid);
+	color: var(--text);
+	font: inherit;
+}
+.report-range-error {
+	margin: -2px 0 0;
+	color: var(--danger);
+	font-size: var(--fs-small);
+}
+.report-range-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding-top: 2px;
+}
+.report-range-footer button {
+	min-height: 34px;
+	padding: 7px 12px;
+}
+.report-range-footer button.primary-small {
+	color: var(--on-ink);
+	background: var(--ink);
+}
+.report-range-footer button.primary-small:hover {
+	color: var(--on-ink);
+	background: var(--ink-hover);
+}
+.report-query-status {
+	color: var(--text-3);
+	font-size: var(--fs-small);
+	white-space: nowrap;
+}
 .heading-actions .quiet-button + .quiet-button {
 	margin-left: 2px;
 }
@@ -1405,7 +1659,6 @@ button {
 .edit-dialog select,
 .edit-dialog textarea,
 .text-input,
-.preset-select,
 .export-card select,
 .export-card input,
 .admin-filter select,
@@ -1436,7 +1689,6 @@ button {
 .edit-dialog select:focus,
 .edit-dialog textarea:focus,
 .text-input:focus,
-.preset-select:focus,
 .export-card select:focus,
 .export-card input:focus,
 .admin-filter select:focus,
@@ -1521,7 +1773,6 @@ button {
 	font-size: var(--fs-small);
 	margin-top: 8px;
 }
-.preset-select,
 .export-card select,
 .export-card input {
 	padding: 9px 11px;
@@ -3702,6 +3953,16 @@ td strong {
 	}
 }
 @media (max-width: 650px) {
+	.report-range-popover {
+		left: 0;
+		right: auto;
+	}
+	.report-range-shortcuts {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.report-range-months {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
 	.range-switch {
 		width: 100%;
 		overflow-x: auto;
