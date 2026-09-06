@@ -38,6 +38,11 @@
 	--ink-press: #0f1115;
 	--on-ink: #ffffff;
 
+	/* ── 按钮不可用状态（通过 token 保持控件轮廓与文案可见） ─────── */
+	--button-disabled-bg: #eef0f2;
+	--button-disabled-border: #e1e4e8;
+	--button-disabled-text: #9aa1a9;
+
 	/* ── 低饱和辅助色（仅用于状态 / 图表 / 标签 / 少量强调） ──────── */
 	--mist: #5a7a97; /* Mist Blue */
 	--mist-bg: #eaf0f5;
@@ -67,6 +72,7 @@
 	--r-lg: 16px;
 	--r-xl: 22px;
 	--r-pill: 999px;
+	--button-height-sm: 36px;
 
 	/* ── 阴影（非常克制，优先边框 + 轻阴影） ─────────────────────── */
 	--sh-1: 0 1px 2px rgba(23, 26, 31, 0.04);
@@ -768,11 +774,18 @@ button {
 }
 .primary-small {
 	padding: 9px 15px;
+	min-height: var(--button-height-sm);
 	font-size: var(--fs-body);
 }
 .primary {
 	padding: 10px 16px;
 	font-size: var(--fs-body);
+}
+.drawer-actions > button,
+.confirm-dialog > div > button,
+.edit-dialog > div:last-of-type > button,
+.dialog-actions > button {
+	min-height: var(--button-height-sm);
 }
 .primary-button:hover,
 .primary-small:hover,
@@ -791,19 +804,21 @@ button {
 .primary-button:disabled,
 .primary-small:disabled,
 .primary:disabled {
-	opacity: 0.45;
-	cursor: default;
+	color: var(--button-disabled-text);
+	background: var(--button-disabled-bg);
+	border-color: var(--button-disabled-border);
+	cursor: not-allowed;
 	transform: none;
 	box-shadow: none;
 }
-/* 次按钮：半透明 + 轻描边 */
-.ghost,
-.drawer-actions button,
-.confirm-dialog button,
-.edit-dialog button,
-.pagination button,
-.row-actions button,
-.state-panel button {
+/* 次按钮：浅色填充 + 轻描边 */
+.ghost:not(.primary-button):not(.primary-small):not(.primary),
+.drawer-actions button:not(.primary-button):not(.primary-small):not(.primary),
+.confirm-dialog button:not(.primary-button):not(.primary-small):not(.primary),
+.edit-dialog button:not(.primary-button):not(.primary-small):not(.primary),
+.pagination button:not(.primary-button):not(.primary-small):not(.primary),
+.row-actions button:not(.primary-button):not(.primary-small):not(.primary),
+.state-panel button:not(.primary-button):not(.primary-small):not(.primary) {
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
@@ -820,24 +835,29 @@ button {
 		border-color var(--dur) var(--ease),
 		transform var(--dur) var(--ease);
 }
-.ghost:hover,
-.drawer-actions button:hover,
-.confirm-dialog button:hover,
-.edit-dialog button:hover,
-.pagination button:hover,
-.row-actions button:hover,
-.state-panel button:hover {
+.ghost:not(.primary-button):not(.primary-small):not(.primary):hover,
+.drawer-actions button:not(.primary-button):not(.primary-small):not(.primary):hover,
+.confirm-dialog button:not(.primary-button):not(.primary-small):not(.primary):hover,
+.edit-dialog button:not(.primary-button):not(.primary-small):not(.primary):hover,
+.pagination button:not(.primary-button):not(.primary-small):not(.primary):hover,
+.row-actions button:not(.primary-button):not(.primary-small):not(.primary):hover,
+.state-panel button:not(.primary-button):not(.primary-small):not(.primary):hover {
 	background: var(--surface-muted);
 	border-color: var(--line-3);
 }
-.ghost:disabled,
-.drawer-actions button:disabled,
-.confirm-dialog button:disabled,
-.edit-dialog button:disabled,
-.pagination button:disabled,
-.row-actions button:disabled {
-	opacity: 0.45;
-	cursor: default;
+.ghost:not(.primary-button):not(.primary-small):not(.primary):disabled,
+.drawer-actions button:not(.primary-button):not(.primary-small):not(.primary):disabled,
+.confirm-dialog button:not(.primary-button):not(.primary-small):not(.primary):disabled,
+.edit-dialog button:not(.primary-button):not(.primary-small):not(.primary):disabled,
+.pagination button:not(.primary-button):not(.primary-small):not(.primary):disabled,
+.row-actions button:not(.primary-button):not(.primary-small):not(.primary):disabled,
+.state-panel button:not(.primary-button):not(.primary-small):not(.primary):disabled {
+	color: var(--button-disabled-text);
+	background: var(--button-disabled-bg);
+	border-color: var(--button-disabled-border);
+	cursor: not-allowed;
+	transform: none;
+	box-shadow: none;
 }
 .link-button {
 	border: 0;
@@ -873,6 +893,17 @@ button {
 .danger-solid:hover {
 	background: #944f40 !important;
 	border-color: #944f40 !important;
+}
+.danger:disabled {
+	color: var(--button-disabled-text) !important;
+}
+.danger-solid:disabled {
+	color: var(--button-disabled-text) !important;
+	background: var(--button-disabled-bg) !important;
+	border-color: var(--button-disabled-border) !important;
+	cursor: not-allowed;
+	transform: none;
+	box-shadow: none;
 }
 
 /* --------------------------------------------------------------------------
@@ -938,12 +969,12 @@ button {
 	z-index: 1;
 	flex-shrink: 0;
 }
-.dash-hero .primary-small {
+.dash-hero .primary-small:not(:disabled) {
 	background: #fff;
 	color: var(--ink);
 	border-color: #fff;
 }
-.dash-hero .primary-small:hover {
+.dash-hero .primary-small:not(:disabled):hover {
 	background: rgba(255, 255, 255, 0.88);
 	border-color: rgba(255, 255, 255, 0.88);
 	box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
@@ -1716,10 +1747,6 @@ td strong {
 	color: var(--text-3);
 	font-size: var(--fs-body);
 	padding: 0 4px;
-}
-.pagination button:disabled {
-	opacity: 0.45;
-	cursor: default;
 }
 .audit-table td {
 	font-family: var(--mono);

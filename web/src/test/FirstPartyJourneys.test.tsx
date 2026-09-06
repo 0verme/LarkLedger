@@ -299,6 +299,10 @@ describe("W01–W06 first-party dashboard, ledger, entries and quick bookkeeping
 		fireEvent.click(screen.getAllByRole("button", { name: /记一笔/ })[0]);
 		const dialog = await screen.findByRole("heading", { name: "记一笔" });
 		expect(dialog).toBeInTheDocument();
+		const save = screen.getByRole("button", { name: "保存" });
+		expect(save).toHaveClass("primary-small");
+		expect(save).toBeDisabled();
+		expect(save).toHaveTextContent("保存");
 		const amount = await screen.findByLabelText(/金额/);
 		fireEvent.change(amount, { target: { value: "28" } });
 		fireEvent.click(screen.getByRole("button", { name: "餐饮" }));
