@@ -236,12 +236,33 @@ describe("dashboard routing and protection", () => {
 		).toBeInTheDocument();
 		expect(screen.getByText("DeepSeek-compatible")).toBeInTheDocument();
 		expect(screen.getAllByText("已配置")).toHaveLength(2);
-		fireEvent.click(screen.getByRole("button", { name: "打开导航" }));
+		const mobileMenu = screen.getByRole("button", { name: "打开导航" });
+		expect(mobileMenu.closest("header")).not.toBeNull();
+		expect(mobileMenu).toHaveAttribute("aria-controls", "main-navigation");
+		expect(mobileMenu).toHaveAttribute("aria-expanded", "false");
+		fireEvent.click(mobileMenu);
 		expect(document.querySelector(".sidebar")).toHaveClass("open");
+		expect(mobileMenu).toHaveAttribute("aria-expanded", "true");
+		expect(screen.getByRole("link", { name: "报表" })).toBeInTheDocument();
+		fireEvent.click(document.querySelector<HTMLButtonElement>(".nav-scrim")!);
+		expect(document.querySelector(".sidebar")).not.toHaveClass("open");
+		expect(mobileMenu).toHaveAttribute("aria-expanded", "false");
+		fireEvent.click(mobileMenu);
 		fireEvent.click(
 			screen.getAllByRole("button", { name: "关闭导航" }).at(-1)!,
 		);
 		expect(document.querySelector(".sidebar")).not.toHaveClass("open");
+		expect(mobileMenu).toHaveAttribute("aria-expanded", "false");
+		fireEvent.click(mobileMenu);
+		fireEvent.keyDown(window, { key: "Escape" });
+		expect(document.querySelector(".sidebar")).not.toHaveClass("open");
+		expect(mobileMenu).toHaveAttribute("aria-expanded", "false");
+		fireEvent.click(mobileMenu);
+		fireEvent.click(screen.getByRole("link", { name: "关于" }));
+		expect(
+			await screen.findByRole("heading", { name: "飞书里的账，网页里看清。" }),
+		).toBeInTheDocument();
+		expect(mobileMenu).toHaveAttribute("aria-expanded", "false");
 	});
 
 	it("exposes the GitHub source from the sidebar and about page", async () => {

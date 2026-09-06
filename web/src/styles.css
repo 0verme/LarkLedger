@@ -576,6 +576,7 @@ button {
 	height: 62px;
 	display: flex;
 	align-items: center;
+	gap: 12px;
 	padding: 0 40px;
 	background: rgba(244, 245, 242, 0.66);
 	backdrop-filter: blur(14px);
@@ -3472,13 +3473,14 @@ td strong {
 		box-shadow: var(--sh-4);
 	}
 	.sidebar.open {
+		z-index: 40;
 		transform: none;
 	}
 	.workspace {
 		margin-left: 0;
 	}
 	.workspace header {
-		padding-left: 60px;
+		padding: 0 20px;
 	}
 	.content {
 		padding: 22px 20px;
@@ -3490,12 +3492,16 @@ td strong {
 		padding: 28px;
 	}
 	.mobile-menu {
-		display: block;
-		position: fixed;
-		z-index: 10;
-		top: 16px;
-		left: 16px;
+		display: grid;
+		place-items: center;
+		flex: 0 0 auto;
+		width: 36px;
+		height: 36px;
+		padding: 0;
 		color: var(--text-2);
+		background: var(--surface-solid);
+		border: 1px solid var(--line-1);
+		box-shadow: var(--sh-1);
 	}
 	.mobile-close {
 		display: block;
@@ -3506,13 +3512,14 @@ td strong {
 	.nav-scrim {
 		display: block;
 		position: fixed;
-		z-index: 15;
+		z-index: 35;
 		inset: 0;
 		width: 100%;
 		border: 0;
 		background: rgba(21, 30, 42, 0.26);
 		backdrop-filter: blur(2px);
 		-webkit-backdrop-filter: blur(2px);
+		cursor: pointer;
 	}
 	.config-grid,
 	.about-grid {

@@ -1,32 +1,11 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-	Activity,
-	ArrowLeftRight,
-	BarChart3,
-	BookOpen,
-	CalendarClock,
 	ChevronRight,
-	CircleDollarSign,
-	Clock3,
-	Download,
-	FileText,
 	GitFork,
-	HeartPulse,
-	Home,
-	KeyRound,
-	Landmark,
-	AlertTriangle,
 	LogOut,
 	Menu,
-	MessageSquareReply,
-	MonitorSmartphone,
-	PiggyBank,
-	RotateCcw,
-	Settings,
 	ShieldCheck,
-	Target,
-	Users,
 	X,
 } from "lucide-react";
 import {
@@ -65,81 +44,13 @@ import { AboutPage, ConfigPage } from "./pages/SystemPages";
 import { ApiTokensPage } from "./pages/ApiTokensPage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { PROJECT_GITHUB_URL } from "./constants";
+import {
+	getVisibleNavigationGroups,
+	navigationPageNames,
+	type NavItem,
+} from "./navigation";
 
-type NavItem = {
-	label: string;
-	path: string;
-	icon: typeof Activity;
-	admin?: boolean;
-};
-
-const groups: Array<{ label?: string; items: NavItem[] }> = [
-	{
-		items: [
-			{ label: "首页", path: "/", icon: Home },
-			{ label: "流水", path: "/entries", icon: BookOpen },
-			{ label: "账户", path: "/accounts", icon: Landmark },
-			{ label: "转账", path: "/transfers", icon: ArrowLeftRight },
-			{ label: "待确认", path: "/pending", icon: Clock3 },
-		],
-	},
-	{
-		label: "家庭与规划",
-		items: [
-			{ label: "家庭总览", path: "/overview", icon: BarChart3 },
-			{ label: "家庭", path: "/households", icon: Users },
-			{ label: "预算", path: "/budgets", icon: PiggyBank },
-			{ label: "目标", path: "/goals", icon: Target },
-			{ label: "周期账单", path: "/recurring", icon: CalendarClock },
-			{ label: "分析", path: "/analytics", icon: CircleDollarSign },
-			{ label: "报表", path: "/reports", icon: FileText },
-			{ label: "导出", path: "/exports", icon: Download },
-		],
-	},
-	{
-		label: "可靠投递",
-		items: [
-			{ label: "事件", path: "/admin/events", icon: Activity, admin: true },
-			{
-				label: "回复队列",
-				path: "/admin/outbox",
-				icon: MessageSquareReply,
-				admin: true,
-			},
-			{
-				label: "Dead / Replay",
-				path: "/admin/dead",
-				icon: RotateCcw,
-				admin: true,
-			},
-			{
-				label: "Dead Letters",
-				path: "/admin/dead-letters",
-				icon: AlertTriangle,
-				admin: true,
-			},
-		],
-	},
-	{
-		label: "设置与开发者",
-		items: [
-			{ label: "登录会话", path: "/sessions", icon: MonitorSmartphone },
-			{ label: "API 令牌", path: "/api-tokens", icon: KeyRound },
-			{
-				label: "健康状态",
-				path: "/admin/health",
-				icon: HeartPulse,
-				admin: true,
-			},
-			{ label: "配置", path: "/admin/config", icon: Settings, admin: true },
-			{ label: "关于", path: "/about", icon: ShieldCheck },
-		],
-	},
-];
-
-const pageNames = new Map(
-	groups.flatMap((group) => group.items.map((item) => [item.path, item.label])),
-);
+const pageNames = navigationPageNames;
 
 function Login() {
 	return (
@@ -285,33 +196,38 @@ function Shell({ me }: { me: Me }) {
 	});
 	const askCreateLedger = () => setLedgerDialogOpen(true);
 	const [ledgerDialogOpen, setLedgerDialogOpen] = useState(false);
-	const visibleGroups = groups.map((group) => ({
-		...group,
-		items: group.items.filter((item) => !item.admin || me.role === "ADMIN"),
-	}));
+	const visibleGroups = getVisibleNavigationGroups(me.role === "ADMIN");
+
+	useEffect(() => {
+		if (!mobileOpen) return;
+		const closeOnEscape = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setMobileOpen(false);
+		};
+		window.addEventListener("keydown", closeOnEscape);
+		return () => window.removeEventListener("keydown", closeOnEscape);
+	}, [mobileOpen]);
 
 	return (
 		<div className="app-shell">
-			<button
-				className="mobile-menu"
-				aria-label="打开导航"
-				onClick={() => setMobileOpen(true)}
-			>
-				<Menu />
-			</button>
 			{mobileOpen && (
 				<button
+					type="button"
 					className="nav-scrim"
 					aria-label="关闭导航"
 					onClick={() => setMobileOpen(false)}
 				/>
 			)}
-			<aside className={`sidebar ${mobileOpen ? "open" : ""}`}>
+			<aside
+				id="main-navigation"
+				className={`sidebar ${mobileOpen ? "open" : ""}`}
+				aria-label="主导航"
+			>
 				<div className="sidebar-brand">
 					<span className="brand-mark small">飞</span>
 					<strong>飞账</strong>
 				</div>
 				<button
+					type="button"
 					className="mobile-close"
 					aria-label="关闭导航"
 					onClick={() => setMobileOpen(false)}
@@ -394,13 +310,27 @@ function Shell({ me }: { me: Me }) {
 						<strong>{me.name}</strong>
 						<span>{me.role === "ADMIN" ? "管理员" : "用户"}</span>
 					</div>
-					<button aria-label="退出登录" onClick={() => logout.mutate()}>
+					<button
+						type="button"
+						aria-label="退出登录"
+						onClick={() => logout.mutate()}
+					>
 						<LogOut size={17} />
 					</button>
 				</div>
 			</aside>
 			<div className="workspace">
 				<header>
+					<button
+						type="button"
+						className="mobile-menu"
+						aria-label="打开导航"
+						aria-controls="main-navigation"
+						aria-expanded={mobileOpen}
+						onClick={() => setMobileOpen(true)}
+					>
+						<Menu size={20} />
+					</button>
 					<div>
 						<span>飞账</span>
 						<ChevronRight size={14} />
