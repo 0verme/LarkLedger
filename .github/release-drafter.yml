@@ -1,0 +1,124 @@
+name-template: 'LarkLedger v$RESOLVED_VERSION'
+tag-template: 'v$RESOLVED_VERSION'
+commitish: main
+prerelease: false
+include-pre-releases: false
+
+categories:
+  # Changelog categories are exclusive so a Web PR is listed only under Web / UI.
+  - title: '💥 Breaking Changes'
+    semver-increment: major
+    exclusive: true
+    when:
+      label: 'breaking'
+  - title: '🎨 Web / UI'
+    semver-increment: patch
+    exclusive: true
+    when:
+      label: 'web'
+  - title: '✨ 新功能'
+    semver-increment: minor
+    exclusive: true
+    when:
+      label: 'feature'
+  - title: '🐛 Bug 修复'
+    semver-increment: patch
+    exclusive: true
+    when:
+      label: 'fix'
+  - title: '📦 依赖更新'
+    semver-increment: patch
+    exclusive: true
+    when:
+      label: 'dependencies'
+  - title: '📝 文档'
+    semver-increment: patch
+    exclusive: true
+    when:
+      label: 'documentation'
+  - title: '👷 CI'
+    semver-increment: patch
+    exclusive: true
+    when:
+      label: 'ci'
+  - title: '🧰 工程与维护'
+    semver-increment: patch
+    exclusive: true
+    when:
+      labels:
+        - 'build'
+        - 'chore'
+  - title: '🔧 其他变更'
+    semver-increment: patch
+    exclusive: true
+
+  # Version resolution is independent from changelog exclusivity. This keeps
+  # feat(web) in the Web / UI section while still resolving a minor release.
+  - type: 'version-resolver'
+    semver-increment: major
+    when:
+      label: 'breaking'
+  - type: 'version-resolver'
+    semver-increment: minor
+    when:
+      label: 'feature'
+  - type: 'version-resolver'
+    semver-increment: patch
+
+category-template: '## $TITLE'
+change-template: '- $TITLE (#$NUMBER) $AUTHORS'
+change-title-escapes: '\<*_&'
+no-changes-template: '* 暂无可归类的 merged PR。'
+template: |
+  ## 本版本变更
+
+  $CHANGES
+
+  ## Contributors
+
+  $CONTRIBUTORS
+
+  ---
+
+  > 此 Release 由 Release Drafter 自动维护。
+  > 正式 Release 内容仍以 CHANGELOG 和 Release Closure 为准。
+
+autolabeler:
+  # The explicit breaking label is intentionally not inferred from title text.
+  - label: 'feature'
+    title:
+      - '/^(?:[^A-Za-z0-9]*\s*)?feat(?:\([^)]*\))?!?:/i'
+  - label: 'fix'
+    title:
+      - '/^(?:[^A-Za-z0-9]*\s*)?fix(?:\([^)]*\))?!?:/i'
+  - label: 'web'
+    title:
+      - '/\((?:web|ui)\)/i'
+    branch:
+      - '/^(?:web|ui)\//i'
+  - label: 'dependencies'
+    title:
+      - '/^(?:[^A-Za-z0-9]*\s*)?build\(deps(?:-[^)]*)?\):/i'
+    branch:
+      - '/^dependabot\//i'
+  - label: 'documentation'
+    title:
+      - '/^(?:[^A-Za-z0-9]*\s*)?docs(?:\([^)]*\))?!?:/i'
+    branch:
+      - '/^(?:docs?|documentation)\//i'
+  - label: 'ci'
+    title:
+      - '/^(?:[^A-Za-z0-9]*\s*)?ci(?:\([^)]*\))?!?:/i'
+      - '/^(?:[^A-Za-z0-9]*\s*)?(?:chore|build)\(ci\):/i'
+    branch:
+      - '/^ci\//i'
+  - label: 'build'
+    title:
+      - '/^(?:[^A-Za-z0-9]*\s*)?build(?:\((?!deps(?:-[^)]*)?|ci)[^)]*\))?!?:/i'
+    branch:
+      - '/^build\//i'
+  - label: 'chore'
+    title:
+      - '/^(?:[^A-Za-z0-9]*\s*)?chore(?:\([^)]*\))?!?:/i'
+    branch:
+      - '/^chore\//i'

@@ -98,7 +98,7 @@ jobs:
           python scripts/release/extract-release-notes.py "$GITHUB_REF_NAME" \
             --output "$RUNNER_TEMP/release-notes.md" \
             --title-output "$RUNNER_TEMP/release-title.txt"
-      - name: Create or verify GitHub Release
+      - name: Create / publish / verify GitHub Release
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -108,21 +108,46 @@ jobs:
           set -euo pipefail
           TAG="$GITHUB_REF_NAME"
           TITLE="$(cat "$TITLE_FILE")"
-          if gh release view "$TAG" --json tagName,isDraft,isPrerelease >/dev/null 2>&1; then
-            echo "Release '${TAG}' already exists; verifying it is a formal release"
+          RELEASE_VIEW_ERROR="$RUNNER_TEMP/release-view-error.txt"
+
+          if gh release view "$TAG" --json tagName,isDraft,isPrerelease \
+            >/dev/null 2>"$RELEASE_VIEW_ERROR"; then
+            echo "Release '${TAG}' already exists; verifying its state"
             VIEWED_TAG="$(gh release view "$TAG" --json tagName --jq '.tagName')"
             if [ "$VIEWED_TAG" != "$TAG" ]; then
               echo "::error::existing release tag_name mismatch (viewed '${VIEWED_TAG}')" >&2
               exit 1
             fi
+
             DRAFT="$(gh release view "$TAG" --json isDraft --jq '.isDraft')"
             PRE="$(gh release view "$TAG" --json isPrerelease --jq '.isPrerelease')"
-            if [ "$DRAFT" = "true" ] || [ "$PRE" = "true" ]; then
-              echo "::error::existing release '${TAG}' is draft=${DRAFT} prerelease=${PRE}; refusing to auto-modify a non-formal release" >&2
+            if [ "$DRAFT" = "true" ]; then
+              if [ "$PRE" = "true" ]; then
+                echo "::error::existing release '${TAG}' is both draft and prerelease; refusing to publish it" >&2
+                exit 1
+              fi
+              echo "Publishing matching Release Drafter draft '${TAG}' with formal release notes"
+              gh release edit "$TAG" \
+                --verify-tag \
+                --title "$TITLE" \
+                --notes-file "$NOTES_FILE" \
+                --draft=false \
+                --prerelease=false
+              echo "status=published-draft" >> "$GITHUB_OUTPUT"
+            elif [ "$PRE" = "true" ]; then
+              echo "::error::existing release '${TAG}' is a prerelease; refusing to promote it automatically" >&2
+              exit 1
+            else
+              echo "Release '${TAG}' is already formal; verifying without modifying it"
+              echo "status=verified-existing" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            if ! grep -Eqi 'not found|404' "$RELEASE_VIEW_ERROR"; then
+              echo "::error::unable to inspect GitHub Release '${TAG}'; refusing to create or modify it" >&2
+              cat "$RELEASE_VIEW_ERROR" >&2
               exit 1
             fi
-            echo "status=verified-existing" >> "$GITHUB_OUTPUT"
-          else
+            echo "Release '${TAG}' does not exist; creating formal release"
             gh release create "$TAG" \
               --verify-tag \
               --title "$TITLE" \

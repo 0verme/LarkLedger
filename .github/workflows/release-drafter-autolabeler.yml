@@ -1,0 +1,33 @@
+name: Release Drafter Autolabeler
+
+# pull_request_target is used so PRs from forks can receive labels. This job
+# does not check out or execute PR code; the action only reads PR metadata and
+# calls the GitHub API to apply labels.
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - reopened
+      - synchronize
+      - ready_for_review
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-drafter-autolabeler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  auto-label:
+    name: Apply PR labels
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Apply Release Drafter labels
+        uses: release-drafter/release-drafter/autolabeler@v7
+        with:
+          config-name: release-drafter.yml
