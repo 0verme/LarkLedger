@@ -309,3 +309,4 @@ def test_deployment_scripts_do_not_contain_local_production_build_or_git_pull() 
     assert "git pull" not in source
     assert "--build" not in source
     assert "alembic upgrade head" in source
+    assert 'backup_output="$("$APP_DIR/scripts/ops/backup-postgres.sh")"' in source
