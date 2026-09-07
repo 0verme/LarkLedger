@@ -27,3 +27,10 @@ logs/
 .DS_Store
 Thumbs.db
 docs-product-review/
+
+# Local production deployment state and PostgreSQL backups (never commit).
+.deploy-state/
+backups/
+*.dump
+*.dump.sha256
+*.dump.meta

@@ -1,14 +1,24 @@
 # 备份 / 恢复 SOP（Backup / Restore）
 
 本文档是 PostgreSQL 数据备份与恢复的标准操作流程。**备份成功 ≠ 可以恢复**——
-每次重大变更前后必须做一次 restore drill（见下文）。
+每次重大变更前后必须做一次 restore drill（见下文）。当前生产 `compose.image.yaml` 只管理 app，PostgreSQL 通常是 external service；涉及 `docker compose ... exec db` 的示例仅适用于实际提供 `db` service 的部署，external PostgreSQL 请使用其 DBA/宿主机工具。
+
+## FNOS 部署前备份
+
+生产推荐直接使用仓库脚本。它从 `.env` / `LARK_LEDGER_DATABASE_URL` 读取 PostgreSQL 连接信息，不回显 URL、密码或 Token，使用 custom format、`-Fc`、压缩级别 6，并生成 dump、SHA-256 和 metadata：
+
+```bash
+./scripts/ops/backup-postgres.sh
+```
+
+默认输出到应用目录下的 `backups/`，可用 `LARK_LEDGER_BACKUP_DIR` 覆盖。部署脚本会在 migration 前调用它；backup 失败会停止部署，不会替换 app。脚本要求 NAS 已安装与 PostgreSQL 兼容的 `pg_dump`。
 
 ## 备份（Backup）
 
 ### 推荐命令
 
-生产环境（PostgreSQL 16，容器化）推荐使用 **custom format** 的 `pg_dump`
-（压缩、支持选择性恢复、可与 `pg_restore` 配合）：
+生产环境（PostgreSQL 16 或经过验证的兼容版本）推荐使用 **custom format** 的 `pg_dump`
+（压缩、支持选择性恢复、可与 `pg_restore` 配合）。external PostgreSQL 直接在 NAS/备份工具主机连接；compose-managed PostgreSQL 才使用容器内 `pg_dump`：
 
 ```bash
 # 1. 进入 PostgreSQL 容器（或使用宿主机 pg_dump 直连）

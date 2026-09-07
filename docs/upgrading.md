@@ -1,17 +1,19 @@
 # 升级指南
 
-LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受修复，旧版本不承诺长期维护。生产部署应固定 Git tag 或 `ghcr.io/0verme/larkledger` 镜像标签，不要长期跟随未固定的 `latest` 或任意提交。
+LarkLedger 当前处于 `0.x` Alpha 阶段。最新发布版本和 `main` 接受修复，旧版本不承诺长期维护。正式版本、Git SHA、GHCR digest 与 Alembic head 以对应 GitHub Release 和 Release Summary 为准；README 不维护一个会随 Release 漂移的“当前版本”。
 
-## 当前正式版本
+## 生产升级路径
 
-| 项 | 事实 |
-| --- | --- |
-| 最新正式版本 | **v0.10.0** |
-| 包版本 / `__version__` | `0.10.0` |
-| Git tag | `v0.10.0` |
-| GHCR | `ghcr.io/0verme/larkledger:0.10.0`（亦有 `0.10` / `latest` 由发布流水线写入） |
-| Alembic head | `20260814_0027` |
-| 推荐首次部署 | 源码 Compose 或固定镜像标签；WebSocket + 文字-only 路径见 [README](../README.md) |
+FNOS 生产环境固定完整的 `X.Y.Z` 版本号，推荐流程是：
+
+```text
+GitHub Release
+→ GHCR ghcr.io/0verme/larkledger:X.Y.Z
+→ scripts/deploy-fnos.sh X.Y.Z
+→ backup → target-image migration → start → verify → state
+```
+
+不要使用 `latest`、`main`、`HEAD`、任意提交或浮动的 `X.Y`。首次部署与日常升级详见 [飞牛 NAS Release 镜像生产部署](deployment-fnos.md)。
 
 ## 升级前
 
@@ -147,7 +149,7 @@ v0.2.1「可靠投递」新增迁移 `20260806_0008`～`20260806_0011`（回复 
 
 升级步骤：备份 → 拉取 v0.2.1 → `alembic upgrade head` → 重启 → 检查 `/healthz` 与 `/readyz` → 一笔文字记账验收。代码回退到 v0.2.0 tag 即可关闭 Worker / Outbox / Cleanup 行为；若已运行 `0008` 之后的迁移，需显式 `alembic downgrade` 并评估待发送回复意图的丢失。
 
-## 使用源码 Compose
+## 使用源码 Compose（本地开发 / advanced source deployment）
 
 ```bash
 git fetch --tags origin
@@ -157,7 +159,7 @@ docker compose up -d --build
 curl http://127.0.0.1:8000/healthz
 ```
 
-现有 `compose.yaml` 启动命令也会在应用启动前运行迁移；显式运行一次便于在启动服务前发现数据库错误。
+现有 `compose.yaml` 启动命令也会在应用启动前运行迁移；显式运行一次便于在启动服务前发现数据库错误。该路径适合本地开发或经过审查的 advanced source deployment，不是 FNOS production 首选。
 
 开发库叠加：
 
@@ -165,19 +167,24 @@ curl http://127.0.0.1:8000/healthz
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 ```
 
-## 使用 GHCR 镜像
+## 直接使用 GHCR 镜像（advanced / 排障）
+
+FNOS production 请使用脚本，而不是手工拼接命令：
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.2.1
+./scripts/deploy-fnos.sh X.Y.Z
+```
+
+`compose.image.yaml` 现在要求显式提供 `LARK_LEDGER_IMAGE_TAG=X.Y.Z`，不会 fallback 到 `latest`。若进行 advanced source deployment，仍必须遵守：
+
+```bash
+export LARK_LEDGER_IMAGE_TAG=<version>
 docker compose -f compose.image.yaml pull
 docker compose -f compose.image.yaml run --rm app alembic upgrade head
 docker compose -f compose.image.yaml up -d
-curl http://127.0.0.1:8000/healthz
 ```
 
-PowerShell：`$env:LARK_LEDGER_IMAGE_TAG = "0.2.1"`。
-
-`compose.image.yaml` **不会**在 `up` 时自动迁移；升级必须显式 `alembic upgrade head`。
+`compose.image.yaml` **不会**在 `up` 时自动迁移；升级必须先 backup，再用目标镜像显式执行 `alembic upgrade head`。镜像 rollback 不等于数据库 rollback。
 
 ## 从 v0.1.0 或更早 main 升级到 v0.2.0
 

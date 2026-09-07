@@ -18,9 +18,9 @@
 
 以上截图使用已获准公开的脱敏数据。识别结果以机器人确认回复为准。
 
-## 当前能力（v0.10.0 主线）
+## 当前能力（主线）
 
-- **平台 / 通道无关 Core（v0.10.0）**：Feishu / First-party Web / Machine API 三套入口共享同一个 `ClientApplicationService` Application Layer——对于相同业务事实产生一致 Domain Result，Core 不依赖任何渠道 transport（架构守护见 `tests/architecture/`）。正式通道无关 Client API：**`/api/v1`**（`/api/client/v1` 为同一组 handler 的兼容别名）；Bearer API Token（`llv1_*`，明文只显示一次、DB 只存 SHA-256 digest、可 revoke / expiry、scope 只缩权），headless client 不需要 Feishu、浏览器 cookie 或 OAuth session 即可独立完成认证 / 选账本 / 记账 / 查询 / Overview / Goals / Insights；写请求强制 `Idempotency-Key`（同 key 重试 replay、不同 body 409、PostgreSQL 并发 exactly-once）；稳定 error envelope 与 OpenAPI 契约（见 [Client API 文档](docs/client-api.md)）
+- **平台 / 通道无关 Core**：Feishu / First-party Web / Machine API 三套入口共享同一个 `ClientApplicationService` Application Layer——对于相同业务事实产生一致 Domain Result，Core 不依赖任何渠道 transport（架构守护见 `tests/architecture/`）。正式通道无关 Client API：**`/api/v1`**（`/api/client/v1` 为同一组 handler 的兼容别名）；Bearer API Token（`llv1_*`，明文只显示一次、DB 只存 SHA-256 digest、可 revoke / expiry、scope 只缩权），headless client 不需要 Feishu、浏览器 cookie 或 OAuth session 即可独立完成认证 / 选账本 / 记账 / 查询 / Overview / Goals / Insights；写请求强制 `Idempotency-Key`（同 key 重试 replay、不同 body 409、PostgreSQL 并发 exactly-once）；稳定 error envelope 与 OpenAPI 契约（见 [Client API 文档](docs/client-api.md)）
 - **财务目标（Goals，v0.8.0）**：把“想存到多少钱”变成可跟踪的目标（`应急储备 60000`）；进度来自**真实账本**——目标绑定现金 / 资产账户，`current_amount` 始终等于绑定账户实时余额之和，目标不保存、不手工维护余额，记账 / 删账 / 恢复 / 转账变化会自动重算。支持目标日期与确定性 forecast；可见性继承绑定账户（引用任何私人账户的目标对他人完全不可见，防止通过目标显示泄漏私人余额）；目标不是虚拟账户 / 资金池，创建 / 修改 / 删除从不触碰账户、账目或转账。飞书 `我的目标 / 目标 / 查看目标` 与 Web `/goals` 同源
 - **确定性洞察（Insights，v0.8.0）**：从真实账本自动发现值得注意的事实——支出变化（本月 vs 近 3 个月平均）、预算风险（使用率快于时间进度）、未来 30 天周期支出（按币种分组）、目标进度 / 预计缺口。全部由确定性规则计算，AI 不参与计算、不访问数据库，只可选改写解释文案；AI 不可用时自动回退确定性摘要。私人数据不会通过任何洞察侧信道泄漏。飞书 `洞察 / 财务洞察 / 本月洞察` 与 Web `/insights` 同源。**洞察是财务数据解释与提醒，不是金融顾问**——不提供投资、股票、理财、贷款、税务建议，不做任何自动资金操作
 
@@ -42,7 +42,7 @@
 - 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
 - **可靠投递**：事件 / 回复后台 Worker、事务性回复 Outbox、PostgreSQL 租约与指数退避重试、readiness、终态清理与受控人工事件重放
 - **Web Dashboard**：飞书 OAuth、财务总览、账目与 revision、Pending、分析、预算、**财务目标（/goals，创建 / 编辑 / 进度 / 归档 / 删除）**、**洞察卡片（/overview「值得关注」）**、周期账单、报表、CSV 下载及管理员可靠性控制台
-- **通道无关 Client API（v0.10.0）**：正式契约 `/api/v1`（`/api/client/v1` 为兼容别名）为 CLI / 硬件 / 未来客户端提供结构化命令/查询边界；Bearer 个人令牌（`llv1_`，只保存 SHA-256 摘要、可撤销、可过期、scope 只缩权）与持久化 `Idempotency-Key`。飞书与 Web 只是 Adapter，与 API 共用同一个 `ClientApplicationService`，同一业务事实产生一致 Domain Result
+- **通道无关 Client API**：正式契约 `/api/v1`（`/api/client/v1` 为兼容别名）为 CLI / 硬件 / 未来客户端提供结构化命令/查询边界；Bearer 个人令牌（`llv1_`，只保存 SHA-256 摘要、可撤销、可过期、scope 只缩权）与持久化 `Idempotency-Key`。飞书与 Web 只是 Adapter，与 API 共用同一个 `ClientApplicationService`，同一业务事实产生一致 Domain Result
 - 自托管：FastAPI、React / TypeScript / Vite、PostgreSQL、Docker Compose
 
 完整消息示例见[用户手册](docs/help.md)。
@@ -198,7 +198,7 @@ SQL 示例与 URL 注意事项见[环境与部署指南 · PostgreSQL](docs/envi
 
 CSV 导出、图片、语音所需权限见[环境与部署指南 · 飞书权限](docs/environment.md#飞书权限)。
 
-### 5. 启动后检查
+### 5. 启动后检查（本地体验）
 
 ```bash
 docker compose -f compose.yaml -f compose.dev.yaml ps
@@ -274,9 +274,9 @@ Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[
 - **不是 AA / Splitwise**：没有分摊、结算、债务关系或人均拆账；**不是复式记账**：一人公司科目 / 凭证 / 借贷仍属远期领域，不把会计字段加入个人收支表；**不是企业财务**：无审计链路、审批流、多币种汇率结算或财务报告义务
 - JSON 导出**不是**正式能力（当前仅 CSV）
 
-后续路线不在本次发布承诺内；v0.10.0 不扩展为多租户财务 ERP / OAuth Authorization Server / SaaS API Gateway。
+后续路线不在本次发布承诺内；当前主线不扩展为多租户财务 ERP / OAuth Authorization Server / SaaS API Gateway。
 
-镜像与版本：当前正式版本为 **v0.10.0**（First-party Client / Unified AI Entry）。预构建镜像：`ghcr.io/0verme/larkledger:0.10.0`（亦有 `0.10` / `latest`；也可用源码 `docker compose ... --build`）。升级与迁移说明见[升级指南](docs/upgrading.md)。
+镜像与版本：正式版本、Git SHA、GHCR digest 与迁移 head 以 [GitHub Releases](https://github.com/0verme/LarkLedger/releases) 和对应 Release Summary 为准。生产部署必须固定完整 `X.Y.Z` 镜像版本；不要使用 `latest`、`main`、`HEAD` 或浮动 tag。升级与迁移说明见[升级指南](docs/upgrading.md)，FNOS 流程见[飞牛 NAS 部署](docs/deployment-fnos.md)。
 
 ## 安全边界
 
@@ -340,18 +340,32 @@ mypy src
 pytest --cov
 ```
 
-## 使用预构建镜像（可选）
+## FNOS 生产部署（Release 镜像）
+
+生产推荐路径是 GitHub Release → GHCR 固定版本 → backup → migration → verify：
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.10.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.10.0"
-docker compose -f compose.image.yaml pull
-docker compose -f compose.image.yaml run --rm app alembic upgrade head
-docker compose -f compose.image.yaml up -d
-curl http://127.0.0.1:8000/healthz
+./scripts/deploy-fnos.sh X.Y.Z
+./scripts/ops/verify-deployment.sh X.Y.Z
 ```
 
-镜像不会在 `up` 时自动迁移；请先 `alembic upgrade head`。仍推荐首次用源码 + WebSocket 文字路径完成第一笔账。
+脚本不会执行 `git pull` 或 NAS 本地 build；只有 `/healthz`、`/readyz`、`/version`、`/ops/status` 全部验收通过后才写入 deployment state。回滚使用：
+
+```bash
+./scripts/rollback-fnos.sh X.Y.Z
+```
+
+镜像 rollback 不等于数据库 rollback；schema-changing 或无法证明兼容的 rollback 会停止并要求按 backup/restore SOP 人工处理。完整说明见 [飞牛 NAS Release 镜像生产部署](docs/deployment-fnos.md)。
+
+## 直接使用预构建镜像（advanced）
+
+```bash
+export LARK_LEDGER_IMAGE_TAG=<version>
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "<version>"
+docker compose -f compose.image.yaml config
+```
+
+`compose.image.yaml` 要求显式的完整 `X.Y.Z` tag，不会 fallback 到 `latest`；advanced 路径仍需先 backup，再用目标镜像执行 migration 和启动。生产 FNOS 请优先使用上面的 `deploy-fnos.sh`。
 
 ## 文档
 
@@ -364,6 +378,7 @@ curl http://127.0.0.1:8000/healthz
 - [产品演进路线](docs/roadmap.md)
 - [升级指南](docs/upgrading.md)
 - [发布 SOP（含回滚）](docs/release-sop.md)
+- [飞牛 NAS Release 镜像生产部署](docs/deployment-fnos.md)
 - [变更日志](CHANGELOG.md) · [v0.10.0 发布说明](.github/release-notes/v0.10.0.md) · [v0.9.0 发布说明](.github/release-notes/v0.9.0.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
 - [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
 - [English README](README.en.md)
