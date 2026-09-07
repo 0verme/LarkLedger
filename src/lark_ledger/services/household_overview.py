@@ -109,9 +109,11 @@ class HouseholdOverviewService:
             context, start=period_start, end=period_end, privacy_filter=privacy_filter
         )
         top_categories = await self._top_categories(active_entries, expense_total)
-        budget = await self._budget_overview(context, target, now)
+        budget = await self._budget_overview(context, target, current)
         balances = await self._account_balances(context)
-        upcoming = await self._upcoming_recurring(context, privacy_filter)
+        upcoming = await self._upcoming_recurring(
+            context, privacy_filter, today=current.date()
+        )
         recent = await self._recent_transactions(context, privacy_filter)
 
         return HouseholdOverview(
@@ -208,9 +210,12 @@ class HouseholdOverviewService:
         )
 
     async def _upcoming_recurring(
-        self, context: RequestContext, privacy_filter: Any | None
+        self,
+        context: RequestContext,
+        privacy_filter: Any | None,
+        *,
+        today: date,
     ) -> list[UpcomingRecurringItem]:
-        today = current_local_date(self._timezone)
         filters: list[Any] = [
             RecurringRule.ledger_id == context.ledger_id,
             RecurringRule.status == RecurringRuleStatus.ACTIVE.value,

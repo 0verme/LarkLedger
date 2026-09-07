@@ -23,6 +23,8 @@ from lark_ledger.services.feishu import MessageProcessor
 from lark_ledger.services.goals import GoalService
 from lark_ledger.services.identity import IdentityService
 
+FIXED_NOW = datetime(2026, 8, 8, 4, tzinfo=UTC)
+
 
 class NeverInterpreter:
     transcription_configured = False
@@ -70,6 +72,7 @@ async def _processor(
         factory,
         feishu,  # type: ignore[arg-type]
         NeverInterpreter(),  # type: ignore[arg-type]
+        clock=lambda: FIXED_NOW,
     )
     return processor, feishu
 

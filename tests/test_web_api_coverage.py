@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -38,6 +38,8 @@ from lark_ledger.services.pending import PendingPreview, PendingPreviewItem
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 from lark_ledger.services.web_pending import WebPendingQueryService
 from lark_ledger.web_api import _auth_service, router
+
+FIXED_NOW = datetime(2026, 8, 20, 4, tzinfo=UTC)
 
 
 def settings() -> Settings:
@@ -186,6 +188,7 @@ async def _client(
     user: str,
     *,
     service: DashboardAuthService | None = None,
+    clock: Callable[[], datetime] | None = None,
     processor: Any = None,
     reply_worker: Any = None,
 ) -> tuple[httpx.AsyncClient, str]:
@@ -196,6 +199,8 @@ async def _client(
     app = FastAPI()
     app.state.settings = settings()
     app.state.session_factory = factory
+    if clock is not None:
+        app.state.clock = clock
     if processor is not None:
         app.state.processor = processor
     if reply_worker is not None:
@@ -657,7 +662,7 @@ async def test_export_preset_branches(
     async with factory() as session:
         session.add(_entry("ou_user", "EXP01", "32", Direction.EXPENSE, "??"))
         await session.commit()
-    client, csrf = await _client(factory, "ou_user")
+    client, csrf = await _client(factory, "ou_user", clock=lambda: FIXED_NOW)
     headers = {"X-CSRF-Token": csrf}
     async with client:
         this_month = await client.post(

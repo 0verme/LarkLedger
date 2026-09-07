@@ -2,6 +2,13 @@
 
 All notable changes to LarkLedger are documented in this file. The project follows [Semantic Versioning](https://semver.org/) while remaining in the `0.x` Alpha stage.
 
+## [0.14.1] - 2026-09-07
+
+### Fixed
+
+- 固定时间敏感测试的业务时钟，消除跨月 CI 漂移，并修复 overview、goal、recurring 与 insight 路径中的 clock propagation 缺口；生产校验规则保持不变。
+- 完成 0.14 系列 release metadata closure，标准 Release 流程使用 annotated tag，确保版本、CHANGELOG、GitHub Release 与 GHCR 镜像一致。
+
 ## [0.13.0] - 2026-08-15
 
 ### Web Experience / Design System (P45)

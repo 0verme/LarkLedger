@@ -24,6 +24,8 @@ from lark_ledger.services.feishu import MessageProcessor
 from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.ledger import LedgerService
 
+FIXED_NOW = datetime(2026, 8, 20, 4, tzinfo=UTC)
+
 
 class NeverInterpreter:
     """Fails loudly if the overview command reaches the AI interpreter."""
@@ -83,6 +85,7 @@ async def _processor(factory: async_sessionmaker) -> tuple[MessageProcessor, Rec
         feishu,  # type: ignore[arg-type]
         NeverInterpreter(),  # type: ignore[arg-type]
         reply_worker_enabled=False,
+        clock=lambda: FIXED_NOW,
     )
     return processor, feishu
 
