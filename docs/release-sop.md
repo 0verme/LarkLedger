@@ -1,6 +1,6 @@
 # LarkLedger 发布 SOP（Release SOP）
 
-本文档定义标准版本发布流程。从 **v0.11.0 起**，GitHub Release 由 CI 自动创建，正常情况下**不再需要人工执行 `gh release create`**。
+本文档定义标准版本发布流程。从 **v0.11.0 起**，GitHub Release 由 CI 自动创建，正常情况下**不再需要人工执行 `gh release create`**。FNOS 生产部署的唯一推荐路径是：GitHub Release → GHCR `X.Y.Z` 固定镜像 → `scripts/deploy-fnos.sh X.Y.Z`；详见 [飞牛 NAS 部署](deployment-fnos.md)。
 
 ## 标准发布流程
 
@@ -25,7 +25,7 @@
       ↓
    validate  → annotated tag guard / tag↔version 一致性 / CHANGELOG+Release Notes guard
       ↓
-   image     → build multi-platform (linux/amd64, linux/arm64) + push GHCR（X.Y.Z / X.Y / latest）
+   image     → build multi-platform (linux/amd64, linux/arm64) + push GHCR（仅 X.Y.Z）
       ↓
    release   → 生成 Release Notes → 创建 GitHub Release（非 draft、非 prerelease）
       ↓
@@ -33,7 +33,7 @@
    ```
 
 6. **verify**：确认 GitHub Actions 全部 job 绿色；`gh release view vX.Y.Z` 与 `https://github.com/0verme/LarkLedger/releases/tag/vX.Y.Z` 可访问；GHCR 镜像 digest 与 Release 关联一致。
-7. **NAS deployment**：按 `docs/environment.md` 部署并完成生产验收。
+7. **FNOS production deployment**：Release 与 GHCR 镜像验证通过后，在 NAS 执行 `./scripts/deploy-fnos.sh X.Y.Z`；脚本负责 backup → target-image migration → start → health/readiness/version/ops verification → state。不要用 `git pull main` + 本地 build 替代。
 8. 未决问题（如 CHANGELOG section 缺失、版本不一致、轻量 tag）直接在 workflow 中失败，**不要绕过 guard 手工发布**。
 
 ## 自动化行为细节
@@ -55,38 +55,32 @@
 功能回退，migration 仍是同一 head）。
 
 ```bash
-# 1. 确认当前库 revision 与目标旧镜像兼容（两版本 head 相同即 code-only）
-LARK_LEDGER_DATABASE_URL='postgresql+asyncpg://...' alembic current
-
-# 2. 切换到 previous GHCR image
-docker compose -f compose.image.yaml down
-LARK_LEDGER_IMAGE_TAG=<上一版本，如 0.10.0> docker compose -f compose.image.yaml up -d
-
-# 3. 健康检查与 smoke test
-curl -f http://127.0.0.1:8000/healthz
-curl -f http://127.0.0.1:8000/readyz      # 必须 200，且 migration current
-# smoke test：一笔账可写可查、/ops/status 正常
+# 脚本会读取当前 /readyz migration revision，并在目标旧镜像中执行 alembic heads。
+# 只有单一 target head == 当前 revision 才允许 code-only rollback。
+./scripts/rollback-fnos.sh <上一版本 X.Y.Z>
 ```
 
-### B. Schema-changing rollback（数据库 schema 已变化）
+脚本在切换前仍会创建 PostgreSQL backup，并在 `/healthz`、`/readyz`、`/version`、`/ops/status` 全部验收通过后才更新 deployment state。无法证明 schema 兼容时会输出 `SCHEMA-CHANGING ROLLBACK` 并停止；镜像 rollback != 数据库 rollback，必须人工执行 [backup-restore.md](backup-restore.md) 中的 restore / rollback。
+
+### B. Schema-changing rollback（数据库 schema 已变化或兼容性未知）
 
 > **镜像 rollback 和数据库 rollback 是两个不同操作。** `docker pull old image`
 > 不能安全回滚数据库——旧镜像通常无法理解新 schema。
 
-1. **判断 migration backward compatibility**：
-   - 先确认当前 head 与回滚目标的 head。若回滚目标的代码版本**不认识**
-     当前 schema 的新列/新表（例如旧的 `SELECT` 引用不存在的列），必须先回滚数据库。
-   - 查看 `alembic/versions/` 中新增迁移是否提供了 `downgrade()`。
-2. **Backup restore（推荐路径）**：按 [backup-restore.md](backup-restore.md) 的
+1. **停止自动镜像回滚**：`rollback-fnos.sh` 在当前 revision 与目标 head 不一致、无法读取或存在多个 head 时会直接 STOP；本仓库不自动执行 `alembic downgrade`。
+2. **判断 migration backward compatibility**：
+   - 确认当前 head 与回滚目标的 head，并评估旧代码是否认识当前 schema 的新列/新表。
+   - 查看 `alembic/versions/` 中新增迁移是否提供了 `downgrade()`，但存在 `downgrade()` 不等于生产中可以盲目执行。
+3. **Backup restore（推荐路径）**：按 [backup-restore.md](backup-restore.md) 的
    Restore 流程恢复到发布前的备份，再启动旧镜像。恢复前必须「备份现状」。
-3. **Alembic downgrade 的适用边界**：
+4. **Alembic downgrade 的适用边界**：
    - `alembic downgrade <旧head>` 只适用于**提供完整可逆 `downgrade()`** 的迁移
      （例如新增可空列、新索引、可删除的表）；
    - **destructive migration（删表 / 删列 / 改约束）没有安全的自动 downgrade**，
      此时唯一的恢复路径是 backup restore；
    - 升级后用户已写入的新数据在 downgrade 中**可能丢失**——回滚前先备份，
      并明确告知用户影响范围。
-4. **验收**：恢复/降级后执行 启动 → `/healthz` → `/readyz`（migration current）
+5. **验收**：恢复/降级后执行 启动 → `/healthz` → `/readyz`（migration current）
    → 关键业务 smoke test → 观察 `/ops/status` 无异常积压。
 
 > 本仓库不宣传「自动无损 rollback」。任何 schema 变更都应在发布前做

@@ -41,6 +41,8 @@ jobs:
     name: Build and push GHCR image
     needs: validate
     runs-on: ubuntu-latest
+    outputs:
+      image_digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
@@ -54,10 +56,10 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/0verme/larkledger
+          # Production deploys use only the immutable X.Y.Z tag. Floating
+          # aliases (X.Y/latest) are intentionally not published.
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
       - name: Resolve build identity
         id: identity
         # P42 build identity: bake version / commit / build time into the image
@@ -68,7 +70,8 @@ jobs:
         run: |
           echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           echo "build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-      - uses: docker/build-push-action@v7
+      - id: build
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -168,7 +171,9 @@ jobs:
           | --- | --- |
           | Tag | \`${TAG}\` |
           | Version | \`${VERSION}\` |
-          | GHCR image | \`ghcr.io/0verme/larkledger:${VERSION}\` |
+          | Git SHA | \`${{ github.sha }}\` |
+          | Image | \`ghcr.io/0verme/larkledger:${VERSION}\` |
+          | Digest | \`${{ needs.image.outputs.image_digest }}\` |
           | GitHub Release | [${TAG}](https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}) |
           | Status | ${RELEASE_STATUS:-unknown} |
           EOF
