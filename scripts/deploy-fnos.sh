@@ -104,7 +104,7 @@ log "目标镜像 digest：$TARGET_IMAGE_DIGEST"
 # database. The backup script never prints the database URL or credentials.
 log '执行部署前 PostgreSQL backup'
 backup_output=''
-if ! backup_output="$APP_DIR/scripts/ops/backup-postgres.sh"; then
+if ! backup_output="$("$APP_DIR/scripts/ops/backup-postgres.sh")"; then
   fail '部署前 PostgreSQL backup 失败；未执行 migration，未替换生产 app'
 fi
 BACKUP_FILE="$(printf '%s\n' "$backup_output" | sed -n 's/^backup_file=//p' | tail -n 1)"
