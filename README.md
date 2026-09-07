@@ -77,6 +77,7 @@ Web 与飞书共享同一套 `ClientApplicationService`、`LedgerService`、revi
 LARK_LEDGER_DASHBOARD_ENABLED=true
 LARK_LEDGER_DASHBOARD_BASE_URL=https://ledger.example.com
 LARK_LEDGER_DASHBOARD_SESSION_SECRET=请生成至少32位的高熵随机值
+LARK_LEDGER_DASHBOARD_COOKIE_SECURE=true
 LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_xxx,ou_yyy
 ```
 
@@ -93,7 +94,7 @@ API Token ───────┘
 ```
 
 - 登录成功后创建全新会话（**不**复用任何旧 Session，防 Session Fixation），同一用户可以同时持有多个设备会话
-- 浏览器 Cookie 只保存 `lls1_` 开头的随机 Session Secret（`HttpOnly` + `SameSite=Lax` + 生产 `Secure`），**数据库只存 SHA-256 digest**，明文永不落库、永不进日志
+- 浏览器只保存 `lls1_` 开头的随机 Session Secret（`HttpOnly` + 可配置 `SameSite` + 生产 `Secure`）；OAuth state Cookie 为适配飞书跨站 callback 固定使用短期 `SameSite=Lax`。**数据库只存 SHA-256 digest**，明文永不落库、永不进日志
 - 会话默认 8 小时绝对过期（`LARK_LEDGER_DASHBOARD_SESSION_TTL_SECONDS`）；`last_seen` 每 5 分钟最多写一次，避免逐请求写放大
 - 注销在服务端立即 revoke（不能只删浏览器 Cookie）；软 revoke / 过期会话保留 `LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS` 天后由 Cleanup Worker 清理
 - 所有 state-changing 请求强制 **CSRF**：`SameSite` + Origin 校验 + double-submit CSRF token（`X-CSRF-Token`）

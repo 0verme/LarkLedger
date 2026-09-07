@@ -67,6 +67,7 @@ from lark_ledger.services.conversation import (
 from lark_ledger.services.dashboard_auth import (
     CSRF_HEADER,
     OAUTH_COOKIE,
+    OAUTH_COOKIE_SAMESITE,
     DashboardAuthError,
     DashboardAuthService,
     DashboardPrincipal,
@@ -285,7 +286,7 @@ async def login(
         max_age=settings.dashboard_oauth_state_ttl_seconds,
         httponly=True,
         secure=settings.dashboard_cookie_secure,
-        samesite=settings.dashboard_session_samesite,
+        samesite=OAUTH_COOKIE_SAMESITE,
         path="/api/web/v1/auth/callback",
     )
     return response
@@ -321,7 +322,7 @@ async def callback(
         path="/api/web/v1/auth/callback",
         secure=settings.dashboard_cookie_secure,
         httponly=True,
-        samesite=settings.dashboard_session_samesite,
+        samesite=OAUTH_COOKIE_SAMESITE,
     )
     response.set_cookie(
         service.session_cookie,

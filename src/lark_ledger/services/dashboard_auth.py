@@ -28,7 +28,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlencode, urlsplit
 
 import httpx
@@ -51,6 +51,9 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "lark_ledger_session"
 CSRF_COOKIE = "lark_ledger_csrf"
 OAUTH_COOKIE = "lark_ledger_oauth"
+#: OAuth provider callback is a cross-site top-level navigation; the short-lived
+#: state cookie intentionally uses SameSite=Lax.
+OAUTH_COOKIE_SAMESITE: Literal["lax"] = "lax"
 CSRF_HEADER = "X-CSRF-Token"
 
 #: Session secrets are always prefixed so they are instantly recognizable and
@@ -242,9 +245,13 @@ class DashboardAuthService:
             state_cookie=envelope,
         )
 
-    def complete_oauth_state(self, cookie: str | None, state: str) -> tuple[str, str]:
-        if not cookie or not state:
-            raise DashboardAuthError("OAuth state 缺失")
+    def complete_oauth_state(self, cookie: str | None, state: str | None) -> tuple[str, str]:
+        if not isinstance(state, str) or not state:
+            logger.warning("oauth callback failed reason=state_query_missing")
+            raise DashboardAuthError("OAuth state 参数缺失")
+        if not cookie:
+            logger.warning("oauth callback failed reason=state_envelope_missing")
+            raise DashboardAuthError("OAuth state Cookie 缺失，请重新登录")
         try:
             raw = self._fernet.decrypt(
                 cookie.encode("ascii"),
@@ -252,13 +259,19 @@ class DashboardAuthService:
             )
             payload = json.loads(raw)
         except (InvalidToken, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+            logger.warning("oauth callback failed reason=state_envelope_invalid")
             raise DashboardAuthError("OAuth state 已失效") from exc
+        if not isinstance(payload, dict):
+            logger.warning("oauth callback failed reason=state_envelope_invalid")
+            raise DashboardAuthError("OAuth state 已失效")
         expected = payload.get("state")
         verifier = payload.get("verifier")
         next_path = payload.get("next")
         if not isinstance(expected, str) or not hmac.compare_digest(expected, state):
+            logger.warning("oauth callback failed reason=state_mismatch")
             raise DashboardAuthError("OAuth state 校验失败")
         if not isinstance(verifier, str) or not isinstance(next_path, str):
+            logger.warning("oauth callback failed reason=state_payload_invalid")
             raise DashboardAuthError("OAuth state 内容无效")
         return verifier, safe_next_path(next_path)
 

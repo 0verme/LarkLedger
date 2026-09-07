@@ -113,6 +113,8 @@ LARK_LEDGER_DASHBOARD_COOKIE_SECURE=true
 LARK_LEDGER_DASHBOARD_SESSION_COOKIE_NAME=lark_ledger_session
 LARK_LEDGER_DASHBOARD_CSRF_COOKIE_NAME=lark_ledger_csrf
 LARK_LEDGER_DASHBOARD_SESSION_SAMESITE=lax
+# 仅控制 Session/CSRF Cookie；OAuth state Cookie 固定使用 SameSite=Lax，
+# 以便飞书跨站 callback 顶层导航能够带回短期 state。
 LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS=30
 ```
 
@@ -123,7 +125,7 @@ LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS=30
 3. 发布应用版本，再访问 `https://ledger.example.com/` 登录。
 4. 将需要运维权限的 `open_id` 以逗号分隔写入 `DASHBOARD_ADMIN_OPEN_IDS`；未列入者都是普通用户。
 
-`SESSION_SECRET` 需由密码学安全随机源生成，至少 32 个非平凡字符。Dashboard 开启但密钥弱、App ID/Secret 缺失、Base URL 非绝对 origin，或 Secure Cookie 搭配 HTTP 时，应用会拒绝启动。飞书 access token 不返回浏览器；浏览器仅保存 HttpOnly 会话 Cookie、HttpOnly OAuth state Cookie 与供双提交校验的 CSRF Cookie。会话可撤销、有明确 TTL，退出后立即失效。
+`SESSION_SECRET` 需由密码学安全随机源生成，至少 32 个非平凡字符。Dashboard 开启但密钥弱、App ID/Secret 缺失、Base URL 非绝对 origin，或 Secure Cookie 搭配 HTTP 时，应用会拒绝启动。飞书 access token 不返回浏览器；浏览器仅保存 HttpOnly 会话 Cookie、HttpOnly OAuth state Cookie 与供双提交校验的 CSRF Cookie。`DASHBOARD_SESSION_SAMESITE` 只控制登录 Session/CSRF Cookie；OAuth state Cookie 为了接收飞书跨站顶层 callback，固定使用短期 `SameSite=Lax`。会话可撤销、有明确 TTL，退出后立即失效。
 
 ### 登录会话（Human Session，P37）
 
@@ -237,6 +239,7 @@ services:
 | Dashboard Session TTL 秒 | `28800` | `28800` | 300～604800 |
 | OAuth state TTL 秒 | `600` | `600` | 60～1800 |
 | Dashboard Secure Cookie | `true` | `true` | 生产保持开启并使用 HTTPS |
+| Dashboard Session SameSite | `lax` | `lax` | `lax` / `strict` / `none`；仅控制 Session/CSRF，OAuth state 固定为 `Lax` |
 | 日志级别 | **无此配置项** | — | — |
 | Webhook 监听 | 进程内 `0.0.0.0:8000`（Compose 映射 `8000:8000`） | — | WebSocket 仅用于 healthz 时可内网访问 |
 | Compose 应用服务名 | `app` | — | — |

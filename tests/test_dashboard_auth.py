@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -14,6 +16,7 @@ from lark_ledger.config import Settings
 from lark_ledger.models import Base, DashboardSession, Direction, LedgerEntry
 from lark_ledger.services.dashboard_auth import (
     CSRF_COOKIE,
+    OAUTH_COOKIE,
     SESSION_COOKIE,
     DashboardAuthError,
     DashboardAuthService,
@@ -69,7 +72,8 @@ def test_redirect_allowlist_only_accepts_same_origin_paths() -> None:
 
 
 def test_oauth_state_pkce_and_tampering(dashboard_factory: Any) -> None:
-    service = DashboardAuthService(dashboard_settings(), dashboard_factory)
+    settings = dashboard_settings()
+    service = DashboardAuthService(settings, dashboard_factory)
     request = service.begin_oauth("/entries")
     assert "code_challenge_method=S256" in request.authorize_url
     assert "scope=auth%3Auser.id%3Aread" in request.authorize_url
@@ -77,10 +81,27 @@ def test_oauth_state_pkce_and_tampering(dashboard_factory: Any) -> None:
     verifier, next_path = service.complete_oauth_state(request.state_cookie, state)
     assert len(verifier) >= 64
     assert next_path == "/entries"
+    assert state not in request.state_cookie
+    assert verifier not in request.state_cookie
+
+    with pytest.raises(DashboardAuthError, match="Cookie 缺失"):
+        service.complete_oauth_state(None, state)
+    with pytest.raises(DashboardAuthError, match="参数缺失"):
+        service.complete_oauth_state(request.state_cookie, "")
     with pytest.raises(DashboardAuthError, match="state 校验"):
         service.complete_oauth_state(request.state_cookie, "wrong")
     with pytest.raises(DashboardAuthError, match="state 已失效"):
         service.complete_oauth_state("broken" + request.state_cookie[6:], state)
+
+    expired_cookie = service._fernet.encrypt_at_time(
+        json.dumps(
+            {"state": state, "verifier": "expired-verifier", "next": "/"},
+            separators=(",", ":"),
+        ).encode("utf-8"),
+        int(datetime.now(UTC).timestamp()) - settings.dashboard_oauth_state_ttl_seconds - 1,
+    ).decode("ascii")
+    with pytest.raises(DashboardAuthError, match="state 已失效"):
+        service.complete_oauth_state(expired_cookie, state)
 
 
 async def test_oauth_exchange_returns_identity_without_exposing_token(
@@ -182,14 +203,72 @@ async def test_login_boundary_sets_short_lived_http_only_state_cookie(
             "https://accounts.feishu.cn/open-apis/authen/v1/authorize?"
         )
         cookie = response.headers["set-cookie"]
-        assert "lark_ledger_oauth=" in cookie
+        assert f"{OAUTH_COOKIE}=" in cookie
         assert "HttpOnly" in cookie
         assert "SameSite=lax" in cookie
+        assert "Max-Age=600" in cookie
+        assert "Path=/api/web/v1/auth/callback" in cookie
+        assert "Secure" not in cookie
+        assert "Domain=" not in cookie
         invalid = await client.get(
             "/api/web/v1/auth/login",
             params={"next": "https://evil.test"},
         )
         assert invalid.status_code == 400
+
+
+async def test_oauth_cookie_is_lax_while_session_cookie_is_strict(
+    dashboard_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    settings = dashboard_settings(
+        dashboard_base_url="https://ledger.test",
+        dashboard_cookie_secure=True,
+        dashboard_session_samesite="strict",
+    )
+    service = DashboardAuthService(settings, dashboard_factory)
+    app = FastAPI()
+    app.state.settings = settings
+    app.state.session_factory = dashboard_factory
+    app.include_router(router)
+    app.dependency_overrides[_auth_service] = lambda: service
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="https://ledger.test",
+        follow_redirects=False,
+    ) as client:
+        login = await client.get("/api/web/v1/auth/login?next=/entries")
+        assert login.status_code == 302
+        login_cookie = login.cookies.get(OAUTH_COOKIE)
+        assert login_cookie
+        login_set_cookie = login.headers["set-cookie"]
+        assert "SameSite=lax" in login_set_cookie
+        assert "Secure" in login_set_cookie
+        assert "SameSite=strict" not in login_set_cookie
+        client.cookies.set(OAUTH_COOKIE, login_cookie)
+        state = httpx.URL(login.headers["location"]).params["state"]
+        with patch.object(
+            DashboardAuthService,
+            "exchange_identity",
+            new=AsyncMock(
+                return_value={"open_id": "ou_strict", "name": "严格会话", "avatar_url": ""}
+            ),
+        ):
+            callback = await client.get(
+                "/api/web/v1/auth/callback",
+                params={"code": "one-time-code", "state": state},
+            )
+        assert callback.status_code == 303
+        callback_cookies = callback.headers.get_list("set-cookie")
+        oauth_delete_cookie = next(
+            cookie for cookie in callback_cookies if cookie.startswith(f"{OAUTH_COOKIE}=")
+        )
+        session_cookie = next(
+            cookie for cookie in callback_cookies if cookie.startswith(f"{SESSION_COOKIE}=")
+        )
+        assert "SameSite=lax" in oauth_delete_cookie
+        assert "Secure" in oauth_delete_cookie
+        assert "SameSite=strict" in session_cookie
+        assert "Secure" in session_cookie
 
 
 async def test_ledger_http_boundary_enforces_scope_csrf_and_versions(

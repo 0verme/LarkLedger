@@ -314,12 +314,38 @@ async def test_oauth_callback_error_paths(
             params={"code": "one-time-code", "state": state, "error": "access_denied"},
         )
         assert cancelled.status_code == 401
+        assert cancelled.json()["detail"] == "飞书登录已取消"
 
-        tampered = await client.get(
+        client.cookies.delete(OAUTH_COOKIE)
+        missing_cookie = await client.get(
+            "/api/web/v1/auth/callback",
+            params={"code": "one-time-code", "state": state},
+        )
+        assert missing_cookie.status_code == 401
+        assert missing_cookie.json()["detail"] == "OAuth state Cookie 缺失，请重新登录"
+
+        client.cookies.set(OAUTH_COOKIE, oauth_cookie)
+        missing_query_state = await client.get(
+            "/api/web/v1/auth/callback",
+            params={"code": "one-time-code"},
+        )
+        assert missing_query_state.status_code == 401
+        assert missing_query_state.json()["detail"] == "OAuth state 参数缺失"
+
+        mismatch = await client.get(
             "/api/web/v1/auth/callback",
             params={"code": "one-time-code", "state": "wrong-state"},
         )
-        assert tampered.status_code == 401
+        assert mismatch.status_code == 401
+        assert mismatch.json()["detail"] == "OAuth state 校验失败"
+
+        client.cookies.set(OAUTH_COOKIE, "broken" + oauth_cookie[6:])
+        invalid_cookie = await client.get(
+            "/api/web/v1/auth/callback",
+            params={"code": "one-time-code", "state": state},
+        )
+        assert invalid_cookie.status_code == 401
+        assert invalid_cookie.json()["detail"] == "OAuth state 已失效"
 
 
 async def test_dashboard_entries_validation_and_invalid_ref_branches(
