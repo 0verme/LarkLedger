@@ -26,6 +26,7 @@ from lark_ledger.schemas import Action, ParsedCommand
 pytestmark = pytest.mark.postgres
 
 _ALEMBIC_INI = Path(__file__).resolve().parents[2] / "alembic.ini"
+FIXED_NOW = datetime(2026, 8, 20, tzinfo=UTC)
 
 
 async def _bootstrap(session: AsyncSession, open_id: str, name: str) -> RequestContext:
@@ -311,6 +312,7 @@ async def test_recurring_cross_member_confirm_keeps_payer(
             next_occurrence=date(2026, 9, 1),
             account_id=account.id,
             paid_by_user_id=member_ctx.actor_user_id,
+            now=FIXED_NOW,
         )
         assert rule.paid_by_user_id == member_ctx.actor_user_id
         await session.commit()

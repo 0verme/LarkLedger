@@ -50,6 +50,7 @@ from lark_ledger.services.identity import IdentityService
 from lark_ledger.services.transfers import TransferService
 
 TZ = "Asia/Shanghai"
+FIXED_NOW = datetime(2026, 8, 8, 4, tzinfo=UTC)
 
 
 async def _identity(session: AsyncSession, open_id: str, name: str) -> RequestContext:
@@ -175,9 +176,13 @@ async def _progress(
     session: AsyncSession,
     context: RequestContext,
     goal_id: uuid.UUID,
+    *,
+    now: datetime = FIXED_NOW,
 ) -> object:
     goal = await GoalService(session, timezone=TZ, currency="CNY").get(context, goal_id)
-    return await GoalProgressService(session, timezone=TZ, currency="CNY").progress(context, goal)
+    return await GoalProgressService(session, timezone=TZ, currency="CNY").progress(
+        context, goal, now=now
+    )
 
 
 @pytest.mark.asyncio
@@ -206,7 +211,7 @@ async def test_create_list_get_goal(session: AsyncSession) -> None:
     assert progress.progress_ratio == Decimal("0.5")
     assert progress.progress_percent == Decimal("50.00")
     assert progress.is_target_reached is False
-    local_today = datetime.now(ZoneInfo(TZ)).date()
+    local_today = FIXED_NOW.astimezone(ZoneInfo(TZ)).date()
     assert progress.days_remaining == (date(2027, 3, 31) - local_today).days
 
 
@@ -257,7 +262,7 @@ async def test_revision_delete_restore_recalculates_progress(session: AsyncSessi
     )
     assert (await _progress(session, context, goal.id)).current_amount == Decimal("7000")  # type: ignore[union-attr]
 
-    entry.deleted_at = datetime.now(UTC)
+    entry.deleted_at = FIXED_NOW
     await session.commit()
     assert (await _progress(session, context, goal.id)).current_amount == Decimal("8000")  # type: ignore[union-attr]
 
@@ -440,7 +445,7 @@ async def test_target_date_boundaries(session: AsyncSession) -> None:
     p = await _progress(session, context, past.id)  # type: ignore[union-attr]
     assert p.days_remaining is not None and p.days_remaining < 0
     # target_date today (local timezone)
-    local_today = datetime.now(ZoneInfo(TZ)).date()
+    local_today = FIXED_NOW.astimezone(ZoneInfo(TZ)).date()
     today_goal = await _goal(session, context, name="今天", target="5000",
                              account_ids=[account.id], target_date=local_today)
     tp = await _progress(session, context, today_goal.id)  # type: ignore[union-attr]

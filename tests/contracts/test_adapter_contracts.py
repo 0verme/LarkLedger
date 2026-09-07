@@ -60,6 +60,8 @@ from lark_ledger.services.message_processor import MessageProcessor
 from lark_ledger.services.transfers import TransferService
 from tests.contracts.canonical import CanonicalExpectation, assert_matches, entry_snapshot
 
+FIXED_NOW = datetime(2026, 8, 20, tzinfo=UTC)
+
 
 def _settings() -> Settings:
     return Settings(
@@ -594,9 +596,9 @@ async def test_c04_budget_spent_is_channel_independent(
             source_message_id="web_c04_transfer",
         )
         await session.commit()
-        overview = await BudgetService(session, currency="CNY", timezone="Asia/Shanghai").overview(
-            ctx, period=None
-        )
+        overview = await BudgetService(
+            session, currency="CNY", timezone="Asia/Shanghai"
+        ).overview(ctx, period=None, now=FIXED_NOW)
     assert overview.total_spent == Decimal("150.00")
 
 
