@@ -2727,7 +2727,10 @@ async def report(
             source_type="web",
         )
     if result.report is None:
-        raise HTTPException(status_code=404, detail=result.message)
+        # The report service returns a zero-valued ReportData for an empty
+        # range. Reaching this branch means the response was malformed or the
+        # service failed unexpectedly, not that the collection was empty.
+        raise HTTPException(status_code=503, detail="报告暂不可用，请稍后重试")
     return result.report
 
 

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftRight, Loader2, Plus, RotateCcw, X } from "lucide-react";
 import {
+	ApiError,
 	api,
 	localTime,
 	money,
@@ -9,7 +10,12 @@ import {
 	type TransferDetail,
 	type TransferPage,
 } from "../api";
-import { EmptyState, PageSkeleton } from "../components/States";
+import {
+	EmptyState,
+	ErrorState,
+	NotFoundState,
+	PageSkeleton,
+} from "../components/States";
 
 export function TransfersPage() {
 	const client = useQueryClient();
@@ -56,10 +62,11 @@ export function TransfersPage() {
 	if (transfers.isLoading) return <PageSkeleton rows={2} />;
 	if (transfers.isError || !transfers.data) {
 		return (
-			<div className="state-panel">
-				<h3>转账加载失败</h3>
-				<button onClick={() => transfers.refetch()}>重试</button>
-			</div>
+			<ErrorState
+				title="转账加载失败"
+				description="转账暂时无法加载，请稍后重试。"
+				onRetry={() => transfers.refetch()}
+			/>
 		);
 	}
 	const rows = transfers.data.items;
@@ -85,6 +92,16 @@ export function TransfersPage() {
 					icon={<ArrowLeftRight size={30} />}
 					title="还没有转账"
 					description="在两个账户之间转移资金，不会计入收入或支出。"
+					action={
+						accounts.data?.items.length ? (
+							<button
+								className="primary-small"
+								onClick={() => setCreating(true)}
+							>
+								<Plus size={16} /> 新建转账
+							</button>
+						) : undefined
+					}
 				/>
 			) : (
 				<section className="table-panel">
@@ -180,10 +197,28 @@ export function TransfersPage() {
 							<div className="drawer-loading">
 								<Loader2 className="spin" size={16} /> 加载详情…
 							</div>
-						) : detail.isError || !current ? (
-							<div className="state-panel">
-								<h3>转账不存在</h3>
-							</div>
+						) : detail.isError ? (
+							detail.error instanceof ApiError && detail.error.status === 404 ? (
+								<NotFoundState
+									compact
+									title="转账不存在"
+									description="这笔转账可能已被删除，或不属于当前账本。"
+								/>
+							) : (
+								<ErrorState
+									compact
+									title="转账详情加载失败"
+									description="转账详情暂时无法加载，请稍后重试。"
+									onRetry={() => detail.refetch()}
+								/>
+							)
+						) : !current ? (
+							<ErrorState
+								compact
+								title="转账详情加载失败"
+								description="返回的数据不完整，请稍后重试。"
+								onRetry={() => detail.refetch()}
+							/>
 						) : (
 							<>
 								<div className="drawer-title">

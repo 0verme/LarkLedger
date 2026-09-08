@@ -16,7 +16,7 @@ import {
 	type AccountList,
 	type AssetSummary,
 } from "../api";
-import { EmptyState, PageSkeleton } from "../components/States";
+import { EmptyState, ErrorState, PageSkeleton } from "../components/States";
 import { ContextualAssistantButton } from "../components/ContextualAssistantButton";
 
 type AccountType = "cash" | "asset" | "liability";
@@ -72,17 +72,14 @@ export function AccountsPage() {
 	if (accounts.isLoading) return <PageSkeleton rows={2} />;
 	if (accounts.isError || !accounts.data) {
 		return (
-			<div className="state-panel">
-				<h3>账户加载失败</h3>
-				<button
-					onClick={() => {
-						accounts.refetch();
-						assets.refetch();
-					}}
-				>
-					重试
-				</button>
-			</div>
+			<ErrorState
+				title="账户加载失败"
+				description="账户暂时无法加载，请稍后重试。"
+				onRetry={() => {
+					accounts.refetch();
+					assets.refetch();
+				}}
+			/>
 		);
 	}
 	const rows = accounts.data.items;
@@ -109,7 +106,16 @@ export function AccountsPage() {
 					</button>
 				</div>
 			</div>
-			{assets.data && (
+			{assets.isError ? (
+				<section className="panel">
+					<ErrorState
+						compact
+						title="资产余额加载失败"
+						description="账户列表仍可使用，余额数据稍后可重试。"
+						onRetry={() => assets.refetch()}
+					/>
+				</section>
+			) : assets.data ? (
 				<section className="metric-grid asset-metrics">
 					<article>
 						<span>总资产</span>
@@ -130,12 +136,17 @@ export function AccountsPage() {
 						</strong>
 					</article>
 				</section>
-			)}
+			) : null}
 			{sorted.length === 0 ? (
 				<EmptyState
 					icon={<Landmark size={30} />}
 					title="还没有账户"
-					description="创建一个账户来管理你的资金余额。"
+					description="添加账户后即可开始管理资金。"
+					action={
+						<button className="primary-small" onClick={() => setCreating(true)}>
+							<Plus size={16} /> 添加账户
+						</button>
+					}
 				/>
 			) : (
 				<section className="table-panel">

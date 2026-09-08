@@ -6,7 +6,7 @@ import {
 	type HouseholdInvitation,
 	type HouseholdList,
 } from "../api";
-import { EmptyState } from "../components/States";
+import { EmptyState, ErrorState, PageSkeleton } from "../components/States";
 
 export function HouseholdsPage() {
 	const queryClient = useQueryClient();
@@ -73,14 +73,23 @@ export function HouseholdsPage() {
 	const pending = (invitations.data ?? []).filter(
 		(item) => item.status === "pending",
 	);
-	const failed =
-		households.isError ||
-		invitations.isError ||
-		create.isError ||
-		invite.isError ||
-		respond.isError ||
-		leave.isError ||
-		remove.isError;
+	const actionError = [
+		create.error,
+		invite.error,
+		respond.error,
+		leave.error,
+		remove.error,
+	].find((error) => error);
+	if (households.isLoading) return <PageSkeleton rows={2} />;
+	if (households.isError || !households.data) {
+		return (
+			<ErrorState
+				title="家庭列表加载失败"
+				description="家庭空间暂时无法加载，请稍后重试。"
+				onRetry={() => households.refetch()}
+			/>
+		);
+	}
 
 	return (
 		<div className="dashboard-page">
@@ -93,10 +102,24 @@ export function HouseholdsPage() {
 					<Home size={17} /> 创建家庭
 				</button>
 			</div>
-			{failed && (
-				<section className="state-panel">
-					<p>家庭操作失败，请检查输入或刷新后重试。</p>
-				</section>
+			{invitations.isError && (
+				<ErrorState
+					compact
+					title="邀请列表加载失败"
+					description="家庭列表仍可使用，请稍后重试邀请列表。"
+					onRetry={() => invitations.refetch()}
+				/>
+			)}
+			{actionError && (
+				<ErrorState
+					compact
+					title="家庭操作失败"
+					description={
+						actionError instanceof Error
+							? actionError.message
+							: "请检查输入后重试。"
+					}
+				/>
 			)}
 			{pending.length > 0 && (
 				<section className="panel">

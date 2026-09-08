@@ -22,7 +22,7 @@ import {
 	type QuickEntryBody,
 } from "../components/QuickEntryDialog";
 import { AIEntryPanel } from "../components/AIEntryPanel";
-import { EmptyState, PageSkeleton } from "../components/States";
+import { EmptyState, ErrorState, PageSkeleton } from "../components/States";
 
 export function DashboardPage() {
 	const client = useQueryClient();
@@ -71,10 +71,12 @@ export function DashboardPage() {
 	if (query.isLoading) return <PageSkeleton rows={3} />;
 	if (query.isError)
 		return (
-			<section className="state-panel">
-				<h2>总览暂时不可用</h2>
-				<button onClick={() => query.refetch()}>重新加载</button>
-			</section>
+			<ErrorState
+				title="总览加载失败"
+				description="总览数据暂时不可用，请稍后重试。"
+				onRetry={() => query.refetch()}
+				retryLabel="重新加载"
+			/>
 		);
 	const data = query.data!;
 	const peak = Math.max(
@@ -150,7 +152,16 @@ export function DashboardPage() {
 					<strong>{data.pending_count} 笔</strong>
 				</article>
 			</section>
-			{assets.data?.accounts && (
+			{assets.isError ? (
+				<section className="panel">
+					<ErrorState
+						compact
+						title="资产概览加载失败"
+						description="总览其余内容仍可使用，账户资产稍后可重试。"
+						onRetry={() => assets.refetch()}
+					/>
+				</section>
+			) : assets.data?.accounts ? (
 				<>
 					<section className="metric-grid asset-metrics">
 						<article>
@@ -195,7 +206,7 @@ export function DashboardPage() {
 						</div>
 					</section>
 				</>
-			)}
+			) : null}
 			<div className="dashboard-grid">
 				<section className="panel trend-panel">
 					<div className="panel-title">

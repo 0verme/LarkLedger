@@ -214,6 +214,25 @@ async def test_web_report_budget_and_export_reuse_ledger_rules(
         assert deleted_budget.json()["status"] == "none"
 
 
+async def test_web_report_empty_range_is_success_with_zero_totals(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    client, _ = await _client(factory, "ou_empty_report")
+    async with client:
+        response = await client.get(
+            "/api/web/v1/reports?start_date=2026-09-01&end_date=2026-09-30"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["entry_count"] == 0
+    assert body["income_total"] == "0.00"
+    assert body["expense_total"] == "0.00"
+    assert body["balance"] == "0.00"
+    assert body["categories"] == []
+    assert body["trend"] == []
+
+
 async def test_web_total_budget_period_set_and_delete(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

@@ -653,7 +653,10 @@ async def test_budgets_get_and_report_branches(
             "/api/web/v1/reports",
             params={"start_date": "2020-01-01", "end_date": "2020-01-31"},
         )
-        assert empty_report.status_code == 404
+        assert empty_report.status_code == 200
+    assert empty_report.json()["entry_count"] == 0
+    assert empty_report.json()["income_total"] == "0.00"
+    assert empty_report.json()["expense_total"] == "0.00"
 
 
 async def test_export_preset_branches(

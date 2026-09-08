@@ -8,7 +8,7 @@ import {
 	ShieldCheck,
 } from "lucide-react";
 import { api, type SafeSystemConfig } from "../api";
-import { PageSkeleton } from "../components/States";
+import { ErrorState, PageSkeleton } from "../components/States";
 import { PROJECT_GITHUB_URL } from "../constants";
 
 const enabled = (value: boolean) => (value ? "已启用" : "未启用");
@@ -22,10 +22,11 @@ export function ConfigPage() {
 	if (query.isLoading) return <PageSkeleton rows={2} />;
 	if (query.isError || !query.data)
 		return (
-			<div className="state-panel">
-				<h3>安全配置加载失败</h3>
-				<button onClick={() => query.refetch()}>重试</button>
-			</div>
+			<ErrorState
+				title="安全配置加载失败"
+				description="系统配置暂时无法加载，请稍后重试。"
+				onRetry={() => query.refetch()}
+			/>
 		);
 	const config = query.data;
 	const rows = [

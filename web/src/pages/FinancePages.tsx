@@ -27,7 +27,12 @@ import {
 	type BudgetStatus,
 	type ReportData,
 } from "../api";
-import { EmptyState, PageSkeleton } from "../components/States";
+import {
+	EmptyState,
+	ErrorState,
+	PageSkeleton,
+	TableSkeleton,
+} from "../components/States";
 import { ContextualAssistantButton } from "../components/ContextualAssistantButton";
 import {
 	isValidDateRange,
@@ -56,14 +61,14 @@ export function AnalyticsPage() {
 	const overview = useQuery({
 		queryKey: ["analytics", query],
 		queryFn: () => api<AnalyticsOverview>(`/analytics?${query}`),
+		placeholderData: keepPreviousData,
 	});
 	const monthly = useQuery({
 		queryKey: ["analytics-monthly"],
 		queryFn: () =>
 			api<AnalyticsMonthlyPoint[]>("/analytics/monthly?period=year"),
 	});
-	const loading = overview.isLoading || monthly.isLoading;
-	const failed = overview.isError || monthly.isError;
+	const loading = overview.isLoading;
 	const maximum = Math.max(
 		1,
 		...(overview.data?.trend ?? []).flatMap((item) => [
@@ -72,19 +77,13 @@ export function AnalyticsPage() {
 		]),
 	);
 	if (loading) return <PageSkeleton rows={3} />;
-	if (failed || !overview.data)
+	if (overview.isError || !overview.data)
 		return (
-			<div className="state-panel">
-				<h3>分析数据加载失败</h3>
-				<button
-					onClick={() => {
-						overview.refetch();
-						monthly.refetch();
-					}}
-				>
-					重试
-				</button>
-			</div>
+			<ErrorState
+				title="分析数据加载失败"
+				description="分析数据暂时无法加载，请稍后重试。"
+				onRetry={() => overview.refetch()}
+			/>
 		);
 	const { summary, trend, categories } = overview.data;
 	return (
@@ -207,20 +206,37 @@ export function AnalyticsPage() {
 							<h3>月度趋势</h3>
 							<span>本年</span>
 						</div>
-						<div className="monthly-grid">
-							{monthly.data?.map((item) => (
-								<article key={item.period}>
-									<b>{item.period}</b>
-									<span>收入 {money(item.income)}</span>
-									<span>支出 {money(item.expense)}</span>
-									<strong
-										className={Number(item.balance) >= 0 ? "positive" : ""}
-									>
-										{money(item.balance)}
-									</strong>
-								</article>
-							))}
-						</div>
+						{monthly.isLoading ? (
+							<TableSkeleton rows={3} />
+						) : monthly.isError ? (
+							<ErrorState
+								compact
+								title="月度趋势加载失败"
+								description="分析主数据仍可使用。"
+								onRetry={() => monthly.refetch()}
+							/>
+						) : monthly.data?.length ? (
+							<div className="monthly-grid">
+								{monthly.data.map((item) => (
+									<article key={item.period}>
+										<b>{item.period}</b>
+										<span>收入 {money(item.income)}</span>
+										<span>支出 {money(item.expense)}</span>
+										<strong
+											className={Number(item.balance) >= 0 ? "positive" : ""}
+										>
+											{money(item.balance)}
+										</strong>
+									</article>
+								))}
+							</div>
+						) : (
+							<EmptyState
+								compact
+								title="暂无月度数据"
+								description="有流水后，这里会展示本年度的收支趋势。"
+							/>
+						)}
 					</section>
 				</>
 			)}
@@ -266,6 +282,7 @@ export function BudgetsPage() {
 	const query = useQuery({
 		queryKey: ["budgets", period],
 		queryFn: () => api<BudgetOverview>(`/budgets?period=${period}`),
+		placeholderData: keepPreviousData,
 	});
 	const setCategory = useMutation({
 		mutationFn: ({ category, amount }: { category: string; amount: string }) =>
@@ -315,10 +332,11 @@ export function BudgetsPage() {
 	if (query.isLoading) return <PageSkeleton rows={2} />;
 	if (query.isError || !query.data)
 		return (
-			<div className="state-panel">
-				<h3>预算加载失败</h3>
-				<button onClick={() => query.refetch()}>重试</button>
-			</div>
+			<ErrorState
+				title="预算加载失败"
+				description="预算暂时无法加载，请稍后重试。"
+				onRetry={() => query.refetch()}
+			/>
 		);
 	const data = query.data;
 	const heroStatus = budgetStatusMeta(data.status);
@@ -672,6 +690,11 @@ export function ReportsPage() {
 		1,
 		...(query.data?.trend.map((item) => Number(item.amount)) ?? []),
 	);
+	const isSingleMonth = dates.startDate.slice(0, 7) === dates.endDate.slice(0, 7);
+	const emptyReportTitle = isSingleMonth
+		? "本月暂无收支记录"
+		: "这个时间范围还没有账目";
+	const retryReport = () => query.refetch();
 	return (
 		<section>
 			<div className="page-heading">
@@ -704,15 +727,16 @@ export function ReportsPage() {
 			{query.isPending && !query.data ? (
 				<PageSkeleton rows={2} />
 			) : query.isError ? (
-				<div className="state-panel">
-					<h3>报告加载失败</h3>
-					<button onClick={() => query.refetch()}>重试</button>
-				</div>
+				<ErrorState
+					title="报表加载失败"
+					description="报表暂时无法加载，请稍后重试。"
+					onRetry={retryReport}
+				/>
 			) : !query.data ? (
-				<EmptyState
-					icon={<FileBarChart size={30} />}
-					title="这个时间范围还没有账目"
-					description="在这里创建第一笔记录，或直接在飞书里说。"
+				<ErrorState
+					title="报表数据加载失败"
+					description="返回的数据不完整，请稍后重试。"
+					onRetry={retryReport}
 				/>
 			) : (
 				<>
@@ -731,7 +755,24 @@ export function ReportsPage() {
 							<span>结余</span>
 							<strong>{money(query.data.balance)}</strong>
 						</article>
+						<article>
+							<span>流水</span>
+							<strong>{query.data.entry_count} 笔</strong>
+						</article>
 					</div>
+					{query.data.entry_count === 0 && (
+						<EmptyState
+							compact
+							icon={<FileBarChart size={26} />}
+							title={emptyReportTitle}
+							description="当前时间范围还没有可用于生成报告的流水。记录一笔后，这里会展示收支趋势和分类构成。"
+							action={
+								<Link className="primary-small" to="/entries?new=1">
+									记一笔
+								</Link>
+							}
+						/>
+					)}
 					<div className="dashboard-grid">
 						<section className="panel">
 							<div className="panel-title">
@@ -740,34 +781,50 @@ export function ReportsPage() {
 									{query.data.trend_granularity === "day" ? "每日" : "每月"}
 								</span>
 							</div>
-							<div className="report-bars">
-								{query.data.trend.map((item) => (
-									<i
-										key={item.period}
-										style={{
-											height: `${Math.max(2, (Number(item.amount) / max) * 100)}%`,
-										}}
-										title={`${item.period} ${money(item.amount)}`}
-									/>
-								))}
-							</div>
+							{query.data.trend.length ? (
+								<div className="report-bars">
+									{query.data.trend.map((item) => (
+										<i
+											key={item.period}
+											style={{
+												height: `${Math.max(2, (Number(item.amount) / max) * 100)}%`,
+											}}
+											title={`${item.period} ${money(item.amount)}`}
+										/>
+									))}
+								</div>
+							) : (
+								<EmptyState
+									compact
+									title="暂无趋势数据"
+									description="产生支出后，这里会展示收支趋势。"
+								/>
+							)}
 						</section>
 						<section className="panel">
 							<div className="panel-title">
 								<h3>主要分类</h3>
-								<span>{query.data.entry_count} 笔</span>
+								<span>共 {query.data.entry_count} 笔</span>
 							</div>
-							<div className="category-list">
-								{query.data.categories.map((item) => (
-									<Link
-										to={`/entries?category=${encodeURIComponent(item.category)}`}
-										key={item.category}
-									>
-										<b>{item.category}</b>
-										<span>{money(item.amount)}</span>
-									</Link>
-								))}
-							</div>
+							{query.data.categories.length ? (
+								<div className="category-list">
+									{query.data.categories.map((item) => (
+										<Link
+											to={`/entries?category=${encodeURIComponent(item.category)}`}
+											key={item.category}
+										>
+											<b>{item.category}</b>
+											<span>{money(item.amount)}</span>
+										</Link>
+									))}
+								</div>
+							) : (
+								<EmptyState
+									compact
+									title="暂无分类支出"
+									description="产生支出后，这里会展示分类构成。"
+								/>
+							)}
 						</section>
 					</div>
 				</>

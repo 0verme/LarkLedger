@@ -1591,6 +1591,8 @@ async def report(
             commit_changes=False,
         )
     if result.report is None:
+        # Empty ranges are represented by a zero-valued ReportData. This branch
+        # is reserved for an unexpected malformed result from the service.
         raise client_error(503, "temporary_failure", "report unavailable")
     return result.report
 
