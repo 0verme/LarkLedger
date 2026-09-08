@@ -44,6 +44,7 @@ import { AboutPage, ConfigPage } from "./pages/SystemPages";
 import { ApiTokensPage } from "./pages/ApiTokensPage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { PROJECT_GITHUB_URL } from "./constants";
+import { ErrorState } from "./components/States";
 import {
 	getVisibleNavigationGroups,
 	navigationPageNames,
@@ -386,9 +387,12 @@ export function App() {
 	if (me.isError) {
 		return (
 			<main className="error-page">
-				<h1>暂时无法加载</h1>
-				<p>请检查服务状态后重试。</p>
-				<button onClick={() => me.refetch()}>重新加载</button>
+				<ErrorState
+					title="登录状态加载失败"
+					description="请检查服务状态后重试。"
+					onRetry={() => me.refetch()}
+					retryLabel="重新加载"
+				/>
 			</main>
 		);
 	}

@@ -1,6 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { EmptyState, PageSkeleton, TableSkeleton } from "../components/States";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import {
+	EmptyState,
+	ErrorState,
+	NotFoundState,
+	PageSkeleton,
+	TableSkeleton,
+} from "../components/States";
 
 // P45 — 页面状态统一视觉语言：EmptyState / PageSkeleton / TableSkeleton。
 describe("EmptyState", () => {
@@ -27,6 +33,32 @@ describe("EmptyState", () => {
 		expect(
 			screen.getByRole("heading", { name: "没有匹配的事件" }),
 		).toBeInTheDocument();
+		expect(screen.queryByRole("button")).not.toBeInTheDocument();
+	});
+});
+
+describe("ErrorState", () => {
+	it("renders an error message and invokes retry", () => {
+		const retry = vi.fn();
+		render(
+			<ErrorState
+				title="报表加载失败"
+				description="报表暂时无法加载。"
+				onRetry={retry}
+			/>,
+		);
+		expect(screen.getByRole("alert")).toHaveTextContent("报表加载失败");
+		expect(screen.getByText("报表暂时无法加载。")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "重试" }));
+		expect(retry).toHaveBeenCalledOnce();
+	});
+});
+
+describe("NotFoundState", () => {
+	it("keeps a missing resource separate from an error", () => {
+		render(<NotFoundState title="流水不存在" />);
+		expect(screen.getByRole("heading", { name: "流水不存在" })).toBeInTheDocument();
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 		expect(screen.queryByRole("button")).not.toBeInTheDocument();
 	});
 });

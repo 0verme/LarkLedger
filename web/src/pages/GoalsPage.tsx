@@ -20,7 +20,7 @@ import {
 	type GoalList,
 	type GoalUpdateInput,
 } from "../api";
-import { EmptyState, PageSkeleton } from "../components/States";
+import { EmptyState, ErrorState, PageSkeleton } from "../components/States";
 
 function progressTone(percent: number, reached: boolean): string {
 	if (reached) return "reached";
@@ -105,10 +105,11 @@ export function GoalsPage() {
 	if (goals.isLoading) return <PageSkeleton rows={2} />;
 	if (goals.isError || !goals.data) {
 		return (
-			<div className="state-panel">
-				<h3>目标加载失败</h3>
-				<button onClick={() => goals.refetch()}>重试</button>
-			</div>
+			<ErrorState
+				title="目标加载失败"
+				description="目标暂时无法加载，请稍后重试。"
+				onRetry={() => goals.refetch()}
+			/>
 		);
 	}
 	const items = goals.data.items.filter((item) => item.status !== "archived");

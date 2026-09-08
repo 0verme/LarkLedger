@@ -2496,7 +2496,7 @@ td strong {
  * ------------------------------------------------------------------------ */
 .state-panel,
 .empty-ledger {
-	padding: 60px 24px;
+	padding: 48px 24px;
 	text-align: center;
 	color: var(--text-2);
 }
@@ -2512,12 +2512,50 @@ td strong {
 	color: var(--text-2);
 	font-size: var(--fs-body-lg);
 }
-.empty-ledger svg {
+.state-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+.empty-ledger .state-icon {
 	color: var(--text-4);
 	margin-bottom: 6px;
 }
+.empty-ledger .state-icon svg {
+	color: inherit;
+}
 .empty-ledger .empty-action {
 	margin-top: 14px;
+}
+.empty-ledger.compact,
+.state-panel.compact {
+	padding: 28px 20px;
+}
+.error-state {
+	background: var(--danger-bg);
+	border: 1px solid rgba(168, 96, 79, 0.2);
+	border-radius: var(--r-lg);
+}
+.not-found-state {
+	background: var(--surface-muted);
+	border: 1px solid var(--line-1);
+	border-radius: var(--r-lg);
+}
+.error-state .state-icon {
+	color: var(--danger);
+	margin-bottom: 4px;
+}
+.error-state p {
+	margin: 8px auto 0;
+}
+.state-panel.error-state button {
+	margin-top: 16px;
+}
+.state-diagnostics {
+	display: block;
+	margin-top: 12px;
+	color: var(--text-3);
+	font-size: var(--fs-small);
 }
 .state-panel button {
 	margin-top: 4px;

@@ -1,3 +1,4 @@
+import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
 
 // P45 — 全站统一的页面状态视觉语言：
@@ -45,18 +46,78 @@ export function EmptyState({
 	title,
 	description,
 	action,
+	compact = false,
 }: {
 	icon?: ReactNode;
 	title: ReactNode;
 	description?: ReactNode;
 	action?: ReactNode;
+	compact?: boolean;
 }) {
 	return (
-		<div className="empty-ledger">
-			{icon}
+		<div className={`empty-ledger${compact ? " compact" : ""}`}>
+			{icon ? <span className="state-icon" aria-hidden="true">{icon}</span> : null}
 			<h3>{title}</h3>
 			{description ? <p>{description}</p> : null}
 			{action ? <div className="empty-action">{action}</div> : null}
+		</div>
+	);
+}
+
+/**
+ * 统一的可恢复错误状态。错误只用于请求真正失败的场景；列表为空请使用
+ * EmptyState，具体资源不存在请使用页面自己的 Not Found 语义。
+ */
+export function NotFoundState({
+	title,
+	description = "这个资源可能已被删除，或你没有访问权限。",
+	compact = false,
+}: {
+	title: ReactNode;
+	description?: ReactNode;
+	compact?: boolean;
+}) {
+	return (
+		<div className={`state-panel not-found-state${compact ? " compact" : ""}`}>
+			<h3>{title}</h3>
+			{description ? <p>{description}</p> : null}
+		</div>
+	);
+}
+
+export function ErrorState({
+	icon,
+	title,
+	description = "暂时无法加载，请稍后重试。",
+	onRetry,
+	retryLabel = "重试",
+	diagnostics,
+	compact = false,
+}: {
+	icon?: ReactNode;
+	title: ReactNode;
+	description?: ReactNode;
+	onRetry?: () => void;
+	retryLabel?: ReactNode;
+	diagnostics?: ReactNode;
+	compact?: boolean;
+}) {
+	return (
+		<div
+			className={`state-panel error-state${compact ? " compact" : ""}`}
+			role="alert"
+		>
+			<span className="state-icon" aria-hidden="true">
+				{icon ?? <AlertTriangle size={22} />}
+			</span>
+			<h3>{title}</h3>
+			{description ? <p>{description}</p> : null}
+			{onRetry ? (
+				<button className="primary-small" type="button" onClick={onRetry}>
+					{retryLabel}
+				</button>
+			) : null}
+			{diagnostics ? <small className="state-diagnostics">{diagnostics}</small> : null}
 		</div>
 	);
 }

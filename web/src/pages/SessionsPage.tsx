@@ -10,7 +10,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { sessionApi, type CurrentSession, type WebSession } from "../api";
-import { TableSkeleton } from "../components/States";
+import { ErrorState, TableSkeleton } from "../components/States";
 
 function DeviceIcon({ device }: { device: string }) {
 	if (/移动端/.test(device)) return <Smartphone size={18} />;
@@ -134,6 +134,14 @@ export function SessionsPage() {
 				</div>
 			</div>
 
+			{me.isError && (
+				<ErrorState
+					compact
+					title="当前会话信息加载失败"
+					description="设备列表仍可使用，请稍后重试。"
+					onRetry={() => me.refetch()}
+				/>
+			)}
 			{me.data && (
 				<section className="session-summary">
 					<div className="avatar large">{me.data.name.slice(0, 1)}</div>
@@ -160,6 +168,13 @@ export function SessionsPage() {
 				</div>
 				{sessions.isLoading ? (
 					<TableSkeleton rows={2} />
+				) : sessions.isError ? (
+					<ErrorState
+						compact
+						title="登录会话加载失败"
+						description="设备列表暂时无法加载，请稍后重试。"
+						onRetry={() => sessions.refetch()}
+					/>
 				) : items.length === 0 ? (
 					<p className="muted-note">暂无会话</p>
 				) : (
