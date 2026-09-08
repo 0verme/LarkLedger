@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, cast
 
@@ -1141,8 +1141,6 @@ async def entries(
     order: SortOrder = "desc",
 ) -> EntryPage:
     _require(principal, "ledger:read")
-    if start is None:
-        start = datetime.now(UTC) - timedelta(days=30)
     async with _factory(request)() as session:
         return await _application(session, _settings(request)).list_entries(
             principal.context,

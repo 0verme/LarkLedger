@@ -353,6 +353,23 @@ async def test_oauth_callback_error_paths(
         assert invalid_cookie.json()["detail"] == "OAuth state 已失效"
 
 
+async def test_dashboard_entries_default_includes_history(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    old = _entry("ou_user", "OLD01", "12", Direction.EXPENSE, "??")
+    old.occurred_at = datetime(2024, 1, 1, tzinfo=UTC)
+    recent = _entry("ou_user", "NEW01", "18", Direction.INCOME, "??")
+    async with factory() as session:
+        session.add_all([old, recent])
+        await session.commit()
+
+    client, _ = await _client(factory, "ou_user", clock=lambda: FIXED_NOW)
+    async with client:
+        response = await client.get("/api/web/v1/entries")
+    assert response.status_code == 200
+    assert {item["short_id"] for item in response.json()["items"]} == {"OLD01", "NEW01"}
+
+
 async def test_dashboard_entries_validation_and_invalid_ref_branches(
     factory: async_sessionmaker[AsyncSession],
 ) -> None:

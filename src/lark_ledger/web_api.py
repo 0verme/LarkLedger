@@ -1448,9 +1448,7 @@ async def entries(
     sort: EntrySort = "occurred_at",
     order: SortOrder = "desc",
 ) -> EntryPage:
-    if start is None:
-        start = _request_now(request) - timedelta(days=30)
-    if end is not None and start >= end:
+    if end is not None and start is not None and start >= end:
         raise HTTPException(status_code=422, detail="开始时间必须早于结束时间")
     if amount_min is not None and amount_max is not None and amount_min > amount_max:
         raise HTTPException(status_code=422, detail="最低金额不能大于最高金额")
