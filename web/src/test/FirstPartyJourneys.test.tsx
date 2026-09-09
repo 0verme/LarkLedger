@@ -420,7 +420,7 @@ describe("W01–W06 first-party dashboard, ledger, entries and quick bookkeeping
 });
 
 describe("W07–W10 transactions edit, delete, restore and accounts", () => {
-	function fetchWithDetail() {
+	function fetchWithDetail(onPatch?: (body: Record<string, unknown>) => void) {
 		const backend = makeBackend();
 		vi.stubGlobal(
 			"fetch",
@@ -429,9 +429,12 @@ describe("W07–W10 transactions edit, delete, restore and accounts", () => {
 				if (url.endsWith("/me")) return jsonOk(ME);
 				if (url.includes("/accounts")) return jsonOk(ACCOUNTS);
 				if (url.includes("/entries/A83F2") && init?.method === "PATCH") {
+					const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+					onPatch?.(body);
+					const amount = String(body.amount);
 					backend.entries = [
 						entry({
-							amount: "30.00",
+							amount,
 							note: "午餐涨价了",
 							updated_at: "2026-08-10T05:00:00+00:00",
 						}),
@@ -444,7 +447,7 @@ describe("W07–W10 transactions edit, delete, restore and accounts", () => {
 									id: "rev-1",
 									change_type: "update",
 									before: { amount: "28.00" },
-									after: { amount: "30.00" },
+									after: { amount },
 									created_at: "2026-08-10T05:00:00+00:00",
 								},
 							],
@@ -520,6 +523,33 @@ describe("W07–W10 transactions edit, delete, restore and accounts", () => {
 			expect(backend.entries[0].amount).toBe("30.00");
 		});
 		expect(await screen.findByText("操作已保存")).toBeInTheDocument();
+	});
+
+	it("previews and saves the calculated amount from an expression", async () => {
+		const patches: Record<string, unknown>[] = [];
+		const backend = fetchWithDetail((body) => patches.push(body));
+		renderApp("/entries?entry=A83F2");
+		await screen.findByRole("heading", { name: /28\.00/ });
+		fireEvent.click(screen.getByRole("button", { name: /修改/ }));
+		const amount = await screen.findByLabelText("金额");
+		fireEvent.change(amount, { target: { value: "32.00+1-20" } });
+		expect(await screen.findByText("= ¥13.00")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+		await waitFor(() => expect(patches[0]?.amount).toBe("13.00"));
+		expect(backend.entries[0].amount).toBe("13.00");
+	});
+
+	it("blocks saving an invalid amount expression", async () => {
+		const patches: Record<string, unknown>[] = [];
+		fetchWithDetail((body) => patches.push(body));
+		renderApp("/entries?entry=A83F2");
+		await screen.findByRole("heading", { name: /28\.00/ });
+		fireEvent.click(screen.getByRole("button", { name: /修改/ }));
+		const amount = await screen.findByLabelText("金额");
+		fireEvent.change(amount, { target: { value: "1/0" } });
+		expect(await screen.findByRole("alert")).toHaveTextContent("不能除以 0");
+		fireEvent.click(screen.getByRole("button", { name: "保存修改" }));
+		expect(patches).toHaveLength(0);
 	});
 
 	it("W08 deletes an entry after an explicit confirmation dialog", async () => {
