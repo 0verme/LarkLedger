@@ -1,101 +1,131 @@
 # LarkLedger
 
-[简体中文](README.md) | English
+> **Self-hosted AI-first personal & family finance.**
+>
+> Track, organize, and understand a real ledger through the Web, Feishu/Lark, or an open API. The Web is a first-party client; Feishu/Lark is a natural-language adapter; all clients share one ledger core.
 
-> A self-hosted AI bookkeeping bot for Feishu/Lark. The ledger lives in your PostgreSQL database. Language models only turn messages into strictly validated business actions—never SQL, never a database connection.
+**Web · Feishu/Lark · API**
+
+[Open the Web client](https://ledger.overme.cn/) · [Quick start](#quick-start) · [User guide](docs/help.md) · [Client API](docs/client-api.md) · [Architecture](docs/architecture.md)
+
+[简体中文](README.md) | English
 
 [![CI](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-Detailed user, deployment, and architecture docs are **Chinese-first**. This README is the English entry point for the recommended path.
+![LarkLedger Web overview](docs/assets/web/hero-overview.png)
 
-## What works (v0.8.0 mainline)
+## Why LarkLedger
 
-- **Financial Goals (v0.8.0)**: turn “how much I want to save” into trackable goals (e.g. `应急储备 60000`). Progress comes from the **real ledger**: a goal binds cash / asset accounts and `current_amount` is always the live sum of their balances — the goal never stores or hand-maintains a balance, so booking / deleting / restoring entries and transfers automatically recalculate progress. Supports target date and a deterministic forecast; goal visibility inherits its bound accounts (any goal referencing a private account is invisible to everyone else, so a goal display can never leak a private balance); goals are not virtual accounts or money pools — creating / editing / deleting a goal never touches accounts, entries or transfers. Feishu `我的目标 / 目标 / 查看目标` and Web `/goals` share the same backend
-- **Deterministic Insights (v0.8.0)**: automatically surface worth-noticing facts from the real ledger — spending change (this month vs the trailing 3-month average), budget risk (usage ahead of elapsed time), upcoming recurring expenses within 30 days (grouped by currency), and goal progress / projected shortfall. Every number is computed by deterministic rules; AI never computes facts, never touches the database, and may only optionally rewrite explanation text with automatic fallback to the deterministic summary when AI is unavailable. Private data can never leak through any insight side channel. Feishu `洞察 / 财务洞察 / 本月洞察` and Web `/insights` share the same backend. **Insights explain and remind; they are not financial advice** — no investment / stock / wealth / loan / tax recommendations and no automatic money movement
+Personal and household finances should not be trapped in one chat window or maintained only in a spreadsheet. LarkLedger brings natural-language bookkeeping, transactions, accounts, budgets, goals, and insights into one ledger system: you self-host the data, choose the client that fits the moment, and keep financial facts in deterministic business logic.
 
-- **Shared household ledger (v0.7.0)**: one family = one internal-user group + one dedicated shared ledger, bookkept together by real members:
-  - **Payer attribution**: `created_by ≠ paid_by` with deterministic payer resolution by member alias / display name / open_id / UUID (`B 买菜120` → B pays); aliases are maintained by the household owner and spending aggregates by payer
-  - **Household overview**: one deterministic “family home” view (period income / expense / net, budget progress, member contributions, top categories, upcoming recurring, recent transactions, account balances); Feishu `概览 / 家庭概览 / 家庭开销` and Web `/overview` share the same backend
-  - **Account-level privacy**: an account can be `shared` (all members) or `private` (owner only); a private account's balance, entries, recurring rules, pendings, budget consumption and member stats are invisible to everyone else, while personal ledgers behave exactly as before
-- **Recurring rules**: turn known future income / expense into deterministic rules (`每月8号房租3500` / `每年6月15日保险2000` / `每周健身房100`). When a rule comes due the Recurring Worker generates a frozen confirmation pending and proactively sends a Feishu reminder card; **a rule only posts after confirmation**. Rules and pendings never consume budget — only confirmed expenses do. Pause / resume / skip / disable are supported, edits affect only future periods, and the same rule + period can never produce two pendings or two transactions under concurrency / retry
-- **Budget 2.0**: monthly total and per-category budgets keyed by explicit month, with plan-vs-actual, remaining, usage rate and over-limit status derived live; transfers never count, and delete / restore / revision all recompute from current facts
-- **Ledger-scoped accounts and transfers**: entries bind to a ledger account (cash / asset / liability) with opening balances, rename / default / archive lifecycle; transfers stay outside income / expense stats; per-account balance and total assets / liabilities / net worth are available from both Feishu and Web
-- **Text bookkeeping** with a user-scoped five-character short ID (`#XXXXX`) in success replies; simple single text entries still write straight through
-- **Recent list / single-entry detail** (`最近10笔`, `查看 #XXXXX`)
-- **Targeted update, soft-delete, and restore** by short ID (plus last-entry shortcuts)
-- **CSV export** of the current user's ledger (Feishu file message; needs extra scopes)
-- Summaries, monthly category budgets, consumption report cards
-- **High-risk confirmation**: image / voice / batch / likely-duplicate writes first create a pending confirmation (`#C-XXXXX`) — confirm or cancel by text or card button; confirmation always uses the frozen parse result, never re-calls AI
-- User isolation by Feishu `open_id` and claim-first `event_id` idempotency
-- **Reliable delivery**: background Event / Reply Workers, transactional reply outbox, PostgreSQL lease and exponential-backoff retry, readiness probes, terminal retention cleanup, and guarded manual event replay
-- **Web Dashboard**: Feishu OAuth, financial overview, ledger and revisions, pending confirmations, analytics, budgets, **financial goals (`/goals` — create / edit / progress / archive / delete)**, **insight cards (Overview “值得关注”)**, recurring rules, reports, CSV downloads, API-token management, and an administrator reliability console
-- **Channel-neutral Client API (v0.9.0)**: the stable `/api/v1` contract (`/api/client/v1` stays as a compatibility alias) for CLI / hardware / future clients; revocable, expiring bearer tokens (`llv1_`, SHA-256 digest only, scopes only ever shrink access) plus durable `Idempotency-Key` writes. Feishu and Web are adapters — all three share the same `ClientApplicationService`, so the same business fact yields the same Domain Result
-- Self-hosted stack: FastAPI, React / TypeScript / Vite, PostgreSQL, Docker Compose
+**AI understands input; deterministic business logic owns ledger facts.** Text, images, receipts, voice, and batches are parsed into structured intents. Validation, risk confirmation, authorization, and final writes stay in the application and ledger domain. The AI never accesses the database and never generates or executes SQL.
 
-Simple single text remains a direct write: `午饭32元` immediately creates the ledger entry. Image, voice, batch, and likely-duplicate writes follow `media → preview card → user confirmation → ledger`. Text fallbacks are `确认 #C-A83F2`, `取消 #C-A83F2`, and `查看待确认` (or `确认列表`).
+## Product preview
 
-## Web Dashboard
+| Transactions | Quick entry |
+| --- | --- |
+| ![Web transaction list with search and filters](docs/assets/web/entries.png) | ![Web quick-entry dialog](docs/assets/web/quick-entry.png) |
+| Budgets | Reports |
+| ![Web monthly and category budgets](docs/assets/web/budget.png) | ![Web income, expense, and category report](docs/assets/web/report.png) |
 
-Since **P38** the Dashboard is a **First-party Web Client**: a real end user can complete the whole daily bookkeeping lifecycle without ever opening Feishu — login → home → quick bookkeeping → transaction list/detail → edit → delete/restore → switch ledger → account balances. It uses the same service layer, revisions, Outbox, replay guards, PostgreSQL state, and `user_open_id` isolation as the Feishu bot, and never touches a repository or Feishu messaging directly.
+## Core capabilities
 
-- **Home** shows the active ledger (personal / household), month income/expense/balance, budget usage, account-balance summary, recent transactions and a one-tap **记一笔** (quick entry) form
-- **Quick bookkeeping** (expense/income toggle, common-category chips, remembered last account, amount-first focus); every submit carries an `Idempotency-Key`, so double-clicks and network retries never double-book — the server replays the stored response
-- **Transactions** at `/entries` (aliases `/transactions`, `/transactions/:id`): server-side pagination, filters, search, detail drawer with revision timeline, soft delete and restore, edit
-- **Accounts**: list, create, rename, default, archive, per-account balance, total assets/liabilities/net; private accounts are 404 for non-owners
-- Transfers, recurring rules, pending confirmations, analytics, budgets, reports, constrained CSV downloads, and an administrator reliability console
-- All `/api/web/v1/*` responses carry an `X-Request-ID`; the UI shows safe Chinese error messages with the request id (never tracebacks/SQL/digests)
+### AI bookkeeping
 
-The production image embeds the Vite build and serves it from FastAPI; Node.js is not needed at runtime. Enable it only behind HTTPS:
+Handle text, images, receipts, voice, and batch input. Clear single-entry text can be posted directly; images, voice, batches, and likely duplicates can enter Pending first and require confirmation before they become ledger facts.
 
-```dotenv
-LARK_LEDGER_DASHBOARD_ENABLED=true
-LARK_LEDGER_DASHBOARD_BASE_URL=https://ledger.example.com
-LARK_LEDGER_DASHBOARD_SESSION_SECRET=replace-with-at-least-32-high-entropy-characters
-LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_xxx,ou_yyy
-```
+### Web finance center
 
-Register `https://ledger.example.com/api/web/v1/auth/callback` in the Feishu app and grant `auth:user.id:read`. Configure the reverse proxy to pass `X-Forwarded-Proto` and trust only its explicit address. When disabled, `/api/web/v1/*` and Dashboard static routes are absent, while the bot and workers remain unchanged. See the [Chinese deployment guide](docs/environment.md#web-dashboard可选).
+Use the first-party Web Client for overview, transactions and revisions, search/filtering, edits, soft delete and restore, accounts and transfers, budgets, reports, and CSV export.
 
-### Human sessions (P37)
+### Personal and household ledgers
 
-Browser login state is a first-class **Human Session**, fully separated from machine `llv1_` API tokens:
+Maintain multiple isolated personal ledgers and shared household ledgers with payer attribution and account-level shared/private visibility. Joining a household does not expose a personal account by default.
+
+### Automation and insights
+
+Recurring Rules turn future periodic income and expenses into confirmation-ready items. Goals derive progress from the live balances of bound accounts. Insights use deterministic rules to explain spending changes, budget risk, upcoming recurring expenses, and goal progress—not to provide investment advice.
+
+### Multiple clients, one core
+
+The Web, Feishu/Lark, and `/api/v1` Machine API all enter the same Application Core. Authorization, budgets, privacy, revisions, and Pending behavior stay consistent across clients.
+
+### Self-hosted and operable
+
+Built with FastAPI, React / TypeScript / Vite, PostgreSQL, and Docker Compose. A transactional outbox, durable idempotency, worker retries/leases, health/readiness checks, and operational status endpoints support observable, recoverable self-hosted deployments.
+
+## AI bookkeeping
+
+Inputs follow a controlled business path:
 
 ```text
-Feishu Identity ─┐
-User Session ────┼→ RequestContext → ClientApplicationService → Ledger
-API Token ───────┘
+Text / image / receipt / voice / batch input
+                  ↓
+           Intent parsing
+                  ↓
+        Schema and business validation
+                  ↓
+       High-risk action → Pending confirmation
+                  ↓
+       Application Core → Ledger
+                  ↓
+              PostgreSQL
 ```
 
-- Every login creates a brand-new session (no session fixation); one user may hold multiple device sessions in parallel
-- The browser keeps only the `lls1_` session secret in an `HttpOnly` / `SameSite=Lax` / production-`Secure` cookie; **the database stores only its SHA-256 digest**
-- Absolute TTL (default 8 h, `LARK_LEDGER_DASHBOARD_SESSION_TTL_SECONDS`); `last_seen` is flushed at most every 5 minutes
-- Logout revokes server-side immediately; `/api/web/v1/auth/sessions` lists sessions, `DELETE .../sessions/{id}` revokes one device, `POST .../sessions/revoke-others` revokes all others; soft-revoked/expired rows are cleaned after `LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS`
-- State-changing requests require double-submit CSRF (`X-CSRF-Token`) **and** same-origin `Origin` validation
-- Session access to ledgers and private accounts flows through the same `LedgerAuthorizationService` as Feishu and API tokens
+A confirmation stores the frozen structured result; confirming it does not call the AI again. Natural language lowers the cost of bookkeeping without allowing a model to decide ledger facts directly.
 
-## Who it is for
+## Feishu / Lark: a natural-language adapter
 
-Technical self-hosters who use Feishu heavily and want a **private** ledger. The first-run goal is one successful **text-only** entry—not a full multi-modal production rollout.
+Feishu is one way to use LarkLedger, not the product boundary. Send text, voice, receipts, or payment screenshots in Feishu; the same ledger, authorization, and risk-confirmation rules apply to Web and API clients.
 
-## Quick start (recommended)
+| Batch bookkeeping from images | Batch bookkeeping from voice |
+| --- | --- |
+| ![Feishu batch bookkeeping from images](docs/assets/batch-image-bookkeeping.png) | ![Feishu batch bookkeeping from voice](docs/assets/voice-batch-bookkeeping.png) |
+| Receipt bookkeeping | Complex text batch bookkeeping |
+| ![Feishu receipt bookkeeping](docs/assets/receipt-bookkeeping.png) | ![Feishu complex text batch bookkeeping](docs/assets/text-batch-bookkeeping.png) |
 
-**WebSocket long connection + text-only + PostgreSQL + Docker Compose.**
+## Multi-client architecture
 
-No public callback URL is required. The host must still make **outbound** HTTPS calls to Feishu and your text AI provider.
+```mermaid
+flowchart TB
+    web[First-party Web Client] --> core[Application Core]
+    lark[Feishu / Lark Adapter] --> core
+    api[Machine API /api/v1] --> core
+    input[Natural-language and media input] --> ai[AI: intent parsing]
+    ai --> action[Structured, validated business action]
+    action --> core
+    core --> ledger[Ledger Domain]
+    ledger --> db[(PostgreSQL)]
+```
+
+AI participates in input understanding and intent parsing; it does not bypass the Application Core to access the ledger database.
+
+## Self-hosted
+
+- **Backend**: FastAPI + SQLAlchemy + Alembic
+- **Web**: React / TypeScript / Vite; production images can serve the built assets from FastAPI
+- **Storage**: PostgreSQL; the development Compose overlay can provide local PostgreSQL 16
+- **Deployment**: Docker Compose; WebSocket long connection or Webhook
+- **Operations**: `/healthz`, `/readyz`, `/version`, `/ops/status`, plus outbox, workers, backup/restore, and guarded replay paths
+
+See the [environment and deployment guide](docs/environment.md), [operations guide](docs/operations.md), [backup/restore SOP](docs/backup-restore.md), and [security policy](SECURITY.md) for the details.
+
+## Quick start
+
+The recommended first verification path is **WebSocket long connection + text-only + PostgreSQL + Docker Compose**. It does not require a public callback URL; the host still needs outbound access to Feishu and your text AI provider.
+
+### 1. Clone and configure
 
 ```bash
 git clone https://github.com/0verme/LarkLedger.git
 cd LarkLedger
 cp .env.example .env
-# On Windows PowerShell: Copy-Item .env.example .env
-# Edit .env: App ID/Secret, text AI key, and keep EVENT_MODE=websocket
-docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-curl http://127.0.0.1:8000/healthz
+# Windows PowerShell: Copy-Item .env.example .env
 ```
 
-### Minimum environment variables (text-only)
+Set the minimum values in `.env`:
 
 ```dotenv
 LARK_LEDGER_EVENT_MODE=websocket
@@ -107,103 +137,63 @@ LARK_LEDGER_AI_BASE_URL=https://api.deepseek.com
 LARK_LEDGER_AI_MODEL=deepseek-v4-flash
 ```
 
-Important:
-
-- Set `LARK_LEDGER_EVENT_MODE=websocket` in `.env`. The **runtime code default remains `webhook`**; the example and docs recommend WebSocket for first deploy.
-- With `compose.dev.yaml`, Compose overrides the database URL to the bundled Postgres service.
-- Vision / transcription keys are **not** required for text-only bookkeeping.
-- WebSocket mode does **not** need Verification Token or Encrypt Key.
-- Safe defaults you usually leave alone: `TIMEZONE=Asia/Shanghai`, `CURRENCY=CNY`.
-
-Full variable table, Feishu permission notes, Webhook, and troubleshooting: [Chinese environment guide](docs/environment.md).
-
-### Feishu app (text-only)
-
-1. Create an enterprise custom app and enable the bot.
-2. Under Events, choose **long connection** (WebSocket)—do not set a request URL.
-3. Subscribe to `im.message.receive_v1`.
-4. Grant the minimum scopes needed to **receive and send messages** (confirm exact scope names in the Feishu console).
-5. Publish an app version so the config takes effect.
-6. Add the bot to a test chat; in groups, mention the bot.
-7. Start the container first if the console needs to verify the long connection.
-
-### First acceptance checks
-
-Send in Feishu (replace `#XXXXX` with the short ID the bot actually returns):
-
-1. `午饭32元` → success reply with `#XXXXX`
-2. `最近10笔` → the new row appears
-3. `查看 #XXXXX` → detail
-4. `把 #XXXXX 改成35元` → update
-5. `删除 #XXXXX` / `恢复 #XXXXX` → soft-delete and restore
-6. `导出最近90天账单` → CSV file message (**requires Feishu file upload / file message scopes**; not claimed as verified end-to-end in a real tenant from this repository alone)
-
-### Health and logs
+### 2. Start the app and PostgreSQL
 
 ```bash
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build
 docker compose -f compose.yaml -f compose.dev.yaml ps
-docker compose -f compose.yaml -f compose.dev.yaml logs -f app
 curl http://127.0.0.1:8000/healthz
 curl -f http://127.0.0.1:8000/readyz
 ```
 
-Service name: `app`. Host port: **8000**. Source Compose runs `alembic upgrade head` before Uvicorn.
+In the Feishu developer console, enable the bot, select long connection, subscribe to `im.message.receive_v1`, start the app, and send one text entry. The [environment guide](docs/environment.md) covers permissions, Webhook, production PostgreSQL, and the Web Client.
 
-Expected WebSocket health shape:
+### 3. Enable the first-party Web Client (optional)
 
-```json
-{"status":"ok","event_mode":"websocket","long_connection":"connected"}
-```
+The Web Client requires Dashboard settings, a Human Session secret, and an OAuth callback registered in the Feishu app. Node.js is not required at runtime; production must use HTTPS. Follow [the Web Dashboard deployment guide](docs/environment.md#web-dashboard可选), and never commit a session secret or API token.
 
-`/healthz` is a database-independent liveness probe. `/readyz` additionally
-checks PostgreSQL, the current Alembic revision, enabled Event / Reply Workers,
-and the receiver in WebSocket mode. It returns HTTP 503 when the instance cannot
-accept work and never probes Feishu or AI.
+## Client API
 
-### Existing PostgreSQL
-
-Create a dedicated user/database, point `LARK_LEDGER_DATABASE_URL` at a host the **container** can reach (not `localhost` meaning the container itself), then:
+`/api/v1` is the channel-neutral Machine API for CLI tools, hardware, automation, and future clients. It uses revocable, expiring bearer tokens; ledger writes require an `Idempotency-Key`; and it enters the same Application Core as Web and Feishu.
 
 ```bash
-docker compose up -d --build
+curl -s https://ledger.example/api/v1/me \\
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-SQL examples and URL encoding notes live in [docs/environment.md](docs/environment.md).
+See the [Client API documentation](docs/client-api.md) for resources, scopes, error envelopes, idempotency semantics, and OpenAPI details.
 
-## Event transports
+## Who it is for
 
-| Mode | Role | Public HTTPS | Extra credentials |
-| --- | --- | --- | --- |
-| **WebSocket (recommended first path)** | NAS, home server, private network | No | App ID / Secret |
-| **Webhook (advanced alternative)** | Existing public ingress / reverse proxy | Yes | Verification Token; Encrypt Key recommended |
-
-Webhook URL: `https://your-domain/webhooks/feishu`. Webhook remains a supported path; it is not deprecated.
+- Self-hosters who want to keep personal financial data under their control
+- Households that need personal and shared ledgers side by side
+- Technical users who want natural-language bookkeeping plus Web and API workflows
+- Operators comfortable configuring Docker, PostgreSQL, and a Feishu app
 
 ## Known limitations
 
-Do **not** describe this as "never loses messages / never double-bookkeeps":
+LarkLedger is for personal and household finance, not an enterprise ERP, double-entry accounting system, or Splitwise:
 
-- Failed events **are** automatically retried (exponential backoff, default max 3 attempts) and move to `dead` when exhausted or permanently broken; business writes and reply intents commit atomically through the **Transactional Outbox** (P06a), so a crash retry never re-runs business. We still do **not** claim "never double-bookkeeps"; the source-message uniqueness constraint remains the fallback guard.
-- Failed replies **are** auto-retried by the background **Reply Worker** (P06b): committed outbox intents are claimed with `SELECT ... FOR UPDATE SKIP LOCKED`, delivered with a database lease, retried with exponential backoff, and dead-lettered after permanent errors or exhausted attempts. A failed reply never re-runs business, and pending / failed replies are re-delivered after a restart.
-- Each reply carries a stable Feishu `uuid` idempotency key (the outbox row id): within the 1-hour dedup window a re-send after a crash is deduplicated by Feishu. In the extreme case (Feishu sent, local mark lost, and the re-send is more than 1 hour later) a duplicate reply may reach the user — it can **never** cause duplicate business execution or double bookkeeping.
-- A lightweight Cleanup Worker deletes only terminal delivery records in bounded batches: successful events / sent replies default to 30 days, while dead records default to 90 days. Ledger entries and revisions are never deleted. Cleanup is not a database backup; review audit requirements before shortening retention.
-- Administrators can use the Dashboard or the dry-run-by-default `python -m lark_ledger.admin replay-event` CLI to replay provably safe `dead` / `failed` events; only an explicit second confirmation or `--execute` reruns business, and every accepted replay writes an audit. Events with an Outbox, source ledger results, or unproven historical atomicity are refused. Result replay consumes only the existing Outbox and never reruns business.
-- **High-risk confirmation (v0.3.0)**: image / voice / batch / likely-duplicate writes wait for a user `确认 #C-XXXXX` (or a card button) before writing. Confirmations expire (default 24h) and are per-user only; no multi-level approval or shared confirmation.
-- **Privacy is account-level, not field-level**: a private account hides balance / entries / recurring rules / pendings / budget consumption / member stats, but never member identity, aliases, or the payer aggregation口径; there is no amount-threshold, category or per-field ACL
-- The Dashboard has only `USER` and `ADMIN`; there is no enterprise multi-tenancy, organization tree, complex RBAC, or shared ledger
-- **Not AA / Splitwise**: no splitting, settlement, debt relations or per-person breakdown; **not double-entry**: the sole-proprietor chart-of-accounts / vouchers / debit-credit domain stays a future track and accounting fields never leak into personal income/expense; **not business finance**: no audit trails, approval flows, multi-currency settlement or financial-reporting duties
-- **JSON export is not a formal capability** (CSV only)
+- No bank sync, complex RBAC, multi-level approval, organization-scale multi-tenancy, or enterprise accounting reports
+- No investment, stock, loan, or tax advice, and no automatic money movement
+- Outbox, idempotency, and high-risk confirmation reduce failure and accidental-action risk, but the project does not claim “never duplicate a reply” or “never double-bookkeep”
+- The [architecture](docs/architecture.md), [security policy](SECURITY.md), and [operations documentation](docs/operations.md) define the reliability, privacy, backup, and deployment boundaries
 
-Future roadmap themes are outside this release commitment; v0.9.0 does not expand into a multi-tenant finance ERP / OAuth Authorization Server / SaaS API Gateway.
+## Documentation
 
-Current release: **v0.9.0** (Platform / Channel-Neutral Core). Prebuilt image: `ghcr.io/0verme/larkledger:0.9.0` (also `0.9` / `latest`). You can also build from source with `docker compose ... --build`.
+- [User guide](docs/help.md): bookkeeping, households, budgets, reports, Pending, and limitations
+- [Environment and deployment](docs/environment.md): configuration, PostgreSQL, Feishu permissions, Webhook, and Web Client
+- [Client API](docs/client-api.md): `/api/v1`, bearer tokens, idempotency, and error contracts
+- [Architecture](docs/architecture.md): Application Core, adapters, AI boundary, and ledger model
+- [Security policy](SECURITY.md): security boundary and vulnerability reports
+- [Operations](docs/operations.md): health/readiness, workers, backlog, and troubleshooting
+- [Backup / restore SOP](docs/backup-restore.md)
+- [Upgrade guide](docs/upgrading.md)
+- [FNOS deployment](docs/deployment-fnos.md)
+- [Changelog](CHANGELOG.md) and [GitHub Releases](https://github.com/0verme/LarkLedger/releases): release history and current image information
+- [Contributing](CONTRIBUTING.en.md) · [中文 README](README.md)
 
-```bash
-export LARK_LEDGER_IMAGE_TAG=0.9.0
-docker compose -f compose.image.yaml pull
-docker compose -f compose.image.yaml run --rm app alembic upgrade head
-docker compose -f compose.image.yaml up -d
-```
+The README is the product entry point; phase numbers, release-by-release notes, and release operations live in the linked documentation instead.
 
 ## Development
 
@@ -211,22 +201,11 @@ docker compose -f compose.image.yaml up -d
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
-ruff check .
-mypy src
-pytest --cov --cov-fail-under=88 -m "not postgres"
+alembic upgrade head
+uvicorn lark_ledger.main:app --reload
 ```
 
-PostgreSQL-specific tests run in CI. See [CONTRIBUTING.en.md](CONTRIBUTING.en.md).
-
-## Documentation
-
-- [Chinese user guide](docs/help.md)
-- [Chinese environment and deployment guide](docs/environment.md)
-- [Chinese architecture](docs/architecture.md)
-- [Upgrade guide](docs/upgrading.md)
-- [Release SOP](docs/release-sop.md)
-- [Changelog](CHANGELOG.md)
-- [Security policy](SECURITY.md)
+Read the [contributing guide](CONTRIBUTING.en.md) before opening a pull request. Most deep operational documentation is Chinese-first; the linked files are authoritative.
 
 ## License
 
