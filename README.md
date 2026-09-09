@@ -1,148 +1,131 @@
 # LarkLedger（飞账）
 
-[English](README.en.md) | 简体中文
+> **自托管的 AI-first 个人与家庭财务系统。**
+>
+> 用 Web、Feishu/Lark 或开放 API 记录、整理和理解你的真实账本。Web 是一等客户端，飞书/Lark 是自然语言适配器，三者共享同一个账本核心。
 
-> 自托管的多入口 AI Ledger Platform。Feishu 是其中一个 Adapter；First-party Web 与 Machine API 通过同一套 Identity、Application、Authorization、Domain 与 Ledger 共享账本。大模型只负责把输入变成经过严格校验的业务动作。
+**Web · Feishu/Lark · API**
+
+[打开 Web](https://ledger.overme.cn/) · [快速开始](#快速开始) · [用户手册](docs/help.md) · [Client API](docs/client-api.md) · [架构说明](docs/architecture.md)
+
+[English](README.en.md) | 简体中文
 
 [![CI](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml/badge.svg)](https://github.com/0verme/LarkLedger/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 
-## 效果展示
+![LarkLedger Web 财务总览](docs/assets/web/hero-overview.png)
 
-| 批量图片流水 | 语音批量记账 |
+## 为什么是飞账
+
+个人和家庭财务不应该被锁在某个聊天窗口里，也不应该只能靠表格维护。LarkLedger 将自然语言记账、流水、账户、预算、目标和洞察组织成一个真正的账本系统：数据由你自托管，入口可以按习惯选择，财务事实始终由确定性的业务逻辑处理。
+
+**AI 负责理解输入，账本事实由确定性业务逻辑处理。** AI 会把文字、图片、小票、语音或批量内容解析为结构化 Intent；校验、风险确认、授权和最终写入由应用与账本领域逻辑完成。AI 不直接访问数据库，也不生成或执行 SQL。
+
+## 产品展示
+
+| 流水管理 | 快速记账 |
 | --- | --- |
-| ![从支付流水截图批量记账](docs/assets/batch-image-bookkeeping.png) | ![将语音中的多笔消费批量记账](docs/assets/voice-batch-bookkeeping.png) |
-| 小票识别 | 复杂文字批量记账 |
-| ![识别超市小票并记录消费](docs/assets/receipt-bookkeeping.png) | ![从一段自然语言中识别多笔收支](docs/assets/text-batch-bookkeeping.png) |
+| ![Web 流水列表、搜索与筛选](docs/assets/web/entries.png) | ![Web 快速记账对话框](docs/assets/web/quick-entry.png) |
+| 预算 | 收支报告 |
+| ![Web 月度预算与分类预算](docs/assets/web/budget.png) | ![Web 收支报告与分类分析](docs/assets/web/report.png) |
 
-以上截图使用已获准公开的脱敏数据。识别结果以机器人确认回复为准。
+## 核心能力
 
-## 当前能力（主线）
+### AI 记账
 
-- **平台 / 通道无关 Core**：Feishu / First-party Web / Machine API 三套入口共享同一个 `ClientApplicationService` Application Layer——对于相同业务事实产生一致 Domain Result，Core 不依赖任何渠道 transport（架构守护见 `tests/architecture/`）。正式通道无关 Client API：**`/api/v1`**（`/api/client/v1` 为同一组 handler 的兼容别名）；Bearer API Token（`llv1_*`，明文只显示一次、DB 只存 SHA-256 digest、可 revoke / expiry、scope 只缩权），headless client 不需要 Feishu、浏览器 cookie 或 OAuth session 即可独立完成认证 / 选账本 / 记账 / 查询 / Overview / Goals / Insights；写请求强制 `Idempotency-Key`（同 key 重试 replay、不同 body 409、PostgreSQL 并发 exactly-once）；稳定 error envelope 与 OpenAPI 契约（见 [Client API 文档](docs/client-api.md)）
-- **财务目标（Goals，v0.8.0）**：把“想存到多少钱”变成可跟踪的目标（`应急储备 60000`）；进度来自**真实账本**——目标绑定现金 / 资产账户，`current_amount` 始终等于绑定账户实时余额之和，目标不保存、不手工维护余额，记账 / 删账 / 恢复 / 转账变化会自动重算。支持目标日期与确定性 forecast；可见性继承绑定账户（引用任何私人账户的目标对他人完全不可见，防止通过目标显示泄漏私人余额）；目标不是虚拟账户 / 资金池，创建 / 修改 / 删除从不触碰账户、账目或转账。飞书 `我的目标 / 目标 / 查看目标` 与 Web `/goals` 同源
-- **确定性洞察（Insights，v0.8.0）**：从真实账本自动发现值得注意的事实——支出变化（本月 vs 近 3 个月平均）、预算风险（使用率快于时间进度）、未来 30 天周期支出（按币种分组）、目标进度 / 预计缺口。全部由确定性规则计算，AI 不参与计算、不访问数据库，只可选改写解释文案；AI 不可用时自动回退确定性摘要。私人数据不会通过任何洞察侧信道泄漏。飞书 `洞察 / 财务洞察 / 本月洞察` 与 Web `/insights` 同源。**洞察是财务数据解释与提醒，不是金融顾问**——不提供投资、股票、理财、贷款、税务建议，不做任何自动资金操作
+支持文字、图片、小票、语音和批量输入。简单明确的文字可以直接记账；图片、语音、批量或疑似重复等高风险结果会先进入 Pending，确认后才写入账本。
 
-- **家庭共享账本（v0.7.0）**：一个家庭 = 一个内部用户群 + 一个独立公共账本，多个真实成员可共同记账；
-  - **付款人归属**：区分「谁记账」与「谁付钱」（`created_by ≠ paid_by`），支持按别名 / 显示名 / open_id / UUID 确定性解析付款人（`B 买菜120` → B 付款）；成员别名由户主维护，收款/支出按付款人聚合
-  - **家庭总览**：一个确定性的“家庭首页”视图（本月收支 / 预算进度 / 成员支出 / 主要分类 / 未来周期支出 / 最近交易 / 账户余额），飞书 `概览 / 家庭概览 / 家庭开销` 与 Web `/overview` 同源
-  - **账户级隐私**：账户可设为 `共享`（成员可见）或 `私人`（仅本人可见）；私人账户的余额、账目、周期账单、待确认、预算消耗与统计对他人完全不可见，个人账本行为不受影响
-- **周期账单（Recurring Rules）**：把已知未来周期性收支建成确定性规则（`每月8号房租3500` / `每年6月15日保险2000` / `每周健身房100`）；到期时 Recurring Worker 生成一个冻结的待确认单并主动发飞书提醒卡片，**确认后才正式入账**——规则与 Pending 永不消耗预算，只有确认后的支出计入预算。支持暂停 / 恢复 / 跳过 / 停用，修改只影响未来周期，同一规则同一期在任何并发 / 重试下只会产生一个 Pending 与一条交易
-- **预算 2.0**：月度总预算与分类预算以显式月份为周期，计划 vs 实际、剩余、使用率与超支状态实时派生；转账永不进入预算，删除 / 恢复 / 修订按当前有效事实重算
-- **账本级账户与转账**：每笔收支可绑定账户（现金 / 资产 / 负债）；账户支持期初余额、改名、设默认与归档；`转账` 独立于收支统计；飞书与 Web 均可按当前账本查看单账户余额、总资产、总负债与净资产
-- **个人多账本**：飞书确定性命令与 Web 选择器可创建、列出、切换、设默认和重命名个人账本；账目、预算、短 ID、统计、报告、导出、revision、判重与 Pending 全部按当前账本隔离
-- **家庭空间 MVP**：创建家庭、邀请已有内部用户、处理邀请与成员；每个家庭自动获得独立公共账本，个人账本不会因加入家庭而共享或复制
-- **文字记账**，成功回复含当前账本内唯一五位短 ID（`#XXXXX`）；简单明确的单笔文字仍直接入账
-- **最近账目 / 单笔详情**（例如 `最近10笔`、`查看 #XXXXX`）
-- **按短 ID 修改、软删除与恢复**（另保留「上一笔」快捷方式）
-- **CSV 导出**本人账目（飞书文件消息；需额外文件权限）
-- 汇总、分类月预算、消费报告
-- **高风险确认**：图片 / 语音 / 批量 / 疑似重复先进入待确认（`#C-XXXXX`），可文本 `确认`/`取消` 或点卡片按钮，确认时才用冻结结果写账
-- 多用户隔离（`open_id`）、事件 `event_id` 幂等 claim
-- **可靠投递**：事件 / 回复后台 Worker、事务性回复 Outbox、PostgreSQL 租约与指数退避重试、readiness、终态清理与受控人工事件重放
-- **Web Dashboard**：飞书 OAuth、财务总览、账目与 revision、Pending、分析、预算、**财务目标（/goals，创建 / 编辑 / 进度 / 归档 / 删除）**、**洞察卡片（/overview「值得关注」）**、周期账单、报表、CSV 下载及管理员可靠性控制台
-- **通道无关 Client API**：正式契约 `/api/v1`（`/api/client/v1` 为兼容别名）为 CLI / 硬件 / 未来客户端提供结构化命令/查询边界；Bearer 个人令牌（`llv1_`，只保存 SHA-256 摘要、可撤销、可过期、scope 只缩权）与持久化 `Idempotency-Key`。飞书与 Web 只是 Adapter，与 API 共用同一个 `ClientApplicationService`，同一业务事实产生一致 Domain Result
-- 自托管：FastAPI、React / TypeScript / Vite、PostgreSQL、Docker Compose
+### Web 财务中心
 
-完整消息示例见[用户手册](docs/help.md)。
+通过 First-party Web Client 查看总览、流水和 revision，搜索/筛选、修改、软删除与恢复账目，管理账户与转账，并使用预算、报告和 CSV 导出。
 
-## 文字直写与高风险确认
+### 个人与家庭账本
 
-简单明确的单笔文字保持直写：`午饭32元` → 直接入账并返回账目短 ID。图片、语音、批量或疑似重复则先确认：
+支持多个相互隔离的个人账本，也支持家庭共享账本、付款人归属和账户级共享/私人可见性。个人财务不会因为加入家庭而自动暴露。
+
+### 财务自动化与洞察
+
+Recurring Rules 将未来的周期性收支变成待确认事项；Goals 从绑定账户的真实余额派生进度；Insights 用确定性规则解释支出变化、预算风险、周期支出和目标进度，而不是提供投资建议。
+
+### 多入口，共享核心
+
+Web、Feishu/Lark 和 `/api/v1` Machine API 都进入同一个 Application Core。相同的账本事实使用一致的授权、预算、隐私、revision 和 Pending 规则。
+
+### Self-hosted 与可靠运维
+
+基于 FastAPI、React / TypeScript / Vite、PostgreSQL 和 Docker Compose。事务性 Outbox、持久化幂等、Worker 重试/租约、health/readiness 检查和运维状态接口，帮助长期运行的自托管实例保持可观察、可恢复。
+
+## AI 记账
+
+输入经过一条受控的业务路径：
 
 ```text
-发送小票图片 → 飞账识别 → 返回确认卡片 → 用户确认 → 才写入账本
+文字 / 图片 / 小票 / 语音 / 批量输入
+                ↓
+         Intent 解析与结构化
+                ↓
+          Schema / 业务校验
+                ↓
+       高风险操作 → Pending 确认
+                ↓
+       Application Core → Ledger
+                ↓
+             PostgreSQL
 ```
 
-卡片不可用时可发送 `确认 #C-A83F2`、`取消 #C-A83F2`；发送 `查看待确认`（或 `确认列表`）可列出当前待确认单。确认使用创建 pending 时冻结的结构化命令，不会重新调用 AI。
+确认单保存冻结后的结构化结果，确认时不会重新调用 AI。这样自然语言可以降低记账成本，同时不会让模型直接决定账本事实。
 
-## Web Dashboard
+## Feishu / Lark：自然语言适配器
 
-v0.7.0 提供可选的中文 Web Dashboard；**P38 起它成为 First-party Web Client**：用户只打开飞账自己的页面即可完成日常记账，不依赖飞书 UI、不使用 `llv1_*` API Token。生产镜像已内置前端静态资源，无需额外 Node.js 服务：
+飞书是 LarkLedger 的一个使用入口，而不是产品边界。你可以在飞书中发送文字、语音、小票或支付流水图片；识别结果遵循同样的账本、授权和风险确认规则，Web 与 API 也共享这些业务语义。
 
-- **首页**：当前账本、本月收支/结余/预算使用率、账户余额摘要、最近流水，以及一键「记一笔」
-- **快速记账**：支出/收入切换、常用分类快捷选择、记住最近账户、金额优先聚焦；每次提交自动生成 `Idempotency-Key`，双击/网络重试不会重复入账
-- **流水**（`/entries`，兼容别名 `/transactions`、`/transactions/:id`）：服务端分页、筛选、搜索、详情抽屉（revision 时间线）、软删除与恢复、修改
-- **账户管理**：列表、创建、改名、设默认、归档、单账户余额与总资产/负债/净资产，private 账户对非本人 404
-- **转账管理**：创建、详情（含操作记录）与撤销
-- **周期账单**：列表（名称 / 金额 / 账户 / 周期 / 下次日期 / 状态 / 待确认）、创建、修改、暂停、恢复、跳过与停用
-- 待确认查看、确认与取消（复用冻结预览，不重新调用 AI）
-- 趋势、分类、月度分析、预算、报告和受限 CSV 下载
-- 管理员 Event / Outbox / Dead / Replay、健康状态与只读脱敏配置
+| 图片批量记账 | 语音批量记账 |
+| --- | --- |
+| ![飞书图片批量记账](docs/assets/batch-image-bookkeeping.png) | ![飞书语音批量记账](docs/assets/voice-batch-bookkeeping.png) |
+| 小票记账 | 复杂文字批量记账 |
+| ![飞书小票记账](docs/assets/receipt-bookkeeping.png) | ![飞书复杂文字批量记账](docs/assets/text-batch-bookkeeping.png) |
 
-Web 与飞书共享同一套 `ClientApplicationService`、`LedgerService`、revision、Outbox 与 PostgreSQL 用户隔离；Web 页面从不直连 Repository 或 SQLAlchemy Session，也不携带任何飞书消息能力。启用后访问 `https://你的域名/`，通过飞书 OAuth 登录：
+## 多入口架构
 
-```dotenv
-LARK_LEDGER_DASHBOARD_ENABLED=true
-LARK_LEDGER_DASHBOARD_BASE_URL=https://ledger.example.com
-LARK_LEDGER_DASHBOARD_SESSION_SECRET=请生成至少32位的高熵随机值
-LARK_LEDGER_DASHBOARD_COOKIE_SECURE=true
-LARK_LEDGER_DASHBOARD_ADMIN_OPEN_IDS=ou_xxx,ou_yyy
+```mermaid
+flowchart TB
+    web[First-party Web Client] --> core[Application Core]
+    lark[Feishu / Lark Adapter] --> core
+    api[Machine API /api/v1] --> core
+    input[自然语言与媒体输入] --> ai[AI：Intent 解析]
+    ai --> action[结构化且经过校验的业务动作]
+    action --> core
+    core --> ledger[Ledger Domain]
+    ledger --> db[(PostgreSQL)]
 ```
 
-在飞书应用中登记回调地址 `https://ledger.example.com/api/web/v1/auth/callback`，并授予 `auth:user.id:read`。生产必须使用 HTTPS；反向代理需正确传递 `X-Forwarded-Proto`，应用服务器只应信任明确的代理地址。完整配置与安全说明见[环境与部署指南 · Web Dashboard](docs/environment.md#web-dashboard可选)。不开启时，Dashboard 页面与 `/api/web/v1/*` 均不暴露，机器人和 Worker 保持原行为。
+AI 只参与输入理解与 Intent 解析；它不会绕过 Application Core 直接访问账本数据库。
 
-### 登录会话（Human Session，P37）
+## Self-hosted
 
-真人用户在浏览器的登录态是独立的 **Human Session**，与机器人的 `llv1_` API Token 完全分离：
+- **Backend**：FastAPI + SQLAlchemy + Alembic
+- **Web**：React / TypeScript / Vite，生产镜像可由 FastAPI 提供静态资源
+- **Storage**：PostgreSQL；开发 Compose 叠加文件可提供本地 PostgreSQL 16
+- **Deployment**：Docker Compose；支持 WebSocket 长连接或 Webhook
+- **Operations**：`/healthz`、`/readyz`、`/version`、`/ops/status`，以及 Outbox、Worker、备份/恢复和受控重放路径
 
-```text
-Feishu Identity ─┐
-User Session ────┼→ RequestContext → ClientApplicationService → Ledger
-API Token ───────┘
-```
+详细配置、权限和安全边界见[环境与部署指南](docs/environment.md)、[运维与可观测性](docs/operations.md)、[备份 / 恢复 SOP](docs/backup-restore.md)与[安全策略](SECURITY.md)。
 
-- 登录成功后创建全新会话（**不**复用任何旧 Session，防 Session Fixation），同一用户可以同时持有多个设备会话
-- 浏览器只保存 `lls1_` 开头的随机 Session Secret（`HttpOnly` + 可配置 `SameSite` + 生产 `Secure`）；OAuth state Cookie 为适配飞书跨站 callback 固定使用短期 `SameSite=Lax`。**数据库只存 SHA-256 digest**，明文永不落库、永不进日志
-- 会话默认 8 小时绝对过期（`LARK_LEDGER_DASHBOARD_SESSION_TTL_SECONDS`）；`last_seen` 每 5 分钟最多写一次，避免逐请求写放大
-- 注销在服务端立即 revoke（不能只删浏览器 Cookie）；软 revoke / 过期会话保留 `LARK_LEDGER_DASHBOARD_SESSION_RETENTION_DAYS` 天后由 Cleanup Worker 清理
-- 所有 state-changing 请求强制 **CSRF**：`SameSite` + Origin 校验 + double-submit CSRF token（`X-CSRF-Token`）
-- 「登录会话」页面（`/sessions`）可查看当前用户 / 设备列表 / 当前会话 / 注销指定设备 / 注销其他所有设备
-- Session 登录后的账本访问复用与飞书、API Token 完全相同的 `LedgerAuthorizationService`（账本隔离、私有账户隔离一致）
-- **账本切换**（P38）：侧边栏选择个人 / 家庭 / 有权限的其他账本，选择持久化在 Session 行上，刷新自动恢复；无权限账本始终 404
-- **Web 幂等**（P38）：`POST /api/web/v1/entries` 强制 `Idempotency-Key`，超时重试 / 双击 / React 重复触发都只入账一次
-- **自然语言 AI 记账**（P39）：首页「直接说一句」输入「午饭28」「工资18000」「昨天打车35」等自然语言即可记账，与飞书共用同一个 Channel-Neutral 的 `UnifiedAIEntryService`（同一 Intent Parser、同一风险确认、同一 `ClientApplicationService` 边界）；高风险操作（转账、批量、疑似重复）返回确认卡片，解析不清返回补充提示，每次提交携带 `Idempotency-Key` 保证 exactly-once，结构化「记一笔」仍然保留
-- **错误与排障**（P38）：所有 `/api/web/v1/*` 响应携带 `X-Request-ID`，前端统一显示安全中文错误信息 + 请求编号，绝不暴露 traceback / SQL / digest
-- **移动端**（P38）：375–430px 手机宽度可用，任意页面底部浮动「记一笔」按钮两次点击内完成记账
+## 快速开始
 
-## 适合谁
+推荐的首次验证路径是 **WebSocket 长连接 + 文字-only + PostgreSQL + Docker Compose**。它不需要公网回调地址；运行主机仍需能主动访问 Feishu 开放平台和文字 AI 服务。
 
-- 技术用户，能配置 Docker 与 PostgreSQL
-- 重度飞书用户，希望**自托管**个人账本
-- 首次部署只想尽快完成**一笔纯文字记账**
-
-不适合：需要多级审批、儿童额度、银行卡同步、复杂 RBAC 或企业复式账套。可靠投递与高风险确认已实现，但**仍不**宣称「绝不重复记账」或「绝对零重复回复」（见下方已知限制）。
-
-## 快速开始（推荐）
-
-主路径：**WebSocket 长连接 + 文字-only + PostgreSQL + Docker Compose**。
-
-不需要公网回调 URL；服务器仍需能**主动访问**飞书开放平台与文字 AI API。
-
-```text
-已有 Docker
-→ 创建飞书自建应用（机器人 + 长连接 + 消息事件）
-→ 准备 PostgreSQL（推荐 compose.dev 一键体验）
-→ 填写最小 .env
-→ docker compose 启动
-→ 检查 healthz 与日志
-→ 飞书发送「午饭32元」
-→ 收到含 #XXXXX 的记账回复
-→ 发送「最近10笔」核对
-```
-
-### 1. 复制环境变量
+### 1. 获取代码并准备配置
 
 ```bash
+git clone https://github.com/0verme/LarkLedger.git
+cd LarkLedger
 cp .env.example .env
+# Windows PowerShell: Copy-Item .env.example .env
 ```
 
-Windows PowerShell：`Copy-Item .env.example .env`
-
-### 2. 填写最小必填项
-
-文字-only 快速路径只需：
+在 `.env` 中填写最小配置：
 
 ```dotenv
 LARK_LEDGER_EVENT_MODE=websocket
@@ -154,172 +137,65 @@ LARK_LEDGER_AI_BASE_URL=https://api.deepseek.com
 LARK_LEDGER_AI_MODEL=deepseek-v4-flash
 ```
 
-说明：
-
-| 项 | 说明 |
-| --- | --- |
-| `EVENT_MODE` | **请在 `.env` 显式设为 `websocket`**。代码运行时默认仍是 `webhook`，与推荐路径不同 |
-| `DATABASE_URL` | 使用 `compose.dev.yaml` 时，Compose 会覆盖为开发库地址；自备库时改为容器可达的 URL |
-| 文字 AI | 代码默认指向 OpenAI 兼容地址；示例推荐 DeepSeek，请按你的服务填写 |
-| 图片 / 语音 Key | **文字-only 不需要**。留空只禁用对应能力 |
-| Webhook 验签 | 长连接**不需要** Verification Token / Encrypt Key |
-
-有安全默认值、通常不必改：`TIMEZONE=Asia/Shanghai`、`CURRENCY=CNY`。完整变量表见[环境与部署指南](docs/environment.md)。
-
-### 3. 准备 PostgreSQL
-
-**推荐（本地 / 个人试用）：** 使用开发叠加文件同时启动应用与 PostgreSQL 16：
+### 2. 启动应用与 PostgreSQL
 
 ```bash
 docker compose -f compose.yaml -f compose.dev.yaml up -d --build
-```
-
-- 开发库账号密码仅用于本机或个人测试，**不要**当作互联网生产密码
-- 数据在命名卷 `lark_ledger_dev_pgdata`；`down` 默认保留数据，彻底清理用 `down -v`
-- 库端口默认映射到本机 `127.0.0.1:5432`，冲突时可设 `LARK_LEDGER_DEV_POSTGRES_PORT`
-
-**已有 PostgreSQL：** 创建低权限用户与库（示例，请替换密码），再把 `LARK_LEDGER_DATABASE_URL` 指过去，并用：
-
-```bash
-docker compose up -d --build
-```
-
-SQL 示例与 URL 注意事项见[环境与部署指南 · PostgreSQL](docs/environment.md#postgresql)。
-
-### 4. 配置飞书应用（文字-only）
-
-1. 在[飞书开放平台](https://open.feishu.cn/app)创建**企业自建应用**，开启**机器人**能力
-2. 事件与回调：选择**使用长连接接收事件**（不要填请求地址）
-3. 订阅 `im.message.receive_v1`（接收消息）
-4. 申请**接收消息 / 发送消息**等文字对话所需最小权限（权限标识请在控制台与[飞书文档](https://open.feishu.cn/document/)核对）
-5. **发布应用版本**使配置生效
-6. 将机器人加入可测试的单聊或群；群聊中需 `@机器人`
-7. 应用进程已启动并建立长连接后，再在控制台点击连接验证（如需要）
-
-CSV 导出、图片、语音所需权限见[环境与部署指南 · 飞书权限](docs/environment.md#飞书权限)。
-
-### 5. 启动后检查（本地体验）
-
-```bash
 docker compose -f compose.yaml -f compose.dev.yaml ps
-docker compose -f compose.yaml -f compose.dev.yaml logs -f app
 curl http://127.0.0.1:8000/healthz
 curl -f http://127.0.0.1:8000/readyz
 ```
 
-仅使用 `compose.yaml` 时，去掉 `-f compose.dev.yaml` 即可。服务名是 `app`，宿主机端口默认 **8000**。
+然后在飞书开放平台启用机器人、选择长连接、订阅 `im.message.receive_v1`，启动应用并发送一笔文字账。完整权限清单、Webhook 路径、生产 PostgreSQL 和 Web Client 配置见[环境与部署指南](docs/environment.md)。
 
-源码 Compose 启动命令会先执行 `alembic upgrade head` 再启动 Uvicorn；迁移失败则应用不会起来。
+### 3. 启用 First-party Web Client（可选）
 
-长连接正常时，健康检查类似：
+Web Client 需要启用 Dashboard、配置 Human Session 密钥，并在 Feishu 应用中登记 OAuth callback。它不需要 Node.js 运行时；生产环境必须使用 HTTPS。请按[环境与部署指南 · Web Dashboard](docs/environment.md#web-dashboard可选)配置，不要把 session secret 或 API token 提交到仓库。
 
-```json
-{"status":"ok","event_mode":"websocket","long_connection":"connected"}
-```
+## Client API
 
-`connecting` / `reconnecting` 表示尚未就绪或正在重连。
-
-`/healthz` 只表示 HTTP 进程存活，不访问数据库。`/readyz` 还会轻量检查
-PostgreSQL、当前 Alembic revision、已启用的 Event / Reply / Cleanup / Recurring
-Worker，以及 WebSocket 模式下的接收器；不具备承接条件时返回 HTTP 503，且不会
-探测飞书或 AI。`/readyz` 的响应带有 `degraded` 字段：业务积压（如 dead-letter）
-属于 degraded（200），不会让容器进入重启循环。
-
-生产可观测性（P42）还提供：
+`/api/v1` 是面向 CLI、硬件、自动化和未来客户端的通道无关 Machine API。它使用可撤销、可过期的 Bearer Token，账本写请求要求 `Idempotency-Key`，并与 Web、Feishu 进入同一个 Application Core。
 
 ```bash
-curl -s http://127.0.0.1:8000/version     # 当前版本 / git_sha / build_time
-curl -s http://127.0.0.1:8000/ops/status  # backlog 计数 + worker 心跳 + build 身份
+curl -s https://ledger.example/api/v1/me \\
+  -H "Authorization: Bearer $TOKEN"
 ```
 
-每个请求（含以上三个端点）都会在响应头返回 `X-Request-ID`，并在日志中携带
-`request_id=` 用于关联定位。详见 [运维与可观测性](docs/operations.md)、
-[备份/恢复 SOP](docs/backup-restore.md)。
+完整资源、权限、错误 envelope、幂等语义和 OpenAPI 说明见[Client API 文档](docs/client-api.md)。
 
-### 6. 第一笔账验收
+## 适合谁
 
-在飞书中依次发送（将 `#XXXXX` 换成机器人**实际返回**的短 ID）：
+- 想自己掌握财务数据的个人自托管用户
+- 需要个人账本与家庭共享账本并存的家庭
+- 希望用日常语言记账，同时保留 Web 和 API 工作流的技术用户
+- 能配置 Docker、PostgreSQL 和 Feishu 应用的部署者
 
-| 你发送 | 预期 |
-| --- | --- |
-| `午饭32元` | 成功记账回复，含五位短 ID，如 `#A83F2` |
-| `最近10笔` | 列表中能看到刚才那笔 |
-| `查看 #XXXXX` | 单笔详情（金额、分类、时间等） |
-| `把 #XXXXX 改成35元` | 金额变为 35 |
-| `删除 #XXXXX` | 软删除；列表默认不再显示 |
-| `恢复 #XXXXX` | 恢复后可再次出现在列表中 |
-| `导出最近90天账单` | 收到 CSV 文件消息（**需额外确认飞书文件上传与文件消息权限**；本仓库未宣称已在真实飞书完成该验收） |
+## 已知限制
 
-## 事件接入方式
+LarkLedger 面向个人与家庭财务，不是企业 ERP、复式记账系统或 Splitwise：
 
-| 模式 | 定位 | 公网 HTTPS | 额外凭据 |
-| --- | --- | --- | --- |
-| **WebSocket 长连接（推荐首次部署）** | NAS、家庭服务器、内网 | 不需要 | App ID / Secret |
-| **Webhook（高级 / 生产替代）** | 已有公网入口或反向代理 | 需要 | Verification Token；推荐 Encrypt Key |
+- 不包含银行卡同步、复杂 RBAC、多级审批、组织级多租户或企业财务报表
+- 不提供投资、股票、贷款、税务等金融建议，也不自动执行资金操作
+- Outbox、幂等和高风险确认用于降低故障与误操作风险，但项目不宣称“绝不重复回复”或“绝不重复记账”
+- 可靠性、隐私模型、备份恢复和部署边界以[架构说明](docs/architecture.md)、[安全策略](SECURITY.md)和[运维文档](docs/operations.md)为准
 
-Webhook 回调地址：`https://你的域名/webhooks/feishu`。详细配置见[环境与部署指南](docs/environment.md)。Webhook 仍是正式支持路径，并非废弃。
+## 文档
 
-## 已知限制（诚实边界）
+- [用户手册](docs/help.md)：记账、家庭、预算、报告、Pending 和限制
+- [环境与部署指南](docs/environment.md)：环境变量、PostgreSQL、Feishu 权限、Webhook、Web Client
+- [Client API](docs/client-api.md)：`/api/v1`、Bearer Token、幂等和错误契约
+- [架构说明](docs/architecture.md)：Application Core、Adapters、AI 边界和账本模型
+- [安全策略](SECURITY.md)：漏洞报告与安全边界
+- [运维与可观测性](docs/operations.md)：health/readiness、Worker、积压和故障定位
+- [备份 / 恢复 SOP](docs/backup-restore.md)
+- [升级指南](docs/upgrading.md)
+- [飞牛 NAS 部署](docs/deployment-fnos.md)
+- [变更日志](CHANGELOG.md)与 [GitHub Releases](https://github.com/0verme/LarkLedger/releases)：版本历史与当前镜像信息
+- [贡献指南](CONTRIBUTING.md) · [English README](README.en.md)
 
-**不要**理解为"绝不丢消息 / 绝不重复记账"的可靠投递：
+README 负责产品入口；阶段编号、逐版本变更和发布操作不在这里重复维护。
 
-- 事件处理失败**会自动重试**（指数退避，默认最多 3 次）并在耗尽或永久错误时进入 `dead`；业务变更与回复意图通过 **Transactional Outbox** 在同一事务提交（P06a），崩溃重试不会重复执行业务，但仍**不**宣称"绝不重复记账"，来源唯一约束为兜底保障
-- 回复发送失败**会自动重试**（P06b）：后台 Reply Worker 用 `FOR UPDATE SKIP LOCKED` 领取已提交的 Outbox、数据库租约、指数退避重试、永久错误或重试耗尽进入回复 `dead`；发送失败**绝不**重新执行业务，进程重启后继续投递 `pending` / `failed` 回复
-- 每次回复携带稳定的飞书 `uuid` 幂等键（Outbox 行 ID）：1 小时内崩溃重发由飞书去重；极端情况（飞书已发送但本地未标记 `sent` 后崩溃，且重发间隔超过 1 小时）用户可能收到重复回复，但**绝不会**导致重复执行业务或重复记账
-- 轻量 Cleanup Worker 默认按小批次清理终态投递记录：成功 Event / 已发送 Outbox 默认保留 30 天，dead 默认保留 90 天；不会删除账本或 revision。清理不是数据库备份，调整保留期前应评估审计要求
-- 管理员可通过 Dashboard 或默认 dry-run 的 `python -m lark_ledger.admin replay-event` 受控重放安全的 `dead` / `failed` 事件；显式二次确认或 `--execute` 才会重新执行业务并写独立审计。存在 Outbox、已有账目结果或历史原子性无法证明时一律拒绝；结果重发只消费已有 Outbox，绝不重新执行业务
-- **高风险确认（v0.3.0）**：图片 / 语音 / 批量 / 疑似重复先进入待确认 `#C-XXXXX`，确认或取消才结束。确认单 24 小时过期；确认使用冻结解析结果，绝不重新调用 AI。确认单只属于当前用户，无多级审批或多人共享确认
-- **隐私是账户级的，不是字段级**：私人账户只隐藏「余额 / 账目 / 周期规则 / 待确认 / 预算消耗 / 成员统计」，不隐藏成员身份、别名或付款人聚合口径；没有基于金额阈值、分类或字段的 ACL
-- Dashboard 仅提供 `USER` / `ADMIN` 两种角色；无企业多租户、组织树、复杂 RBAC 或共享账本
-- **不是 AA / Splitwise**：没有分摊、结算、债务关系或人均拆账；**不是复式记账**：一人公司科目 / 凭证 / 借贷仍属远期领域，不把会计字段加入个人收支表；**不是企业财务**：无审计链路、审批流、多币种汇率结算或财务报告义务
-- JSON 导出**不是**正式能力（当前仅 CSV）
-
-后续路线不在本次发布承诺内；当前主线不扩展为多租户财务 ERP / OAuth Authorization Server / SaaS API Gateway。
-
-镜像与版本：正式版本、Git SHA、GHCR digest 与迁移 head 以 [GitHub Releases](https://github.com/0verme/LarkLedger/releases) 和对应 Release Summary 为准。生产部署必须固定完整 `X.Y.Z` 镜像版本；不要使用 `latest`、`main`、`HEAD` 或浮动 tag。升级与迁移说明见[升级指南](docs/upgrading.md)，FNOS 流程见[飞牛 NAS 部署](docs/deployment-fnos.md)。
-
-## 安全边界
-
-```text
-飞书消息 → 来源校验 / 事件去重 → 媒体下载 → AI 结构化解析
-                                              ↓
-                              Pydantic 严格校验（禁止额外字段）
-                                              ↓
-                              固定业务动作 → SQLAlchemy → PostgreSQL
-```
-
-AI 不能访问数据库，也不能生成或执行 SQL。更多设计见[架构说明](docs/architecture.md)。
-
-## 架构原则：飞书是 Adapter
-
-```text
-                ┌──────── Feishu Adapter（消息 / 卡片 / 事件 Worker）
-                ├──────── Web Adapter（OAuth 会话路由）
-Client Layer ───┼──────── Client API（/api/v1，Bearer 令牌）
-                ├──────── CLI / Future
-                └──────── Hardware / Future
-                           │
-                           ↓
-                 Application Layer（ClientApplicationService）
-                           │
-                           ↓
-                       Domain / Core（账本 / 预算 / 隐私 / 目标 / 洞察）
-                           │
-                           ↓
-                       Repository → PostgreSQL
-```
-
-- **依赖方向只有一种**：Adapter → Application → Domain → Core。Core 从不
-  import Feishu 客户端、FastAPI Request 或渠道事件 DTO（CI 有 AST 架构守护
-  测试强制）。
-- `RequestContext`（actor / ledger / source）平台无关；`source` 只是审计
-  元数据，不决定业务结果。
-- 移除飞书后核心业务完整成立；新增客户端只需实现 Adapter。见
-  [Client API 文档](docs/client-api.md)。
-
-## 本地开发
-
-需要 Python 3.11+ 与可访问的 PostgreSQL：
+## Development
 
 ```bash
 python -m venv .venv
@@ -332,56 +208,7 @@ alembic upgrade head
 uvicorn lark_ledger.main:app --reload
 ```
 
-提交前：
-
-```bash
-ruff check .
-mypy src
-pytest --cov
-```
-
-## FNOS 生产部署（Release 镜像）
-
-生产推荐路径是 GitHub Release → GHCR 固定版本 → backup → migration → verify：
-
-```bash
-./scripts/deploy-fnos.sh X.Y.Z
-./scripts/ops/verify-deployment.sh X.Y.Z
-```
-
-脚本不会执行 `git pull` 或 NAS 本地 build；只有 `/healthz`、`/readyz`、`/version`、`/ops/status` 全部验收通过后才写入 deployment state。回滚使用：
-
-```bash
-./scripts/rollback-fnos.sh X.Y.Z
-```
-
-镜像 rollback 不等于数据库 rollback；schema-changing 或无法证明兼容的 rollback 会停止并要求按 backup/restore SOP 人工处理。完整说明见 [飞牛 NAS Release 镜像生产部署](docs/deployment-fnos.md)。
-
-## 直接使用预构建镜像（advanced）
-
-```bash
-export LARK_LEDGER_IMAGE_TAG=<version>
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "<version>"
-docker compose -f compose.image.yaml config
-```
-
-`compose.image.yaml` 要求显式的完整 `X.Y.Z` tag，不会 fallback 到 `latest`；advanced 路径仍需先 backup，再用目标镜像执行 migration 和启动。生产 FNOS 请优先使用上面的 `deploy-fnos.sh`。
-
-## 文档
-
-- [用户手册](docs/help.md)：消息示例、预算、报告、限制、FAQ
-- [环境与部署指南](docs/environment.md)：完整变量、PostgreSQL、飞书权限、Webhook、排查
-- [架构说明](docs/architecture.md)
-- [Client API（`/api/v1`）](docs/client-api.md)
-- [运维与可观测性](docs/operations.md)：healthz / readyz / version / 日志关联 / 故障定位
-- [备份 / 恢复 SOP](docs/backup-restore.md)：pg_dump、校验、retention、restore drill
-- [产品演进路线](docs/roadmap.md)
-- [升级指南](docs/upgrading.md)
-- [发布 SOP（含回滚）](docs/release-sop.md)
-- [飞牛 NAS Release 镜像生产部署](docs/deployment-fnos.md)
-- [变更日志](CHANGELOG.md) · [v0.10.0 发布说明](.github/release-notes/v0.10.0.md) · [v0.9.0 发布说明](.github/release-notes/v0.9.0.md) · [v0.8.0 发布说明](.github/release-notes/v0.8.0.md) · [v0.7.0 发布说明](.github/release-notes/v0.7.0.md) · [v0.6.0 发布说明](.github/release-notes/v0.6.0.md) · [v0.5.0 发布说明](.github/release-notes/v0.5.0.md)
-- [贡献指南](CONTRIBUTING.md) · [安全策略](SECURITY.md)
-- [English README](README.en.md)
+贡献前请阅读[贡献指南](CONTRIBUTING.md)。
 
 ## License
 
