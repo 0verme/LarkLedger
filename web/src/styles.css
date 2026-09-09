@@ -2210,6 +2210,19 @@ td strong {
 	font-size: var(--fs-small);
 	font-weight: 550;
 }
+.amount-expression-preview,
+.amount-expression-error {
+	display: block;
+	margin-top: 6px;
+	font-size: var(--fs-small);
+	font-variant-numeric: tabular-nums;
+}
+.amount-expression-preview {
+	color: var(--text-3);
+}
+.amount-expression-error {
+	color: var(--danger);
+}
 .edit-dialog input,
 .edit-dialog select {
 	margin-top: 6px;

@@ -29,6 +29,7 @@ import {
 	type EntryPage,
 } from "../api";
 import { QuickEntryDialog } from "../components/QuickEntryDialog";
+import { parseMoneyExpression } from "../moneyExpression";
 import {
 	EmptyState,
 	ErrorState,
@@ -640,23 +641,33 @@ function EditDialog({
 	busy: boolean;
 	error?: string;
 	onClose: () => void;
-	onSave: (body: object) => void;
+	onSave: (body: Record<string, unknown>) => void;
 }) {
 	const [amount, setAmount] = useState(entry.amount);
+	const [amountError, setAmountError] = useState<string>();
 	const [category, setCategory] = useState(entry.category);
 	const [note, setNote] = useState(entry.note);
 	const [direction, setDirection] = useState(entry.direction);
 	const [accountId, setAccountId] = useState(entry.account_id);
 	const [occurred, setOccurred] = useState(entry.occurred_at.slice(0, 16));
+	const amountResult = useMemo(() => parseMoneyExpression(amount), [amount]);
+	const liveAmountError =
+		amount.trim() && !amountResult.valid ? amountResult.error : undefined;
+	const displayedAmountError = amountError ?? liveAmountError;
+
 	return (
 		<div className="modal-layer">
 			<form
 				className="edit-dialog"
 				onSubmit={(event) => {
 					event.preventDefault();
+					if (!amountResult.valid) {
+						setAmountError(amountResult.error);
+						return;
+					}
 					onSave({
 						expected_updated_at: entry.updated_at,
-						amount,
+						amount: amountResult.value.toFixed(2),
 						category,
 						note,
 						direction,
@@ -669,13 +680,37 @@ function EditDialog({
 				<label>
 					金额
 					<input
-						type="number"
-						min="0.01"
-						step="0.01"
+						type="text"
+						inputMode="text"
+						autoComplete="off"
+						placeholder="输入金额或简单公式"
 						value={amount}
-						onChange={(event) => setAmount(event.target.value)}
+						aria-invalid={Boolean(displayedAmountError)}
+						onChange={(event) => {
+							setAmount(event.target.value);
+							setAmountError(undefined);
+						}}
+						onBlur={() => {
+							if (!amountResult.valid) setAmountError(amountResult.error);
+						}}
+						onKeyDown={(event) => {
+							if (event.key !== "Enter") return;
+							event.preventDefault();
+							if (!amountResult.valid) setAmountError(amountResult.error);
+						}}
 					/>
 				</label>
+				{amountResult.valid ? (
+					<span className="amount-expression-preview" aria-live="polite">
+						= {money(amountResult.value.toFixed(2))}
+					</span>
+				) : (
+					displayedAmountError && (
+						<span className="amount-expression-error" role="alert">
+							{displayedAmountError}
+						</span>
+					)
+				)}
 				<label>
 					方向
 					<select
