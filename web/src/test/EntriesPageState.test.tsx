@@ -51,7 +51,7 @@ describe("EntriesPage state semantics", () => {
 		expect(
 			await screen.findByRole("heading", { name: "当前筛选条件下暂无结果" }),
 		).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+		fireEvent.click(screen.getAllByRole("button", { name: "清除筛选" })[0]);
 		expect(await screen.findByRole("heading", { name: "还没有流水" })).toBeInTheDocument();
 	});
 

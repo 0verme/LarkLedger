@@ -83,7 +83,8 @@ export function EntriesPage() {
 	});
 
 	useEffect(() => {
-		if ((params.get("search") ?? "") === debounced) return;
+		if (search !== debounced || (params.get("search") ?? "") === debounced)
+			return;
 		setParams(
 			(current) => {
 				const next = new URLSearchParams(current);
@@ -94,7 +95,7 @@ export function EntriesPage() {
 			},
 			{ replace: true },
 		);
-	}, [debounced, params, setParams]);
+	}, [debounced, params, search, setParams]);
 
 	const selected = params.get("entry");
 	const queryString = useMemo(() => {
@@ -160,14 +161,17 @@ export function EntriesPage() {
 		setParams(next);
 	};
 	const clearFilters = () => {
+		setSearch("");
 		setParams((current) => {
 			const next = new URLSearchParams(current);
 			for (const key of entryFilterKeys) next.delete(key);
-			next.delete("page");
+			next.set("page", "1");
 			return next;
 		});
 	};
-	const hasActiveFilters = entryFilterKeys.some((key) => Boolean(params.get(key)));
+	const hasActiveFilters =
+		Boolean(search.trim()) ||
+		entryFilterKeys.some((key) => Boolean(params.get(key)?.trim()));
 	const current = detail.data?.entry;
 	const revisions = detail.data?.revisions ?? [];
 
@@ -281,6 +285,14 @@ export function EntriesPage() {
 					<option value="deleted">已删除</option>
 					<option value="all">全部状态</option>
 				</select>
+				<button
+					type="button"
+					className="ghost clear-filter"
+					disabled={!hasActiveFilters}
+					onClick={clearFilters}
+				>
+					<X size={16} /> 清除筛选
+				</button>
 				<select
 					aria-label="排序"
 					value={`${params.get("sort") ?? "occurred_at"}:${params.get("order") ?? "desc"}`}
