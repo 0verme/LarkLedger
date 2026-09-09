@@ -42,6 +42,18 @@ function dateQuery(value: string, end = false) {
 	return date.toISOString();
 }
 
+const CLEARABLE_FILTER_KEYS = [
+	"search",
+	"direction",
+	"category",
+	"source_type",
+	"amount_min",
+	"amount_max",
+	"start",
+	"end",
+	"deleted",
+] as const;
+
 export function EntriesPage() {
 	const [params, setParams] = useSearchParams();
 	const client = useQueryClient();
@@ -59,7 +71,8 @@ export function EntriesPage() {
 	});
 
 	useEffect(() => {
-		if ((params.get("search") ?? "") === debounced) return;
+		if (search !== debounced || (params.get("search") ?? "") === debounced)
+			return;
 		setParams(
 			(current) => {
 				const next = new URLSearchParams(current);
@@ -70,7 +83,7 @@ export function EntriesPage() {
 			},
 			{ replace: true },
 		);
-	}, [debounced, params, setParams]);
+	}, [debounced, params, search, setParams]);
 
 	const selected = params.get("entry");
 	const queryString = useMemo(() => {
@@ -129,6 +142,16 @@ export function EntriesPage() {
 		if (key !== "page" && key !== "entry") next.set("page", "1");
 		setParams(next);
 	};
+	const clearFilters = () => {
+		setSearch("");
+		const next = new URLSearchParams(params);
+		for (const key of CLEARABLE_FILTER_KEYS) next.delete(key);
+		next.set("page", "1");
+		setParams(next);
+	};
+	const hasActiveFilters =
+		Boolean(search.trim()) ||
+		CLEARABLE_FILTER_KEYS.some((key) => Boolean(params.get(key)?.trim()));
 	const closeDrawer = () => {
 		const next = new URLSearchParams(params);
 		next.delete("entry");
@@ -247,6 +270,14 @@ export function EntriesPage() {
 					<option value="deleted">已删除</option>
 					<option value="all">全部状态</option>
 				</select>
+				<button
+					type="button"
+					className="ghost clear-filter"
+					disabled={!hasActiveFilters}
+					onClick={clearFilters}
+				>
+					<X size={16} /> 清除筛选
+				</button>
 				<select
 					aria-label="排序"
 					value={`${params.get("sort") ?? "occurred_at"}:${params.get("order") ?? "desc"}`}
