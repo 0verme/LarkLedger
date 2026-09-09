@@ -61,6 +61,19 @@ async def test_web_list_is_scoped_filtered_and_paginated(session: AsyncSession) 
     assert [item.short_id for item in deleted.items] == ["AAAA3"]
 
 
+async def test_web_entry_search_normalizes_short_id(session: AsyncSession) -> None:
+    await _entry(session, "CQNHY", note="短 ID 测试")
+    await _entry(session, "CAT01", category="交通", note="打车")
+    service = WebLedgerQueryService(session)
+
+    for term in ("CQNHY", "#cqnhy"):
+        searched = await service.list_entries("ou_a", page=1, page_size=25, search=term)
+        assert [item.short_id for item in searched.items] == ["CQNHY"]
+
+    category = await service.list_entries("ou_a", page=1, page_size=25, search="交通")
+    assert [item.short_id for item in category.items] == ["CAT01"]
+
+
 async def test_web_detail_revision_and_dashboard(session: AsyncSession) -> None:
     entry = await _entry(session, "BBBB1", amount="35")
     await _entry(
@@ -135,6 +148,38 @@ async def test_web_entry_includes_ledger_scoped_account(session: AsyncSession) -
 
     dashboard = await query.dashboard(context, now=datetime(2026, 8, 9, 8, tzinfo=UTC))
     assert dashboard.recent_entries[0].account_id == str(wallet.id)
+
+
+async def test_web_context_entry_page_merges_legacy_rows(session: AsyncSession) -> None:
+    from lark_ledger.services.identity import IdentityService
+
+    context = await IdentityService(
+        session, currency="CNY", timezone="Asia/Shanghai"
+    ).resolve_or_bootstrap(channel="feishu", external_subject_id="ou_legacy")
+    legacy = await _entry(
+        session,
+        "LEG01",
+        user="ou_legacy",
+        days_ago=1,
+    )
+    modern = await _entry(
+        session,
+        "MOD01",
+        user="ou_legacy",
+    )
+    modern.ledger_id = context.ledger_id
+    await session.commit()
+
+    page_one = await WebLedgerQueryService(session).list_entries(
+        context, page=1, page_size=1
+    )
+    page_two = await WebLedgerQueryService(session).list_entries(
+        context, page=2, page_size=1
+    )
+
+    assert page_one.total == 2
+    assert [item.short_id for item in page_one.items] == ["MOD01"]
+    assert [item.short_id for item in page_two.items] == [legacy.short_id]
 
 
 async def test_web_entry_unbound_account_stays_empty_string(session: AsyncSession) -> None:
