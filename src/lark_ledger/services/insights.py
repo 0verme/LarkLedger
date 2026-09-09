@@ -112,13 +112,26 @@ class InsightService:
         member statistics). Returns ``[]`` when nothing is worth surfacing.
         """
         current = (now or datetime.now(UTC)).astimezone(self._timezone)
+        generated_at = current.astimezone(UTC)
         today = current.date()
         target = normalize_period(period or today)
         candidates: list[Insight] = []
-        candidates.extend(await self._spending_change(context, target, today))
-        candidates.extend(await self._budget_risk(context, target, today))
-        candidates.extend(await self._upcoming_recurring(context, today))
-        candidates.extend(await self._goal_progress(context, today, now))
+        candidates.extend(
+            await self._spending_change(context, target, today, generated_at=generated_at)
+        )
+        candidates.extend(
+            await self._budget_risk(
+                context, target, today, now=current, generated_at=generated_at
+            )
+        )
+        candidates.extend(
+            await self._upcoming_recurring(context, today, generated_at=generated_at)
+        )
+        candidates.extend(
+            await self._goal_progress(
+                context, today, current, generated_at=generated_at
+            )
+        )
         candidates.sort(key=lambda item: (self._severity_rank(item.severity), item.key))
         cap = limit if limit is not None else self._policy.max_insights
         return candidates[: max(0, min(cap, self._policy.max_insights))]
@@ -126,7 +139,12 @@ class InsightService:
     # -- I01 spending change ----------------------------------------------
 
     async def _spending_change(
-        self, context: RequestContext, period: date, today: date
+        self,
+        context: RequestContext,
+        period: date,
+        today: date,
+        *,
+        generated_at: datetime,
     ) -> list[Insight]:
         policy = self._policy
         current_start, current_end = self._period_bounds(period)
@@ -195,7 +213,7 @@ class InsightService:
                         },
                         period=period_key(period),
                         related_category=category,
-                        generated_at=datetime.now(UTC),
+                        generated_at=generated_at,
                     )
                 )
                 continue
@@ -229,7 +247,7 @@ class InsightService:
                     },
                     period=period_key(period),
                     related_category=category,
-                    generated_at=datetime.now(UTC),
+                    generated_at=generated_at,
                 )
             )
         return insights
@@ -250,14 +268,20 @@ class InsightService:
     # -- I02 budget risk ---------------------------------------------------
 
     async def _budget_risk(
-        self, context: RequestContext, period: date, today: date
+        self,
+        context: RequestContext,
+        period: date,
+        today: date,
+        *,
+        now: datetime,
+        generated_at: datetime,
     ) -> list[Insight]:
         policy = self._policy
         elapsed = Decimal(today.day) / Decimal(monthrange(today.year, today.month)[1])
         elapsed_percent = (elapsed * 100).quantize(Decimal("0.01"))
         overview = await BudgetService(
             self._session, currency=self._currency, timezone=str(self._timezone)
-        ).overview(context, period=period)
+        ).overview(context, period=period, now=now)
         risky: list[tuple[str, Decimal, Decimal]] = []
         spent_by_category = {item.category: item.spent for item in overview.items}
         budget_by_category = {item.category: item.amount for item in overview.items}
@@ -299,7 +323,7 @@ class InsightService:
                     },
                     period=period_key(period),
                     related_category=category,
-                    generated_at=datetime.now(UTC),
+                    generated_at=generated_at,
                 )
             )
         return insights
@@ -307,7 +331,11 @@ class InsightService:
     # -- I03 upcoming recurring --------------------------------------------
 
     async def _upcoming_recurring(
-        self, context: RequestContext, today: date
+        self,
+        context: RequestContext,
+        today: date,
+        *,
+        generated_at: datetime,
     ) -> list[Insight]:
         policy = self._policy
         horizon = today + timedelta(days=policy.upcoming_recurring_days)
@@ -359,14 +387,19 @@ class InsightService:
                     },
                 },
                 period=period_key(today),
-                generated_at=datetime.now(UTC),
+                generated_at=generated_at,
             )
         ]
 
     # -- I04 goal progress -------------------------------------------------
 
     async def _goal_progress(
-        self, context: RequestContext, today: date, now: datetime | None
+        self,
+        context: RequestContext,
+        today: date,
+        now: datetime,
+        *,
+        generated_at: datetime,
     ) -> list[Insight]:
         policy = self._policy
         goals = await GoalService(
@@ -401,7 +434,7 @@ class InsightService:
                         period=period_key(today),
                         related_goal=str(goal.id),
                         related_goal_name=goal.name,
-                        generated_at=datetime.now(UTC),
+                        generated_at=generated_at,
                     )
                 )
                 continue
@@ -434,7 +467,7 @@ class InsightService:
                         period=period_key(today),
                         related_goal=str(goal.id),
                         related_goal_name=goal.name,
-                        generated_at=datetime.now(UTC),
+                        generated_at=generated_at,
                     )
                 )
                 continue
@@ -462,7 +495,7 @@ class InsightService:
                         period=period_key(today),
                         related_goal=str(goal.id),
                         related_goal_name=goal.name,
-                        generated_at=datetime.now(UTC),
+                        generated_at=generated_at,
                     )
                 )
         return insights

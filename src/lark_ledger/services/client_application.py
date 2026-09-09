@@ -442,14 +442,20 @@ class ClientApplicationService:
             self._session, timezone=self._timezone, currency=self._currency
         ).drill_down(context, intent, page=page, page_size=page_size)
 
-    async def dashboard(self, context: RequestContext) -> DashboardData:
+    async def dashboard(
+        self, context: RequestContext, *, now: datetime | None = None
+    ) -> DashboardData:
         await self.authorize(context)
         return await WebLedgerQueryService(
             self._session, timezone=self._timezone, currency=self._currency
-        ).dashboard(context)
+        ).dashboard(context, now=now)
 
     async def household_overview(
-        self, context: RequestContext, *, period: date | None = None
+        self,
+        context: RequestContext,
+        *,
+        period: date | None = None,
+        now: datetime | None = None,
     ) -> HouseholdOverview:
         """Deterministic overview for the current ledger (P31)."""
         await self.authorize(context)
@@ -457,7 +463,7 @@ class ClientApplicationService:
 
         return await HouseholdOverviewService(
             self._session, timezone=self._timezone, currency=self._currency
-        ).overview(context, period=period)
+        ).overview(context, period=period, now=now)
 
     async def list_entries(self, context: RequestContext, query: EntryQuery) -> EntryPage:
         await self.authorize(context)
@@ -484,16 +490,22 @@ class ClientApplicationService:
             context, short_id
         )
 
-    async def budgets(self, context: RequestContext) -> BudgetOverview:
-        return await self.get_budget_overview(context)
+    async def budgets(
+        self, context: RequestContext, *, now: datetime | None = None
+    ) -> BudgetOverview:
+        return await self.get_budget_overview(context, now=now)
 
     async def get_budget_overview(
-        self, context: RequestContext, *, period: date | None = None
+        self,
+        context: RequestContext,
+        *,
+        period: date | None = None,
+        now: datetime | None = None,
     ) -> BudgetOverview:
         await self.authorize(context)
         return await BudgetService(
             self._session, currency=self._currency, timezone=self._timezone
-        ).overview(context, period=period)
+        ).overview(context, period=period, now=now)
 
     async def set_total_budget(
         self,
@@ -550,6 +562,7 @@ class ClientApplicationService:
         next_occurrence: date,
         account_id: uuid.UUID,
         paid_by_user_id: uuid.UUID | None = None,
+        now: datetime | None = None,
     ) -> RecurringRule:
         from lark_ledger.models import RecurringFrequency
 
@@ -565,6 +578,7 @@ class ClientApplicationService:
             next_occurrence=next_occurrence,
             account_id=account_id,
             paid_by_user_id=paid_by_user_id,
+            now=now,
         )
 
     async def get_recurring_rule(
@@ -590,6 +604,7 @@ class ClientApplicationService:
         next_occurrence: date | None,
         account_id: uuid.UUID | None,
         paid_by_user_id: uuid.UUID | None = None,
+        now: datetime | None = None,
     ) -> RecurringRule:
         from lark_ledger.models import RecurringFrequency
 
@@ -607,6 +622,7 @@ class ClientApplicationService:
             next_occurrence=next_occurrence,
             account_id=account_id,
             paid_by_user_id=paid_by_user_id,
+            now=now,
         )
 
     async def pause_recurring_rule(
@@ -625,9 +641,13 @@ class ClientApplicationService:
         return await self._recurring().disable(context, rule_id)
 
     async def skip_recurring_occurrence(
-        self, context: RequestContext, rule_id: uuid.UUID
+        self,
+        context: RequestContext,
+        rule_id: uuid.UUID,
+        *,
+        now: datetime | None = None,
     ) -> RecurringRule:
-        return await self._recurring().skip_occurrence(context, rule_id)
+        return await self._recurring().skip_occurrence(context, rule_id, now=now)
 
     async def recurring_rule_views(self, context: RequestContext) -> list[WebRecurringRule]:
         """Return the enriched recurring-rule list for the Web dashboard.

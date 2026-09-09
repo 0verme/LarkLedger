@@ -16,7 +16,7 @@ LOCK_DIR="${APP_DIR}.deploy.lock"
 IMAGE_REPOSITORY='ghcr.io/0verme/larkledger'
 
 log() {
-  printf '[deploy] %s\n' "$*"
+  printf '[rollback] %s\n' "$*"
 }
 
 fail() {
@@ -30,7 +30,19 @@ cleanup() {
 
 on_error() {
   local line="$1"
-  log "部署在第 ${line} 行失败；deployment state 未更新" >&2
+  log "rollback 在第 ${line} 行失败；deployment state 未更新" >&2
+  exit 1
+}
+
+schema_changing_stop() {
+  cat >&2 <<'EOF'
+SCHEMA-CHANGING ROLLBACK
+
+自动镜像回滚已停止。
+
+请按照 docs/backup-restore.md /
+docs/release-sop.md 执行数据库 restore / rollback。
+EOF
   exit 1
 }
 
@@ -39,7 +51,7 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 VERSION="$(ll_normalize_version "$1" 2>/dev/null || true)"
-[[ -n "$VERSION" ]] || fail '目标版本必须是明确的 X.Y.Z 或 vX.Y.Z；禁止 latest/main/master/HEAD/develop'
+[[ -n "$VERSION" ]] || fail 'rollback 目标必须是明确的 X.Y.Z 或 vX.Y.Z；禁止 latest/main/master/HEAD/develop'
 
 [[ -d "$APP_DIR" ]] || fail "应用目录不存在：$APP_DIR"
 [[ -f "$ENV_FILE" ]] || fail "缺少环境文件：$ENV_FILE"
@@ -47,7 +59,7 @@ VERSION="$(ll_normalize_version "$1" 2>/dev/null || true)"
 [[ -x "$APP_DIR/scripts/ops/backup-postgres.sh" ]] || fail '缺少可执行的 scripts/ops/backup-postgres.sh'
 [[ -x "$APP_DIR/scripts/ops/verify-deployment.sh" ]] || fail '缺少可执行的 scripts/ops/verify-deployment.sh'
 ll_require_command docker || fail '未找到 docker，请先安装并启动 Docker'
-ll_require_command curl || fail '未找到 curl，无法完成部署验收'
+ll_require_command curl || fail '未找到 curl，无法完成 rollback 验收'
 docker compose version >/dev/null 2>&1 || fail '当前 Docker 未提供 docker compose 命令'
 
 mkdir -- "$LOCK_DIR" 2>/dev/null || fail "已有部署或 rollback 正在运行：$LOCK_DIR"
@@ -56,71 +68,64 @@ trap 'on_error "$LINENO"' ERR
 
 cd -- "$APP_DIR"
 COMPOSE_ARGS=(--env-file "$ENV_FILE" -f "$COMPOSE_FILE")
+export LARK_LEDGER_IMAGE_TAG="$VERSION"
 BASE_URL="$(ll_env_or_file LARK_LEDGER_BASE_URL "$ENV_FILE" 'http://127.0.0.1:8000')"
 export LARK_LEDGER_BASE_URL="$BASE_URL"
-export LARK_LEDGER_IMAGE_TAG="$VERSION"
 
-log "校验固定版本 Compose 配置：$IMAGE_REPOSITORY:$VERSION"
+log "校验 rollback 目标 Compose 配置：$IMAGE_REPOSITORY:$VERSION"
 docker compose "${COMPOSE_ARGS[@]}" config --quiet
 
 state_current_version="$(ll_state_value "$STATE_FILE" current_version 2>/dev/null || true)"
-current_version=''
-current_git_sha=''
-current_revision=''
-current_image=''
-current_image_digest=''
-
-# Phase B: read the running instance without making it a prerequisite. A
-# failed old instance must not prevent a controlled replacement or rollback.
 current_version_payload="$(curl -sS --max-time 5 "$BASE_URL/version" 2>/dev/null || true)"
 current_version="$(ll_json_string_field version "$current_version_payload")"
-current_git_sha="$(ll_json_string_field git_sha "$current_version_payload")"
+[[ -n "$current_version" ]] || current_version="$state_current_version"
+[[ -n "$current_version" ]] || current_version='unknown'
+
+# Read the database revision from readiness even when readiness is HTTP 503;
+# the migration check remains useful during a worker or receiver outage. A
+# previously verified state file is the conservative fallback for a crashed
+# current container, but absence of both proofs stops rollback.
 current_ready_payload="$(curl -sS --max-time 5 "$BASE_URL/readyz" 2>/dev/null || true)"
 current_revision="$(ll_json_string_field current "$current_ready_payload")"
-
-container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q app 2>/dev/null | head -n 1 || true)"
-if [[ -n "$container_id" ]]; then
-  current_image="$(docker inspect --format '{{.Config.Image}}' "$container_id" 2>/dev/null || true)"
-  current_image_digest="$(docker inspect --format '{{join .RepoDigests ","}}' "$container_id" 2>/dev/null || true)"
-fi
-[[ -n "$current_version" ]] || current_version="$state_current_version"
-[[ -n "$current_version" ]] || current_version='none'
 [[ -n "$current_revision" ]] || current_revision="$(ll_state_value "$STATE_FILE" alembic_revision 2>/dev/null || true)"
-[[ -n "$current_revision" ]] || current_revision='unknown'
+[[ -n "$current_revision" ]] || schema_changing_stop
 
-log "当前状态：version=$current_version git_sha=${current_git_sha:-unknown} image=${current_image:-unknown} digest=${current_image_digest:-unknown} alembic_revision=$current_revision"
-
-# Phase C: pull only the immutable, normalized release tag. No build command is
-# present in this production path.
-log "拉取目标 GHCR 镜像：$IMAGE_REPOSITORY:$VERSION"
+log "拉取待回滚 GHCR 镜像：$IMAGE_REPOSITORY:$VERSION"
 docker compose "${COMPOSE_ARGS[@]}" pull app
 TARGET_IMAGE="$IMAGE_REPOSITORY:$VERSION"
 TARGET_IMAGE_DIGEST="$(docker image inspect "$TARGET_IMAGE" --format '{{join .RepoDigests ","}}' 2>/dev/null || true)"
 TARGET_IMAGE_DIGEST="${TARGET_IMAGE_DIGEST%%,*}"
 [[ -n "$TARGET_IMAGE_DIGEST" ]] || fail "无法解析目标镜像 digest：$TARGET_IMAGE"
-log "目标镜像 digest：$TARGET_IMAGE_DIGEST"
 
-# Phase D: the backup must complete before the target image can touch the
-# database. The backup script never prints the database URL or credentials.
-log '执行部署前 PostgreSQL backup'
+# Resolve the old image's Alembic head without connecting to the database. A
+# matching single head with the verified current DB revision is the narrow
+# code-only proof; any uncertainty is deliberately treated as schema-changing.
+HEAD_OUTPUT=''
+if ! HEAD_OUTPUT="$(docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps app alembic heads 2>/dev/null)"; then
+  schema_changing_stop
+fi
+if ! ll_code_only_compatible "$HEAD_OUTPUT" "$current_revision"; then
+  schema_changing_stop
+fi
+TARGET_HEAD="$(ll_single_alembic_head "$HEAD_OUTPUT" | sed -n '1p')"
+
+log "已证明 code-only rollback：target_head=$TARGET_HEAD current_revision=$current_revision"
+
+# Preserve the current database before switching the image, even though this
+# narrow path does not alter schema. The backup is still the recovery point if
+# the old application fails verification.
+log '执行 rollback 前 PostgreSQL backup'
 backup_output=''
-if ! backup_output="$("$APP_DIR/scripts/ops/backup-postgres.sh")"; then
-  fail '部署前 PostgreSQL backup 失败；未执行 migration，未替换生产 app'
+if ! backup_output="$APP_DIR/scripts/ops/backup-postgres.sh"; then
+  fail 'rollback 前 PostgreSQL backup 失败；未切换镜像'
 fi
 BACKUP_FILE="$(printf '%s\n' "$backup_output" | sed -n 's/^backup_file=//p' | tail -n 1)"
-[[ -n "$BACKUP_FILE" ]] || fail 'backup 脚本未返回 backup_file；未执行 migration'
-log "backup 已完成：$BACKUP_FILE"
+[[ -n "$BACKUP_FILE" ]] || fail 'backup 脚本未返回 backup_file；未切换镜像'
 
-# Phase E: run Alembic from the pulled target image, never from NAS host Python.
-log "使用目标镜像执行 migration：$VERSION"
-docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps app alembic upgrade head
-
-# Phase F: start the prebuilt target image. The production path never builds.
-log "启动固定版本镜像：$VERSION"
+log "启动 rollback 镜像：$VERSION"
 docker compose "${COMPOSE_ARGS[@]}" up -d --remove-orphans
 
-# Phase G: only a green verification may advance deployment state.
-log "执行 deployment verification：$VERSION"
+log "执行 rollback deployment verification：$VERSION"
 "$APP_DIR/scripts/ops/verify-deployment.sh" "$VERSION"
 
 verified_version_payload="$(curl -fsS --max-time 5 "$BASE_URL/version")"
@@ -129,19 +134,15 @@ VERIFIED_VERSION="$(ll_json_string_field version "$verified_version_payload")"
 VERIFIED_GIT_SHA="$(ll_json_string_field git_sha "$verified_version_payload")"
 VERIFIED_BUILD_TIME="$(ll_json_string_field build_time "$verified_version_payload")"
 VERIFIED_REVISION="$(ll_json_string_field current "$verified_ready_payload")"
-[[ "$VERIFIED_VERSION" == "$VERSION" ]] || fail '验收后 version 读取异常；deployment state 未更新'
-[[ -n "$VERIFIED_REVISION" ]] || fail '验收后未读取到 Alembic revision；deployment state 未更新'
+[[ "$VERIFIED_VERSION" == "$VERSION" ]] || fail 'rollback 验收后 version 读取异常；deployment state 未更新'
+[[ "$VERIFIED_REVISION" == "$current_revision" ]] || fail 'rollback 验收后 migration revision 发生变化；deployment state 未更新'
 
 mkdir -p -- "$STATE_DIR"
 STATE_TMP="$STATE_FILE.tmp.$$"
 {
-  printf '# Generated by deploy-fnos.sh; contains no secrets.\n'
+  printf '# Generated by rollback-fnos.sh; contains no secrets.\n'
   printf 'current_version=%s\n' "$VERSION"
-  if [[ "$current_version" == 'none' ]]; then
-    printf 'previous_version=none\n'
-  else
-    printf 'previous_version=%s\n' "$current_version"
-  fi
+  printf 'previous_version=%s\n' "$current_version"
   printf 'git_sha=%s\n' "${VERIFIED_GIT_SHA:-unknown}"
   printf 'build_time=%s\n' "${VERIFIED_BUILD_TIME:-unknown}"
   printf 'image=%s\n' "$TARGET_IMAGE"
@@ -149,10 +150,7 @@ STATE_TMP="$STATE_FILE.tmp.$$"
   printf 'alembic_revision=%s\n' "$VERIFIED_REVISION"
   printf 'deployed_at=%s\n' "$(ll_timestamp)"
   printf 'backup_file=%s\n' "$BACKUP_FILE"
-} >"$STATE_TMP" || {
-  rm -f -- "$STATE_TMP"
-  fail '无法写入 deployment state；state 未更新'
-}
+} >"$STATE_TMP"
 mv -- "$STATE_TMP" "$STATE_FILE"
 
-log '部署完成，deployment state 已原子更新'
+log 'rollback 完成，deployment state 已原子更新'

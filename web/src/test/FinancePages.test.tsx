@@ -142,6 +142,57 @@ describe("ReportsPage date range integration", () => {
 		expect(screen.getByText("每月")).toBeInTheDocument();
 	});
 
+	it("renders a zero-valued report as an empty business state", async () => {
+		const emptyReport = {
+			...REPORT_MARCH,
+			income_total: "0.00",
+			expense_total: "0.00",
+			balance: "0.00",
+			entry_count: 0,
+			categories: [],
+			trend: [],
+		};
+		vi.stubGlobal("fetch", vi.fn(() => response(emptyReport)));
+
+		renderReports("/reports?from=2026-09-01&to=2026-09-30");
+		expect(
+			await screen.findByRole("heading", { name: "本月暂无收支记录" }),
+		).toBeInTheDocument();
+		expect(screen.getByText("0 笔")).toBeInTheDocument();
+		expect(screen.getByRole("link", { name: "记一笔" })).toHaveAttribute(
+			"href",
+			"/entries?new=1",
+		);
+		expect(screen.queryByText("报告加载失败")).not.toBeInTheDocument();
+	});
+
+	it("shows a report error and retries the failed request", async () => {
+		let attempts = 0;
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(() => {
+				attempts += 1;
+				if (attempts === 1) {
+					return Promise.resolve(
+						new Response(JSON.stringify({ detail: "服务暂不可用" }), {
+							status: 503,
+							headers: { "Content-Type": "application/json" },
+						}),
+					);
+				}
+				return response(REPORT_MARCH);
+			}),
+		);
+
+		renderReports("/reports?from=2026-09-01&to=2026-09-30");
+		expect(
+			await screen.findByRole("heading", { name: "报表加载失败" }),
+		).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "重试" }));
+		expect(await screen.findByText("¥100.00")).toBeInTheDocument();
+		expect(attempts).toBe(2);
+	});
+
 	it("falls back and removes unsafe URL parameters", async () => {
 		const calls: string[] = [];
 		vi.stubGlobal(

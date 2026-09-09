@@ -22,7 +22,12 @@ import {
 	type EventReplayResult,
 	type HealthSnapshot,
 } from "../api";
-import { EmptyState, PageSkeleton, TableSkeleton } from "../components/States";
+import {
+	EmptyState,
+	ErrorState,
+	PageSkeleton,
+	TableSkeleton,
+} from "../components/States";
 
 const eventStatuses = [
 	"",
@@ -114,10 +119,12 @@ export function EventsPage() {
 					{query.isLoading ? (
 						<TableSkeleton rows={4} />
 					) : query.isError ? (
-						<div className="state-panel">
-							<h3>事件加载失败</h3>
-							<button onClick={() => query.refetch()}>重试</button>
-						</div>
+						<ErrorState
+							compact
+							title="事件加载失败"
+							description="事件列表暂时无法加载，请稍后重试。"
+							onRetry={() => query.refetch()}
+						/>
 					) : !query.data?.items.length ? (
 						<EmptyState
 							icon={<ServerCrash size={28} />}
@@ -212,10 +219,12 @@ export function OutboxPage() {
 					{query.isLoading ? (
 						<TableSkeleton rows={4} />
 					) : query.isError ? (
-						<div className="state-panel">
-							<h3>回复队列加载失败</h3>
-							<button onClick={() => query.refetch()}>重试</button>
-						</div>
+						<ErrorState
+							compact
+							title="回复队列加载失败"
+							description="回复队列暂时无法加载，请稍后重试。"
+							onRetry={() => query.refetch()}
+						/>
 					) : !query.data?.items.length ? (
 						<EmptyState
 							icon={<CheckCircle2 size={28} />}
@@ -316,10 +325,11 @@ export function DeadPage() {
 	if (query.isLoading) return <TableSkeleton rows={4} />;
 	if (query.isError || !query.data)
 		return (
-			<div className="state-panel">
-				<h3>Dead 队列加载失败</h3>
-				<button onClick={() => query.refetch()}>重试</button>
-			</div>
+			<ErrorState
+				title="Dead 队列加载失败"
+				description="Dead 队列暂时无法加载，请稍后重试。"
+				onRetry={() => query.refetch()}
+			/>
 		);
 	return (
 		<section>
@@ -508,10 +518,11 @@ export function HealthPage() {
 	if (query.isLoading) return <PageSkeleton rows={2} />;
 	if (query.isError || !query.data)
 		return (
-			<div className="state-panel">
-				<h3>健康状态暂不可用</h3>
-				<button onClick={() => query.refetch()}>重试</button>
-			</div>
+			<ErrorState
+				title="健康状态加载失败"
+				description="系统健康状态暂时无法读取，请稍后重试。"
+				onRetry={() => query.refetch()}
+			/>
 		);
 	const labels: Record<string, string> = {
 		application: "Application",
@@ -789,10 +800,12 @@ export function DeadLettersPage() {
 					{query.isLoading ? (
 						<TableSkeleton rows={4} />
 					) : query.isError ? (
-						<div className="state-panel">
-							<h3>加载失败</h3>
-							<button onClick={() => query.refetch()}>重试</button>
-						</div>
+						<ErrorState
+							compact
+							title="加载失败"
+							description="Dead Letter 列表暂时无法加载，请稍后重试。"
+							onRetry={() => query.refetch()}
+						/>
 					) : !query.data?.items.length ? (
 						<EmptyState
 							icon={<CheckCircle2 size={28} />}

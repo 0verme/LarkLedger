@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
@@ -19,6 +19,8 @@ from lark_ledger.services.dashboard_auth import (
 )
 from lark_ledger.services.web_analytics import WebAnalyticsQueryService
 from lark_ledger.web_api import _auth_service, router
+
+FIXED_NOW = datetime(2026, 8, 20, 4, tzinfo=UTC)
 
 
 def settings() -> Settings:
@@ -72,7 +74,10 @@ def _entry(
 
 
 async def _client(
-    factory: async_sessionmaker[AsyncSession], user: str
+    factory: async_sessionmaker[AsyncSession],
+    user: str,
+    *,
+    clock: Callable[[], datetime] | None = None,
 ) -> tuple[httpx.AsyncClient, str]:
     auth = DashboardAuthService(settings(), factory)
     created = await auth.create_session(
@@ -81,6 +86,8 @@ async def _client(
     app = FastAPI()
     app.state.settings = settings()
     app.state.session_factory = factory
+    if clock is not None:
+        app.state.clock = clock
     app.include_router(router)
     app.dependency_overrides[_auth_service] = lambda: auth
     client = httpx.AsyncClient(
@@ -140,7 +147,7 @@ async def test_web_report_budget_and_export_reuse_ledger_rules(
             ]
         )
         await session.commit()
-    client, csrf = await _client(factory, "ou_a")
+    client, csrf = await _client(factory, "ou_a", clock=lambda: FIXED_NOW)
     headers = {"X-CSRF-Token": csrf}
     async with client:
         summary = await client.get(
@@ -205,6 +212,25 @@ async def test_web_report_budget_and_export_reuse_ledger_rules(
         # ¥0 limit.
         assert deleted_budget.json()["total_budget"] is None
         assert deleted_budget.json()["status"] == "none"
+
+
+async def test_web_report_empty_range_is_success_with_zero_totals(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    client, _ = await _client(factory, "ou_empty_report")
+    async with client:
+        response = await client.get(
+            "/api/web/v1/reports?start_date=2026-09-01&end_date=2026-09-30"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["entry_count"] == 0
+    assert body["income_total"] == "0.00"
+    assert body["expense_total"] == "0.00"
+    assert body["balance"] == "0.00"
+    assert body["categories"] == []
+    assert body["trend"] == []
 
 
 async def test_web_total_budget_period_set_and_delete(

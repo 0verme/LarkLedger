@@ -359,6 +359,25 @@ async def test_report_aggregates_expenses_income_and_local_days(session: AsyncSe
     assert result.report.trend[1].amount == Decimal("31.00")
 
 
+async def test_empty_report_returns_zero_valued_report(session: AsyncSession) -> None:
+    result = await LedgerService(session, timezone="Asia/Shanghai").execute(
+        "ou_empty",
+        ParsedCommand(
+            action=Action.REPORT,
+            range_start=datetime(2026, 9, 1, tzinfo=UTC),
+            range_end=datetime(2026, 10, 1, tzinfo=UTC),
+        ),
+    )
+
+    assert result.report is not None
+    assert result.report.entry_count == 0
+    assert result.report.income_total == Decimal("0")
+    assert result.report.expense_total == Decimal("0")
+    assert result.report.balance == Decimal("0")
+    assert result.report.categories == []
+    assert result.report.trend == []
+
+
 async def test_report_uses_monthly_trend_for_long_ranges(
     session: AsyncSession,
 ) -> None:

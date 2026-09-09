@@ -162,6 +162,68 @@ async def test_client_api_budget_period_and_total(
         assert removed.json()["total_limit_set"] is False
 
 
+async def test_client_api_report_empty_range_is_success_with_zero_totals(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, _ = await _credential(client_factory, subject="ou_empty_client_report")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        response = await client.get(
+            "/api/client/v1/reports",
+            headers={"Authorization": f"Bearer {token}"},
+            params={
+                "start": "2026-09-01T00:00:00Z",
+                "end": "2026-10-01T00:00:00Z",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["entry_count"] == 0
+    assert body["income_total"] == "0.00"
+    assert body["expense_total"] == "0.00"
+    assert body["balance"] == "0.00"
+
+
+async def test_client_entries_default_includes_history(
+    client_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    token, _ = await _credential(client_factory, subject="ou_history_client")
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=_app(client_factory)),
+        base_url="http://ledger.test",
+    ) as client:
+        accounts = await client.get("/api/client/v1/accounts", headers=headers)
+        account_id = accounts.json()["items"][0]["id"]
+        for key, occurred_at in (
+            ("history-old", "2024-01-01T00:00:00Z"),
+            ("history-recent", "2026-08-09T00:00:00Z"),
+        ):
+            created = await client.post(
+                "/api/client/v1/entries",
+                headers=headers | {"Idempotency-Key": key},
+                json={
+                    "amount": "12.00",
+                    "direction": "expense",
+                    "category": "history",
+                    "occurred_at": occurred_at,
+                    "account_id": account_id,
+                },
+            )
+            assert created.status_code == 201
+
+        listed = await client.get("/api/client/v1/entries", headers=headers)
+
+    assert listed.status_code == 200
+    assert {item["occurred_at"][:10] for item in listed.json()["items"]} == {
+        "2024-01-01",
+        "2026-08-09",
+    }
+
+
 async def test_client_api_idempotency_conflict_and_actor_isolation(
     client_factory: async_sessionmaker[AsyncSession],
 ) -> None:

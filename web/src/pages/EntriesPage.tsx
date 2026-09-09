@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+	keepPreviousData,
+	useMutation,
+	useQuery,
+	useQueryClient,
+} from "@tanstack/react-query";
 import {
 	ChevronLeft,
 	ChevronRight,
@@ -14,6 +19,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import {
+	ApiError,
 	api,
 	errorText,
 	localTime,
@@ -23,7 +29,12 @@ import {
 	type EntryPage,
 } from "../api";
 import { QuickEntryDialog } from "../components/QuickEntryDialog";
-import { EmptyState, TableSkeleton } from "../components/States";
+import {
+	EmptyState,
+	ErrorState,
+	NotFoundState,
+	TableSkeleton,
+} from "../components/States";
 import { ContextualAssistantButton } from "../components/ContextualAssistantButton";
 
 function useDebounced(value: string, delay = 300) {
@@ -42,7 +53,7 @@ function dateQuery(value: string, end = false) {
 	return date.toISOString();
 }
 
-const CLEARABLE_FILTER_KEYS = [
+const entryFilterKeys = [
 	"search",
 	"direction",
 	"category",
@@ -95,6 +106,7 @@ export function EntriesPage() {
 	const entries = useQuery({
 		queryKey: ["entries", queryString],
 		queryFn: () => api<EntryPage>(`/entries?${queryString}`),
+		placeholderData: keepPreviousData,
 	});
 	const detail = useQuery({
 		queryKey: ["entry", selected],
@@ -142,21 +154,23 @@ export function EntriesPage() {
 		if (key !== "page" && key !== "entry") next.set("page", "1");
 		setParams(next);
 	};
-	const clearFilters = () => {
-		setSearch("");
-		const next = new URLSearchParams(params);
-		for (const key of CLEARABLE_FILTER_KEYS) next.delete(key);
-		next.set("page", "1");
-		setParams(next);
-	};
-	const hasActiveFilters =
-		Boolean(search.trim()) ||
-		CLEARABLE_FILTER_KEYS.some((key) => Boolean(params.get(key)?.trim()));
 	const closeDrawer = () => {
 		const next = new URLSearchParams(params);
 		next.delete("entry");
 		setParams(next);
 	};
+	const clearFilters = () => {
+		setSearch("");
+		setParams((current) => {
+			const next = new URLSearchParams(current);
+			for (const key of entryFilterKeys) next.delete(key);
+			next.set("page", "1");
+			return next;
+		});
+	};
+	const hasActiveFilters =
+		Boolean(search.trim()) ||
+		entryFilterKeys.some((key) => Boolean(params.get(key)?.trim()));
 	const current = detail.data?.entry;
 	const revisions = detail.data?.revisions ?? [];
 
@@ -301,22 +315,35 @@ export function EntriesPage() {
 				{entries.isLoading ? (
 					<TableSkeleton rows={5} />
 				) : entries.isError ? (
-					<div className="state-panel">
-						<h3>账目加载失败</h3>
-						<button onClick={() => entries.refetch()}>重试</button>
-					</div>
+					<ErrorState
+						title="流水加载失败"
+						description="流水暂时无法加载，请稍后重试。"
+						onRetry={() => entries.refetch()}
+					/>
 				) : !entries.data?.items.length ? (
 					<EmptyState
 						icon={<Inbox size={30} />}
-						title="还没有账目"
-						description="记下你的第一笔收支吧。"
+						title={
+							hasActiveFilters ? "当前筛选条件下暂无结果" : "还没有流水"
+						}
+						description={
+							hasActiveFilters
+								? "尝试调整筛选条件或清除筛选。"
+								: "记下第一笔收入或支出后，这里会显示你的账目记录。"
+						}
 						action={
-							<button
-								className="primary-small"
-								onClick={() => setCreating(true)}
-							>
-								<Plus size={16} /> 记一笔
-							</button>
+							hasActiveFilters ? (
+								<button className="primary-small" onClick={clearFilters}>
+									清除筛选
+								</button>
+							) : (
+								<button
+									className="primary-small"
+									onClick={() => setCreating(true)}
+								>
+									<Plus size={16} /> 记一笔
+								</button>
+							)
 						}
 					/>
 				) : (
@@ -411,10 +438,28 @@ export function EntriesPage() {
 							<div className="drawer-loading">
 								<Loader2 className="spin" size={16} /> 加载详情…
 							</div>
-						) : detail.isError || !current ? (
-							<div className="state-panel">
-								<h3>账目不存在</h3>
-							</div>
+						) : detail.isError ? (
+							detail.error instanceof ApiError && detail.error.status === 404 ? (
+								<NotFoundState
+									compact
+									title="流水不存在"
+									description="这笔流水可能已被删除，或不属于当前账本。"
+								/>
+							) : (
+								<ErrorState
+									compact
+									title="流水详情加载失败"
+									description="流水详情暂时无法加载，请稍后重试。"
+									onRetry={() => detail.refetch()}
+								/>
+							)
+						) : !current ? (
+							<ErrorState
+								compact
+								title="流水详情加载失败"
+								description="返回的数据不完整，请稍后重试。"
+								onRetry={() => detail.refetch()}
+							/>
 						) : (
 							<>
 								<div className="drawer-title">

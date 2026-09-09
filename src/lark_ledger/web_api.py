@@ -123,6 +123,7 @@ from lark_ledger.services.web_admin import WebAdminQueryService
 from lark_ledger.services.web_analytics import WebAnalyticsQueryService, local_date_bounds
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 from lark_ledger.services.web_pending import WebPendingQueryService
+from lark_ledger.services.worker import default_clock
 from lark_ledger.web_schemas import (
     AdminDeadSummary,
     AdminEventPage,
@@ -204,6 +205,15 @@ def _auth_service(request: Request) -> DashboardAuthService:
     settings = cast(Settings, request.app.state.settings)
     factory = cast(async_sessionmaker[AsyncSession], request.app.state.session_factory)
     return DashboardAuthService(settings, factory)
+
+
+def _request_now(request: Request, timezone: ZoneInfo | None = None) -> datetime:
+    """Return one request-scoped business instant, with a testable clock seam."""
+    clock = getattr(request.app.state, "clock", None)
+    value = clock() if callable(clock) else default_clock()
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(timezone or UTC)
 
 
 def _auth_error(exc: DashboardAuthError, code: int = 401) -> HTTPException:
@@ -1395,7 +1405,10 @@ async def dashboard(
     async with factory() as session:
         return await WebLedgerQueryService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).dashboard(principal.request_context)
+        ).dashboard(
+            principal.request_context,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
 
 
 @router.get("/overview", response_model=HouseholdOverview)
@@ -1410,7 +1423,11 @@ async def overview(
     async with factory() as session:
         return await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).household_overview(principal.request_context, period=target)
+        ).household_overview(
+            principal.request_context,
+            period=target,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
 
 
 @router.get("/entries", response_model=EntryPage)
@@ -1431,9 +1448,7 @@ async def entries(
     sort: EntrySort = "occurred_at",
     order: SortOrder = "desc",
 ) -> EntryPage:
-    if start is None:
-        start = datetime.now(UTC) - timedelta(days=30)
-    if end is not None and start >= end:
+    if end is not None and start is not None and start >= end:
         raise HTTPException(status_code=422, detail="开始时间必须早于结束时间")
     if amount_min is not None and amount_max is not None and amount_min > amount_max:
         raise HTTPException(status_code=422, detail="最低金额不能大于最高金额")
@@ -1939,7 +1954,7 @@ async def _pending_action(
         raise HTTPException(status_code=404, detail="确认单不存在")
     if not row.source_message_id:
         raise HTTPException(status_code=409, detail="确认单缺少可靠回复目标")
-    now = datetime.now(UTC)
+    now = _request_now(request)
     if action == "confirm":
         message, outbox = await store.confirm_and_execute(
             user_open_id=principal.user_open_id,
@@ -2393,7 +2408,11 @@ async def _budget_overview(
     async with factory() as session:
         return await ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
-        ).get_budget_overview(principal.request_context, period=period)
+        ).get_budget_overview(
+            principal.request_context,
+            period=period,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
 
 
 @router.get("/budgets", response_model=BudgetOverview)
@@ -2539,6 +2558,7 @@ async def create_recurring_rule(
                 next_occurrence=body.next_occurrence,
                 account_id=body.account_id,
                 paid_by_user_id=body.paid_by_user_id,
+                now=_request_now(request, ZoneInfo(settings.timezone)),
             )
             await session.commit()
         except RecurringRuleError as exc:
@@ -2582,6 +2602,7 @@ async def update_recurring_rule(
                 next_occurrence=body.next_occurrence,
                 account_id=body.account_id,
                 paid_by_user_id=body.paid_by_user_id,
+                now=_request_now(request, ZoneInfo(settings.timezone)),
             )
             await session.commit()
         except RecurringRuleError as exc:
@@ -2664,7 +2685,11 @@ async def _recurring_mutate(
             elif action == "disable":
                 await app.disable_recurring_rule(principal.request_context, rule_id)
             else:
-                await app.skip_recurring_occurrence(principal.request_context, rule_id)
+                await app.skip_recurring_occurrence(
+                    principal.request_context,
+                    rule_id,
+                    now=_request_now(request, ZoneInfo(settings.timezone)),
+                )
             await session.commit()
         except RecurringRuleError as exc:
             await session.rollback()
@@ -2700,7 +2725,10 @@ async def report(
             source_type="web",
         )
     if result.report is None:
-        raise HTTPException(status_code=404, detail=result.message)
+        # The report service returns a zero-valued ReportData for an empty
+        # range. Reaching this branch means the response was malformed or the
+        # service failed unexpectedly, not that the collection was empty.
+        raise HTTPException(status_code=503, detail="报告暂不可用，请稍后重试")
     return result.report
 
 
@@ -2712,7 +2740,7 @@ async def export_entries(
 ) -> Response:
     settings = cast(Settings, request.app.state.settings)
     timezone = ZoneInfo(settings.timezone)
-    today = datetime.now(timezone).date()
+    today = _request_now(request, timezone).date()
     range_start: datetime | None = None
     range_end: datetime | None = None
     export_start_date: date | None = None
@@ -2807,7 +2835,10 @@ async def list_goals(
         application = ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
         )
-        pairs = await application.goal_list_with_progress(principal.request_context)
+        pairs = await application.goal_list_with_progress(
+            principal.request_context,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
         service = GoalService(session, timezone=settings.timezone, currency=settings.currency)
         items = [
             _web_goal(
@@ -2851,7 +2882,11 @@ async def create_goal(
         bindings = await service.binding_items(principal.request_context, goal.id)
         progress = await GoalProgressService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).progress(principal.request_context, goal)
+        ).progress(
+            principal.request_context,
+            goal,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
         return _web_goal(goal, bindings, progress)
 
 
@@ -2870,7 +2905,11 @@ async def get_goal(
             bindings = await service.binding_items(principal.request_context, goal.id)
             progress = await GoalProgressService(
                 session, timezone=settings.timezone, currency=settings.currency
-            ).progress(principal.request_context, goal)
+            ).progress(
+                principal.request_context,
+                goal,
+                now=_request_now(request, ZoneInfo(settings.timezone)),
+            )
         except GoalError as exc:
             raise _goal_http_error(exc) from exc
         return _web_goal(goal, bindings, progress)
@@ -2901,7 +2940,11 @@ async def update_goal(
         bindings = await service.binding_items(principal.request_context, goal.id)
         progress = await GoalProgressService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).progress(principal.request_context, goal)
+        ).progress(
+            principal.request_context,
+            goal,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
         return _web_goal(goal, bindings, progress)
 
 
@@ -2949,7 +2992,11 @@ async def complete_goal(
         bindings = await service.binding_items(principal.request_context, goal.id)
         progress = await GoalProgressService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).progress(principal.request_context, goal)
+        ).progress(
+            principal.request_context,
+            goal,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
         return _web_goal(goal, bindings, progress)
 
 
@@ -2976,7 +3023,11 @@ async def archive_goal(
         bindings = await service.binding_items(principal.request_context, goal.id)
         progress = await GoalProgressService(
             session, timezone=settings.timezone, currency=settings.currency
-        ).progress(principal.request_context, goal)
+        ).progress(
+            principal.request_context,
+            goal,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
         return _web_goal(goal, bindings, progress)
 
 
@@ -2993,7 +3044,11 @@ async def goal_progress(
             session, currency=settings.currency, timezone=settings.timezone
         )
         try:
-            return await application.goal_progress(principal.request_context, goal_id)
+            return await application.goal_progress(
+                principal.request_context,
+                goal_id,
+                now=_request_now(request, ZoneInfo(settings.timezone)),
+            )
         except GoalError as exc:
             raise _goal_http_error(exc) from exc
 
@@ -3013,7 +3068,12 @@ async def insights(
         application = ClientApplicationService(
             session, currency=settings.currency, timezone=settings.timezone
         )
-        items = await application.insights(principal.request_context, period=target, limit=limit)
+        items = await application.insights(
+            principal.request_context,
+            period=target,
+            limit=limit,
+            now=_request_now(request, ZoneInfo(settings.timezone)),
+        )
         if explain:
             explainer = InsightExplanationService(settings)
             for item in items:

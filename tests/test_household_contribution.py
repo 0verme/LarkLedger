@@ -27,6 +27,8 @@ from lark_ledger.services.pending import PendingCommandStore
 from lark_ledger.services.recurring import RecurringService
 from lark_ledger.services.transfers import TransferService
 
+FIXED_NOW = datetime(2026, 8, 20, tzinfo=UTC)
+
 
 def _settings() -> Settings:
     return Settings(
@@ -336,6 +338,7 @@ async def test_feishu_list_pending_shows_household_recurring(
         interval=1,
         next_occurrence=date(2026, 9, 1),
         account_id=account.id,
+        now=FIXED_NOW,
     )
     await session.commit()
     factory = async_sessionmaker(session.bind, expire_on_commit=False)
@@ -378,6 +381,7 @@ async def test_recurring_payer_frozen_and_cross_member_confirm(
         next_occurrence=date(2026, 9, 1),
         account_id=account.id,
         paid_by_user_id=member_ctx.actor_user_id,
+        now=FIXED_NOW,
     )
     assert rule.paid_by_user_id == member_ctx.actor_user_id
     await session.commit()
@@ -436,6 +440,7 @@ async def test_cross_member_confirm_recurring_pending_by_code(
         next_occurrence=date(2026, 9, 1),
         account_id=account.id,
         paid_by_user_id=member_ctx.actor_user_id,
+        now=FIXED_NOW,
     )
     await session.commit()
     factory = async_sessionmaker(session.bind, expire_on_commit=False)

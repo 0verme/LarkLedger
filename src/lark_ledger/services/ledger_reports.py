@@ -200,12 +200,12 @@ class _ReportMixin:
                 ).where(*filters)
             )
         ).all()
-        if not rows:
-            return ExecutionResult(message="该时间范围暂无记录。")
-
-        income_total = Decimal("0")
-        expense_total = Decimal("0")
-        categories: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+        # An empty collection is a valid report result. Keep the same response
+        # shape with zero totals so Web, Client API and Feishu can distinguish
+        # "no activity in this range" from an unavailable report service.
+        income_total = Decimal("0.00")
+        expense_total = Decimal("0.00")
+        categories: defaultdict[str, Decimal] = defaultdict(lambda: Decimal("0.00"))
         use_daily = local_end - local_start <= timedelta(days=92)
         trend: defaultdict[date, Decimal] = defaultdict(lambda: Decimal("0"))
 

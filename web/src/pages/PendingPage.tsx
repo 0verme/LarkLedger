@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import {
+	ApiError,
 	api,
 	localTime,
 	money,
@@ -18,7 +19,12 @@ import {
 	type PendingDetail,
 	type PendingPage as PendingPageData,
 } from "../api";
-import { EmptyState, TableSkeleton } from "../components/States";
+import {
+	EmptyState,
+	ErrorState,
+	NotFoundState,
+	TableSkeleton,
+} from "../components/States";
 
 const tabs = [
 	{ value: "pending", label: "待处理" },
@@ -110,17 +116,24 @@ export function PendingPage() {
 				{list.isLoading ? (
 					<TableSkeleton rows={4} />
 				) : list.isError ? (
-					<div className="state-panel">
-						<h3>确认单加载失败</h3>
-						<button onClick={() => list.refetch()}>重试</button>
-					</div>
+					<ErrorState
+						title="确认单加载失败"
+						description="确认事项暂时无法加载，请稍后重试。"
+						onRetry={() => list.refetch()}
+					/>
 				) : !list.data?.items.length ? (
 					<EmptyState
 						icon={<Clock3 size={28} />}
 						title={
-							group === "pending" ? "当前没有待确认事项" : "这里还没有记录"
+							group === "pending"
+								? "当前没有待确认事项"
+								: "当前筛选条件下暂无结果"
 						}
-						description="图片、语音、批量或疑似重复记账会出现在这里。"
+						description={
+							group === "pending"
+								? "图片、语音、批量或疑似重复记账会出现在这里。"
+								: "切换状态后查看其他确认事项。"
+						}
 					/>
 				) : (
 					<div className="pending-list">
@@ -183,10 +196,28 @@ export function PendingPage() {
 							<div className="drawer-loading">
 								<Loader2 className="spin" size={16} /> 加载确认单…
 							</div>
-						) : detail.isError || !current || !preview ? (
-							<div className="state-panel">
-								<h3>确认单不存在</h3>
-							</div>
+						) : detail.isError ? (
+							detail.error instanceof ApiError && detail.error.status === 404 ? (
+								<NotFoundState
+									compact
+									title="确认单不存在"
+									description="这条确认单可能已过期、已被处理，或不属于当前账本。"
+								/>
+							) : (
+								<ErrorState
+									compact
+									title="确认单详情加载失败"
+									description="确认单详情暂时无法加载，请稍后重试。"
+									onRetry={() => detail.refetch()}
+								/>
+							)
+						) : !current || !preview ? (
+							<ErrorState
+								compact
+								title="确认单详情加载失败"
+								description="返回的数据不完整，请稍后重试。"
+								onRetry={() => detail.refetch()}
+							/>
 						) : (
 							<>
 								<div className="drawer-title">

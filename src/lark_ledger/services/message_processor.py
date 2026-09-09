@@ -98,7 +98,7 @@ from lark_ledger.services.reply_worker import ReplyDeliverer
 from lark_ledger.services.report import ReportRenderer, build_report_card, fallback_advice
 from lark_ledger.services.risk import MediaKind, RiskAssessment, RiskDecision, RiskRouter
 from lark_ledger.services.transfers import AccountHintAmbiguousError
-from lark_ledger.services.worker import generate_owner_id
+from lark_ledger.services.worker import default_clock, generate_owner_id
 from lark_ledger.transfer_commands import try_parse_transfer_command
 from lark_ledger.web_schemas import GoalProgress, HouseholdOverview, Insight
 
@@ -118,6 +118,7 @@ class MessageProcessor:
         reply_deliverer: ReplyDeliverer | None = None,
         reply_worker_enabled: bool = False,
         wakeup: Callable[[], None] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         """``reply_worker_enabled=True``: after committing business + outbox the
         processor only signals the background Reply Worker (``wakeup``) and
@@ -148,6 +149,7 @@ class MessageProcessor:
         )
         self._reply_worker_enabled = reply_worker_enabled
         self._wakeup = wakeup
+        self._clock = clock or default_clock
         self._sync_owner = generate_owner_id()
         self._reply_deliverer = reply_deliverer or ReplyDeliverer(
             self.outbox_store,
@@ -190,7 +192,10 @@ class MessageProcessor:
             return
         try:
             content = json.loads(message.get("content", "{}"))
-            now = datetime.now(ZoneInfo(self.settings.timezone))
+            raw_now = self._clock()
+            if raw_now.tzinfo is None:
+                raw_now = raw_now.replace(tzinfo=UTC)
+            now = raw_now.astimezone(ZoneInfo(self.settings.timezone))
             images: list[bytes] = []
             text = ""
             source_type = message_type
@@ -365,6 +370,7 @@ class MessageProcessor:
                             message_id=message_id,
                             user_open_id=user_open_id,
                             event_id=event_id,
+                            now=now,
                         )
                         stage = "reply"
                         await self._signal_or_deliver(outbox_rows)
@@ -393,6 +399,7 @@ class MessageProcessor:
                             message_id=message_id,
                             user_open_id=user_open_id,
                             event_id=event_id,
+                            now=now,
                         )
                         stage = "reply"
                         await self._signal_or_deliver(outbox_rows)
@@ -1053,6 +1060,7 @@ class MessageProcessor:
         message_id: str,
         user_open_id: str,
         event_id: str | None,
+        now: datetime | None = None,
     ) -> list[ReplyOutbox]:
         """Render a compact deterministic overview for the current ledger (P31)."""
         async with self.session_factory() as session:
@@ -1065,7 +1073,7 @@ class MessageProcessor:
                 session, currency=self.settings.currency, timezone=self.settings.timezone
             )
             try:
-                overview = await application.household_overview(context)
+                overview = await application.household_overview(context, now=now)
                 reply_text = self._overview_message(overview)
             except LedgerAuthorizationError:
                 reply_text = "当前账本不可访问，请先切换到可用的账本。"
@@ -1131,6 +1139,7 @@ class MessageProcessor:
         message_id: str,
         user_open_id: str,
         event_id: str | None,
+        now: datetime | None = None,
     ) -> list[ReplyOutbox]:
         """Render a compact deterministic goal list for the current ledger (P33)."""
         async with self.session_factory() as session:
@@ -1143,7 +1152,7 @@ class MessageProcessor:
                 session, currency=self.settings.currency, timezone=self.settings.timezone
             )
             try:
-                pairs = await application.goal_list_with_progress(context)
+                pairs = await application.goal_list_with_progress(context, now=now)
                 reply_text = self._goals_message(pairs)
             except LedgerAuthorizationError:
                 reply_text = "当前账本不可访问，请先切换到可用的账本。"
@@ -1290,6 +1299,7 @@ class MessageProcessor:
                         interval=1,
                         next_occurrence=command.next_occurrence,
                         account_id=(await AccountService(session).get_default(context)).id,
+                        now=now,
                     )
                     reply_text = self._recurring_created_message(rule)
                 elif command.action is RecurringCommandAction.LIST:
@@ -1314,7 +1324,9 @@ class MessageProcessor:
                             "不会补生成暂停期间的提醒。"
                         )
                     else:
-                        rule = await application.skip_recurring_occurrence(context, rule.id)
+                        rule = await application.skip_recurring_occurrence(
+                            context, rule.id, now=now
+                        )
                         reply_text = (
                             f"已跳过本期：{rule.description or rule.category}\n"
                             f"下次发生：{rule.next_occurrence.isoformat()}\n"

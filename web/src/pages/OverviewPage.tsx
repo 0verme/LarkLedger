@@ -17,7 +17,7 @@ import {
 	type Insight,
 	type InsightList,
 } from "../api";
-import { EmptyState, PageSkeleton } from "../components/States";
+import { EmptyState, ErrorState, PageSkeleton } from "../components/States";
 
 export function OverviewPage() {
 	const query = useQuery({
@@ -32,10 +32,12 @@ export function OverviewPage() {
 	if (query.isLoading) return <PageSkeleton rows={3} />;
 	if (query.isError)
 		return (
-			<section className="state-panel">
-				<h2>概览暂时不可用</h2>
-				<button onClick={() => query.refetch()}>重新加载</button>
-			</section>
+			<ErrorState
+				title="家庭概览加载失败"
+				description="概览数据暂时无法加载，请稍后重试。"
+				onRetry={() => query.refetch()}
+				retryLabel="重新加载"
+			/>
 		);
 	const data = query.data!;
 	const isHousehold = data.ledger_kind === "household_shared";
@@ -72,7 +74,16 @@ export function OverviewPage() {
 					<h3>值得关注</h3>
 					<BellRing size={16} />
 				</div>
-				{insightItems.length ? (
+				{insights.isLoading ? (
+					<p className="muted-note">正在加载关注事项…</p>
+				) : insights.isError ? (
+					<ErrorState
+						compact
+						title="关注事项加载失败"
+						description="概览其他数据仍可使用。"
+						onRetry={() => insights.refetch()}
+					/>
+				) : insightItems.length ? (
 					<div className="insight-list">
 						{insightItems.map((item) => (
 							<div key={item.key} className={`insight-row ${item.severity}`}>

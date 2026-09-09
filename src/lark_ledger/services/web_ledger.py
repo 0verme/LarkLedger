@@ -9,8 +9,9 @@ from math import ceil
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, or_, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from lark_ledger.context import RequestContext
 from lark_ledger.models import (
@@ -24,7 +25,7 @@ from lark_ledger.models import (
 )
 from lark_ledger.services.budget import BudgetService
 from lark_ledger.services.member_resolution import MemberResolutionService
-from lark_ledger.short_id import normalize_entry_ref
+from lark_ledger.short_id import ShortIdError, normalize_entry_ref
 from lark_ledger.web_schemas import (
     CategoryValue,
     DashboardData,
@@ -70,6 +71,7 @@ class WebLedgerQueryService:
         order: SortOrder = "desc",
     ) -> EntryPage:
         filters = [self._entry_scope(user_open_id)]
+        uses_fuzzy_search = False
         privacy = await self._privacy_entry_scope(user_open_id)
         if privacy is not None:
             filters.append(privacy)
@@ -94,36 +96,37 @@ class WebLedgerQueryService:
         if search:
             term = search.strip()
             if term:
-                filters.append(
-                    or_(
-                        LedgerEntry.note.icontains(term, autoescape=True),
-                        LedgerEntry.category.icontains(term, autoescape=True),
-                        LedgerEntry.short_id.icontains(term, autoescape=True),
+                try:
+                    short_id = normalize_entry_ref(term)
+                except ShortIdError:
+                    uses_fuzzy_search = True
+                    filters.append(
+                        or_(
+                            LedgerEntry.note.icontains(term, autoescape=True),
+                            LedgerEntry.category.icontains(term, autoescape=True),
+                            LedgerEntry.short_id.icontains(term, autoescape=True),
+                        )
                     )
-                )
+                else:
+                    # Short IDs are stored without ``#`` and are fixed-length;
+                    # normalize the user reference and use the ledger-scoped
+                    # unique key instead of forcing a substring scan.
+                    filters.append(LedgerEntry.short_id == short_id)
         total = int(
             await self._session.scalar(
                 select(func.count()).select_from(LedgerEntry).where(*filters)
             )
             or 0
         )
-        sort_column = {
-            "occurred_at": LedgerEntry.occurred_at,
-            "amount": LedgerEntry.amount,
-            "updated_at": LedgerEntry.updated_at,
-        }[sort]
-        ordering = sort_column.asc() if order == "asc" else sort_column.desc()
-        rows = (
-            (
-                await self._session.scalars(
-                    select(LedgerEntry)
-                    .where(*filters)
-                    .order_by(ordering, LedgerEntry.id.desc())
-                    .offset((page - 1) * page_size)
-                    .limit(page_size)
-                )
-            )
-            .all()
+        sort_name = sort
+        rows = await self._page_rows(
+            user_open_id,
+            common_filters=filters[1:],
+            sort_name=sort_name,
+            order=order,
+            page=page,
+            page_size=page_size,
+            use_scope_union=not uses_fuzzy_search,
         )
         names = await self._account_names({row.account_id for row in rows})
         payer_names = await self._payer_names(
@@ -142,6 +145,85 @@ class WebLedgerQueryService:
             page_size=page_size,
             total=total,
             pages=ceil(total / page_size) if total else 0,
+        )
+
+    async def _page_rows(
+        self,
+        scope: RequestContext | str,
+        *,
+        common_filters: list[Any],
+        sort_name: EntrySort,
+        order: SortOrder,
+        page: int,
+        page_size: int,
+        use_scope_union: bool,
+    ) -> list[LedgerEntry]:
+        """Fetch one page without making the legacy fallback spoil the index path.
+
+        ``RequestContext`` keeps a nullable legacy-row fallback for rolling
+        upgrades.  An ``OR`` around that fallback makes PostgreSQL choose a
+        full scan/sort once the current ledger is large.  For the default
+        occurrence ordering, fetch bounded sorted branches for modern and
+        legacy rows, merge them in SQL, then apply the requested page.
+        """
+        offset = (page - 1) * page_size
+        if (
+            not isinstance(scope, RequestContext)
+            or scope.external_subject_id is None
+            or sort_name != "occurred_at"
+            or not use_scope_union
+        ):
+            sort_column = getattr(LedgerEntry, sort_name)
+            ordering = sort_column.asc() if order == "asc" else sort_column.desc()
+            return list(
+                (
+                    await self._session.scalars(
+                        select(LedgerEntry)
+                        .where(self._entry_scope(scope), *common_filters)
+                        .order_by(ordering, LedgerEntry.id.desc())
+                        .offset(offset)
+                        .limit(page_size)
+                    )
+                ).all()
+            )
+
+        branch_limit = offset + page_size
+        branch_column = LedgerEntry.occurred_at
+        branch_ordering = branch_column.asc() if order == "asc" else branch_column.desc()
+        modern = (
+            select(LedgerEntry)
+            .where(LedgerEntry.ledger_id == scope.ledger_id, *common_filters)
+            .order_by(branch_ordering, LedgerEntry.id.desc())
+            .limit(branch_limit)
+        )
+        legacy = (
+            select(LedgerEntry)
+            .where(
+                LedgerEntry.ledger_id.is_(None),
+                LedgerEntry.user_open_id == scope.external_subject_id,
+                *common_filters,
+            )
+            .order_by(branch_ordering, LedgerEntry.id.desc())
+            .limit(branch_limit)
+        )
+        modern_entry = aliased(LedgerEntry, modern.subquery())
+        legacy_entry = aliased(LedgerEntry, legacy.subquery())
+        combined = union_all(
+            select(modern_entry),
+            select(legacy_entry),
+        ).subquery()
+        entry = aliased(LedgerEntry, combined)
+        sort_column = getattr(entry, sort_name)
+        ordering = sort_column.asc() if order == "asc" else sort_column.desc()
+        return list(
+            (
+                await self._session.scalars(
+                    select(entry)
+                    .order_by(ordering, entry.id.desc())
+                    .offset(offset)
+                    .limit(page_size)
+                )
+            ).all()
         )
 
     async def entry_detail(

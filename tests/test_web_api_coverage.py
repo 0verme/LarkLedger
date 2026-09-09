@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -38,6 +38,8 @@ from lark_ledger.services.pending import PendingPreview, PendingPreviewItem
 from lark_ledger.services.web_ledger import WebLedgerQueryService
 from lark_ledger.services.web_pending import WebPendingQueryService
 from lark_ledger.web_api import _auth_service, router
+
+FIXED_NOW = datetime(2026, 8, 20, 4, tzinfo=UTC)
 
 
 def settings() -> Settings:
@@ -186,6 +188,7 @@ async def _client(
     user: str,
     *,
     service: DashboardAuthService | None = None,
+    clock: Callable[[], datetime] | None = None,
     processor: Any = None,
     reply_worker: Any = None,
 ) -> tuple[httpx.AsyncClient, str]:
@@ -196,6 +199,8 @@ async def _client(
     app = FastAPI()
     app.state.settings = settings()
     app.state.session_factory = factory
+    if clock is not None:
+        app.state.clock = clock
     if processor is not None:
         app.state.processor = processor
     if reply_worker is not None:
@@ -346,6 +351,23 @@ async def test_oauth_callback_error_paths(
         )
         assert invalid_cookie.status_code == 401
         assert invalid_cookie.json()["detail"] == "OAuth state 已失效"
+
+
+async def test_dashboard_entries_default_includes_history(
+    factory: async_sessionmaker[AsyncSession],
+) -> None:
+    old = _entry("ou_user", "OLD01", "12", Direction.EXPENSE, "??")
+    old.occurred_at = datetime(2024, 1, 1, tzinfo=UTC)
+    recent = _entry("ou_user", "NEW01", "18", Direction.INCOME, "??")
+    async with factory() as session:
+        session.add_all([old, recent])
+        await session.commit()
+
+    client, _ = await _client(factory, "ou_user", clock=lambda: FIXED_NOW)
+    async with client:
+        response = await client.get("/api/web/v1/entries")
+    assert response.status_code == 200
+    assert {item["short_id"] for item in response.json()["items"]} == {"OLD01", "NEW01"}
 
 
 async def test_dashboard_entries_validation_and_invalid_ref_branches(
@@ -648,7 +670,10 @@ async def test_budgets_get_and_report_branches(
             "/api/web/v1/reports",
             params={"start_date": "2020-01-01", "end_date": "2020-01-31"},
         )
-        assert empty_report.status_code == 404
+        assert empty_report.status_code == 200
+    assert empty_report.json()["entry_count"] == 0
+    assert empty_report.json()["income_total"] == "0.00"
+    assert empty_report.json()["expense_total"] == "0.00"
 
 
 async def test_export_preset_branches(
@@ -657,7 +682,7 @@ async def test_export_preset_branches(
     async with factory() as session:
         session.add(_entry("ou_user", "EXP01", "32", Direction.EXPENSE, "??"))
         await session.commit()
-    client, csrf = await _client(factory, "ou_user")
+    client, csrf = await _client(factory, "ou_user", clock=lambda: FIXED_NOW)
     headers = {"X-CSRF-Token": csrf}
     async with client:
         this_month = await client.post(

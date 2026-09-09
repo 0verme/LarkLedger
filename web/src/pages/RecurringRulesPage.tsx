@@ -19,7 +19,7 @@ import {
 	type RecurringRuleCreateInput,
 	type RecurringRuleList,
 } from "../api";
-import { EmptyState, PageSkeleton } from "../components/States";
+import { EmptyState, ErrorState, PageSkeleton } from "../components/States";
 
 const frequencyLabels: Record<RecurringFrequency, string> = {
 	weekly: "每周",
@@ -115,10 +115,11 @@ export function RecurringRulesPage() {
 	if (rules.isLoading) return <PageSkeleton rows={2} />;
 	if (rules.isError || !rules.data) {
 		return (
-			<div className="state-panel">
-				<h3>周期账单加载失败</h3>
-				<button onClick={() => rules.refetch()}>重试</button>
-			</div>
+			<ErrorState
+				title="周期账单加载失败"
+				description="周期账单暂时无法加载，请稍后重试。"
+				onRetry={() => rules.refetch()}
+			/>
 		);
 	}
 	const items = rules.data.items;

@@ -415,24 +415,21 @@ curl http://127.0.0.1:8000/healthz
 
 应用容器启动时先执行 `alembic upgrade head`，再启动 Uvicorn。迁移失败时应用不会启动。
 
-### 使用 GHCR 预构建镜像（可选）
+### 使用 GHCR 预构建镜像
 
-`compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG:-latest}`。当前正式版本为 **0.10.0**：
+`compose.image.yaml` 使用镜像 `ghcr.io/0verme/larkledger:${LARK_LEDGER_IMAGE_TAG}`，要求显式提供完整 `X.Y.Z`，不会 fallback 到 `latest`：
 
 ```bash
-export LARK_LEDGER_IMAGE_TAG=0.10.0
-# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "0.10.0"
-docker compose -f compose.image.yaml pull
-docker compose -f compose.image.yaml run --rm app alembic upgrade head
-docker compose -f compose.image.yaml up -d
-curl http://127.0.0.1:8000/healthz
+export LARK_LEDGER_IMAGE_TAG=<version>
+# PowerShell: $env:LARK_LEDGER_IMAGE_TAG = "<version>"
+docker compose -f compose.image.yaml config
 ```
 
-镜像启动**不会**像源码 `compose.yaml` 那样自动跑迁移；升级请显式 `alembic upgrade head`。生产应固定版本标签，避免长期跟随未固定的 `latest`。详见[升级指南](upgrading.md)。
+镜像启动**不会**像源码 `compose.yaml` 那样自动跑迁移；advanced source deployment 必须先 backup，再使用目标镜像显式执行 `alembic upgrade head`。正式版本与 digest 以 [GitHub Releases](https://github.com/0verme/LarkLedger/releases) 为准。生产 FNOS 请使用 [飞牛 NAS Release 镜像生产部署](deployment-fnos.md) 中的 `scripts/deploy-fnos.sh X.Y.Z`，不要在 NAS 上 `git pull` + local build。
 
-### 飞牛 NAS 可选脚本
+### 飞牛 NAS 生产脚本
 
-`scripts/deploy-fnos.sh` 是面向飞牛 NAS 的可选 Git 更新入口，不是通用安装器。默认目录与 `REPO_URL` 可能需按 fork 修改。
+`scripts/deploy-fnos.sh X.Y.Z` 是 Release 镜像生产入口：固定 GHCR tag → backup → target-image migration → start → health/readiness/version/ops verification → deployment state。`scripts/rollback-fnos.sh X.Y.Z` 只在能证明 code-only schema 兼容时切换旧镜像，否则停止并要求人工 restore；完整流程见 [deployment-fnos.md](deployment-fnos.md)。
 
 ---
 
